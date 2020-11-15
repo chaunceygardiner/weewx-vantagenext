@@ -519,8 +519,9 @@ class VantageNext(weewx.drivers.AbstractDevice):
         self.loop_request = to_int(vp_dict.get('loop_request', 1))
         log.info("Option loop_request=%d", self.loop_request)
         self.time_change_windows = VantageNext.compose_time_change_windows(vp_dict.get('dst_periods', []))
-        for window in self.time_change_windows:
-            log.info('time_change_window: %s-%s' % (window[0], window[1]))
+        for year in self.time_change_windows:
+            log.info('time_change_window: %d: %s-%s' % (year, self.time_change_windows[year][0][0], self.time_change_windows[year][0][1]))
+            log.info('time_change_window: %s  %s-%s' % ('    ', self.time_change_windows[year][1][0], self.time_change_windows[year][1][1]))
 
         self.save_day_rain = None
         self.max_dst_jump = 7200
@@ -541,11 +542,16 @@ class VantageNext(weewx.drivers.AbstractDevice):
     @staticmethod
     def compose_time_change_windows(dst_periods):
         fmt = '%Y-%m-%d %H:%M:%S'
-        time_change_windows = []
-        for dst_period in dst_periods:
-            transitions = dst_period.split(',')
+        time_change_windows = {}
+        for year_str in dst_periods:
+            try:
+                year = int(year_str)
+            except:
+                log.info('dst period malformed (year must be an integer): %s' % year_str)
+                continue
+            transitions = dst_periods[year_str]
             if len(transitions) != 2:
-                log.info('dst period malformed (will be ignored): %s' % dst_period)
+                log.info('dst period malformed (will be ignored): %d: %s' % (year, dst_periods[year_str]))
             else:
                 try:
                     # Add spring forward window
@@ -553,13 +559,14 @@ class VantageNext(weewx.drivers.AbstractDevice):
                     # Add fall back window
                     fall_back  = datetime.datetime.strptime(transitions[1], fmt)
                 except:
-                    log.info('dst period malformed (will be ignored): %s' % dst_period)
-                time_change_windows.append(
-                    (spring_fwd - datetime.timedelta(0, 300),
-                    spring_fwd + datetime.timedelta(0,3900)))
-                time_change_windows.append(
-                    (fall_back - datetime.timedelta(0, 3900),
-                    fall_back + datetime.timedelta(0, 300)))
+                    log.info('dst period malformed (will be ignored): %s' % dst_periods[year_str])
+                spring_fwd_tuple = (
+                    spring_fwd - datetime.timedelta(0,  300),
+                    spring_fwd + datetime.timedelta(0, 3900))
+                fall_back_tuple = (
+                        fall_back - datetime.timedelta(0, 3900),
+                        fall_back + datetime.timedelta(0,  300))
+                time_change_windows[year] = [spring_fwd_tuple, fall_back_tuple]
         return time_change_windows
 
     def openPort(self):
@@ -854,10 +861,12 @@ class VantageNext(weewx.drivers.AbstractDevice):
 
     def inTimeChangeWindow(self, t):
         """Return true if datetime value t is in a time change window."""
-        for window in self.time_change_windows:
-            if t > window[0] and t < window[1]:
-                log.info("Ignoring clock set during daylight savings time transition.")
-                return True
+        cur_year = t.year
+        if cur_year in self.time_change_windows:
+            for window in self.time_change_windows[cur_year]:
+                if t > window[0] and t < window[1]:
+                    log.info("Ignoring clock set during daylight savings time transition.")
+                    return True
         return False
 
     def setTime(self):
