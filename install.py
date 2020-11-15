@@ -46,6 +46,7 @@ class VantageNextInstaller(ExtensionInstaller):
                     'set_time_padding'  : 1.0,
                     'model_type'        : 2,
                     'driver'            : 'user.vantagenext',
+                    'dst_periods'       : ''
                 },
             },
             files=[

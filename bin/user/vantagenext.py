@@ -493,6 +493,11 @@ class VantageNext(weewx.drivers.AbstractDevice):
         [Optional. Default is 2]
 
         loop_request: Requested packet type. 1=LOOP; 2=LOOP2; 3=both.
+
+        dst_periods: The start and end times of daylight savings time periods.
+        [Optional. Default is no dst periods are defined.  If DST periods are
+        defined, setTime will be ignored from 5 minutes before to 5 minutes
+        after the time change.  This amounts to a 1 hour and ten minute period.
         """
 
         log.info('Driver version is %s', DRIVER_VERSION)
@@ -512,6 +517,9 @@ class VantageNext(weewx.drivers.AbstractDevice):
             raise weewx.UnsupportedFeature("Unknown model_type (%d)" % self.model_type)
         self.loop_request = to_int(vp_dict.get('loop_request', 1))
         log.info("Option loop_request=%d", self.loop_request)
+        self.time_change_windows = VantageNext.compose_time_change_windows(vp_dict.get('dst_periods', []))
+        for window in self.time_change_windows:
+            log.info('time_change_window: %s-%s' % (window[0], window[1]))
 
         self.save_day_rain = None
         self.max_dst_jump = 7200
@@ -529,68 +537,29 @@ class VantageNext(weewx.drivers.AbstractDevice):
         self.pkt_count = 0
         self.on_bad_read = False
 
-    # time_changes contains USA daylight savings times (see setTime)
-    # 2020 Sunday, March 8, 2:00 am Sunday, November 1, 2:00 am
-    # 2021 Sunday, March 14, 2:00 am Sunday, November 7, 2:00 am
-    # 2022 Sunday, March 13, 2:00 am Sunday, November 6, 2:00 am
-    # 2023 Sunday, March 12, 2:00 am Sunday, November 5, 2:00 am
-    # 2024 Sunday, March 10, 2:00 am Sunday, November 3, 2:00 am
-    # 2025 Sunday, March 9, 2:00 am Sunday, November 2, 2:00 am
-    # 2026 Sunday, March 8, 2:00 am Sunday, November 1, 2:00 am
-    # 2027 Sunday, March 14, 2:00 am Sunday, November 7, 2:00 am
-    # 2028 Sunday, March 12, 2:00 am Sunday, November 5, 2:00 am
-    # 2029 Sunday, March 11, 2:00 am Sunday, November 4, 2:00 am
-    time_changes = {
-        2020: {
-            'dst_lo': datetime.datetime(2020,  3,  8, 1, 55),
-            'dst_hi': datetime.datetime(2020,  3,  8, 3,  5),
-            'st_lo' : datetime.datetime(2020, 11,  1, 0, 55),
-            'st_hi' : datetime.datetime(2020, 11,  1, 2,  5)},
-        2021: {
-            'dst_lo': datetime.datetime(2021,  3, 14, 1, 55),
-            'dst_hi': datetime.datetime(2021,  3, 14, 3,  5),
-            'st_lo' : datetime.datetime(2021, 11,  7, 0, 55),
-            'st_hi' : datetime.datetime(2021, 11,  7, 2,  5)},
-        2022: {
-            'dst_lo': datetime.datetime(2021,  3, 13, 1, 55),
-            'dst_hi': datetime.datetime(2021,  3, 13, 3,  5),
-            'st_lo' : datetime.datetime(2021, 11,  6, 0, 55),
-            'st_hi' : datetime.datetime(2021, 11,  6, 2,  5)},
-        2023: {
-            'dst_lo': datetime.datetime(2021,  3, 12, 1, 55),
-            'dst_hi': datetime.datetime(2021,  3, 12, 3,  5),
-            'st_lo' : datetime.datetime(2021, 11,  5, 0, 55),
-            'st_hi' : datetime.datetime(2021, 11,  5, 2,  5)},
-        2024: {
-            'dst_lo': datetime.datetime(2021,  3, 10, 1, 55),
-            'dst_hi': datetime.datetime(2021,  3, 10, 3,  5),
-            'st_lo' : datetime.datetime(2021, 11,  3, 0, 55),
-            'st_hi' : datetime.datetime(2021, 11,  3, 2,  5)},
-        2025: {
-            'dst_lo': datetime.datetime(2021,  3,  9, 1, 55),
-            'dst_hi': datetime.datetime(2021,  3,  9, 3,  5),
-            'st_lo' : datetime.datetime(2021, 11,  2, 0, 55),
-            'st_hi' : datetime.datetime(2021, 11,  2, 2,  5)},
-        2026: {
-            'dst_lo': datetime.datetime(2021,  3,  8, 1, 55),
-            'dst_hi': datetime.datetime(2021,  3,  8, 3,  5),
-            'st_lo' : datetime.datetime(2021, 11,  1, 0, 55),
-            'st_hi' : datetime.datetime(2021, 11,  1, 2,  5)},
-        2027: {
-            'dst_lo': datetime.datetime(2021,  3, 14, 1, 55),
-            'dst_hi': datetime.datetime(2021,  3, 14, 3,  5),
-            'st_lo' : datetime.datetime(2021, 11,  7, 0, 55),
-            'st_hi' : datetime.datetime(2021, 11,  7, 2,  5)},
-        2028: {
-            'dst_lo': datetime.datetime(2021,  3, 12, 1, 55),
-            'dst_hi': datetime.datetime(2021,  3, 12, 3,  5),
-            'st_lo' : datetime.datetime(2021, 11,  5, 0, 55),
-            'st_hi' : datetime.datetime(2021, 11,  5, 2,  5)},
-        2029: {
-            'dst_lo': datetime.datetime(2021,  3, 11, 1, 55),
-            'dst_hi': datetime.datetime(2021,  3, 11, 3,  5),
-            'st_lo' : datetime.datetime(2021, 11,  4, 0, 55),
-            'st_hi' : datetime.datetime(2021, 11,  4, 2,  5)}}
+    @staticmethod
+    def compose_time_change_windows(dst_periods):
+        fmt = '%Y-%m-%d %H:%M:%S'
+        time_change_windows = []
+        for dst_period in dst_periods:
+            transitions = dst_period.split(',')
+            if len(transitions) != 2:
+                log.info('dst period malformed (will be ignored): %s' % dst_period)
+            else:
+                try:
+                    # Add spring forward window
+                    spring_fwd = datetime.datetime.strptime(transitions[0], fmt)
+                    # Add fall back window
+                    fall_back  = datetime.datetime.strptime(transitions[1], fmt)
+                except:
+                    log.info('dst period malformed (will be ignored): %s' % dst_period)
+                time_change_windows.append(
+                    (spring_fwd - datetime.timedelta(0, 300),
+                    spring_fwd + datetime.timedelta(0,3900)))
+                time_change_windows.append(
+                    (fall_back - datetime.timedelta(0, 3900),
+                    fall_back + datetime.timedelta(0, 300)))
+        return time_change_windows
 
     def openPort(self):
         """Open up the connection to the console"""
@@ -882,20 +851,12 @@ class VantageNext(weewx.drivers.AbstractDevice):
         log.error("Max retries exceeded while getting time")
         raise weewx.RetriesExceeded("While getting console time")
 
-    @staticmethod
-    def inTimeChangeWindow(t):
-        """Return true if datetime value t is in a time change window in the USA."""
-        cur_year = t.year
-        if cur_year in VantageNext.time_changes:
-            y_t_c = VantageNext.time_changes[cur_year]
-            if t > y_t_c['dst_lo'] and t < y_t_c['dst_hi']:
+    def inTimeChangeWindow(self, t):
+        """Return true if datetime value t is in a time change window."""
+        for window in self.time_change_windows:
+            if t > window[0] and t < window[1]:
                 log.info("Ignoring clock set during daylight savings time transition.")
                 return True
-            if t > y_t_c['st_lo'] and t < y_t_c['st_hi']:
-                log.info("Ignoring clock set during standard time transition.")
-                return True
-        else:
-            log.info("Warning: could not find daylight savings times for this year.  Please add them.")
         return False
 
     def setTime(self):
@@ -912,10 +873,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
         # of data was lost.
         # Nov  1 01:00:04 ella weewx[7206] INFO weewx.engine: Clock error is -3599.62 seconds (positive is fast)
         # Nov  1 01:00:04 ella weewx[7206] INFO user.vantagenext: Clock set to 2020-11-01 01:00:05 PST (1604221205) (225027)
-        # This is hard coded for USA dates and is not useful for a wider audience (although
-        # it won't hurt).
-        # For now, hard code dates.
-        if VantageNext.inTimeChangeWindow(datetime.datetime.now()):
+        if self.inTimeChangeWindow(datetime.datetime.now()):
             return
 
         for unused_count in range(self.max_tries):
@@ -2929,6 +2887,9 @@ class VantageNextConfEditor(weewx.drivers.AbstractConfEditor):
 
     # The driver to use:
     driver = user.vantagenext
+
+    # DST periods (so setTime can be ignored during time changes).
+    dst_periods = ,
 """
 
     def prompt_for_settings(self):
@@ -2962,28 +2923,6 @@ if __name__ == '__main__':
     import weeutil.logger
 
     weewx.debug = 1
-
-    # 2020 Sunday, March 8, 2:00 am Sunday, November 1, 2:00 am
-    print('VantageNext.inTimeChangeWindow() (expect False): %s' % VantageNext.inTimeChangeWindow(datetime.datetime(2020,  3,  8, 1, 55)))
-    print('VantageNext.inTimeChangeWindow() (expect True): %s' % VantageNext.inTimeChangeWindow(datetime.datetime(2020,  3,  8, 1, 59)))
-    print('VantageNext.inTimeChangeWindow() (expect True): %s' % VantageNext.inTimeChangeWindow(datetime.datetime(2020,  3,  8, 3,  4)))
-    print('VantageNext.inTimeChangeWindow() (expect False): %s' % VantageNext.inTimeChangeWindow(datetime.datetime(2020,  3,  8, 3,  6)))
-    print()
-    print('VantageNext.inTimeChangeWindow() (expect False): %s' % VantageNext.inTimeChangeWindow(datetime.datetime(2020, 11, 1, 0, 55)))
-    print('VantageNext.inTimeChangeWindow() (expect True): %s' % VantageNext.inTimeChangeWindow(datetime.datetime(2020, 11, 1, 0, 59)))
-    print('VantageNext.inTimeChangeWindow() (expect True): %s' % VantageNext.inTimeChangeWindow(datetime.datetime(2020, 11, 1, 2,  4)))
-    print('VantageNext.inTimeChangeWindow() (expect False): %s' % VantageNext.inTimeChangeWindow(datetime.datetime(2020, 11, 1, 2,  6)))
-    print()
-    # 2021 Sunday, March 14, 2:00 am Sunday, November 7, 2:00 am
-    print('VantageNext.inTimeChangeWindow() (expect False): %s' % VantageNext.inTimeChangeWindow(datetime.datetime(2021,  3, 14, 1, 55)))
-    print('VantageNext.inTimeChangeWindow() (expect True): %s' % VantageNext.inTimeChangeWindow(datetime.datetime(2021,  3, 14, 1, 59)))
-    print('VantageNext.inTimeChangeWindow() (expect True): %s' % VantageNext.inTimeChangeWindow(datetime.datetime(2021,  3, 14, 3,  4)))
-    print('VantageNext.inTimeChangeWindow() (expect False): %s' % VantageNext.inTimeChangeWindow(datetime.datetime(2021,  3, 14, 3,  6)))
-    print()
-    print('VantageNext.inTimeChangeWindow() (expect False): %s' % VantageNext.inTimeChangeWindow(datetime.datetime(2021, 11,  7, 0, 55)))
-    print('VantageNext.inTimeChangeWindow() (expect True): %s' % VantageNext.inTimeChangeWindow(datetime.datetime(2021, 11,  7, 0, 59)))
-    print('VantageNext.inTimeChangeWindow() (expect True): %s' % VantageNext.inTimeChangeWindow(datetime.datetime(2021, 11,  7, 2,  4)))
-    print('VantageNext.inTimeChangeWindow() (expect False): %s' % VantageNext.inTimeChangeWindow(datetime.datetime(2021, 11,  7, 2,  6)))
 
     weeutil.logger.setup('vantagenext', {})
 
