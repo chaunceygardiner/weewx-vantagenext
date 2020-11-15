@@ -33,7 +33,7 @@ class VantageNextInstaller(ExtensionInstaller):
                 },
                 'VantageNext': {
                     'type'              : 'serial',
-                    'port'              : '/dev/vantage',
+                    'port'              : '/dev/ttyUSB0',
                     'host'              : '1.2.3.4',
                     'baudrate'          : 19200,
                     'tcp_port'          : 22222,
@@ -43,7 +43,7 @@ class VantageNextInstaller(ExtensionInstaller):
                     'timeout'           : 4,
                     'wait_before_retry' : 1.2,
                     'max_tries'         : 4,
-                    'set_time_padding'  : 1.0,
+                    'set_time_padding'  : 0.75,
                     'model_type'        : 2,
                     'driver'            : 'user.vantagenext',
                     'dst_periods'       : ''

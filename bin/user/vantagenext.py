@@ -28,6 +28,7 @@ import weeutil.weeutil
 import weewx.drivers
 import weewx.engine
 import weewx.units
+from weeutil.weeutil import to_float
 from weeutil.weeutil import to_int
 from weewx.crc16 import crc16
 
@@ -506,7 +507,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
 
         # These come from the configuration dictionary:
         self.max_tries        = to_int(vp_dict.get('max_tries', 4))
-        self.set_time_padding = to_int(vp_dict.get('set_time_padding', 0.75))
+        self.set_time_padding = to_float(vp_dict.get('set_time_padding', 0.75))
         self.iss_id           = to_int(vp_dict.get('iss_id'))
         self.model_type       = to_int(vp_dict.get('model_type', 2))
         log.info('max_tries is %d', self.max_tries)
