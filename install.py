@@ -22,7 +22,7 @@ def loader():
 class VantageNextInstaller(ExtensionInstaller):
     def __init__(self):
         super(VantageNextInstaller, self).__init__(
-            version="0.1",
+            version="0.2",
             name='VantageNext',
             description='Capture weather data from Vantage weather stations',
             author="John A Kline",
@@ -44,6 +44,7 @@ class VantageNextInstaller(ExtensionInstaller):
                     'wait_before_retry' : 1.2,
                     'max_tries'         : 4,
                     'set_time_padding'  : 0.75,
+                    'clock_drift_secs'  : -2.4,
                     'model_type'        : 2,
                     'driver'            : 'user.vantagenext',
                     'dst_periods'       : ''

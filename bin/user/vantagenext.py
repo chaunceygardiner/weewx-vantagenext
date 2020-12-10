@@ -28,6 +28,7 @@ import weeutil.weeutil
 import weewx.drivers
 import weewx.engine
 import weewx.units
+from weeutil.weeutil import startOfDay
 from weeutil.weeutil import to_float
 from weeutil.weeutil import to_int
 from weewx.crc16 import crc16
@@ -35,7 +36,7 @@ from weewx.crc16 import crc16
 log = logging.getLogger(__name__)
 
 DRIVER_NAME = 'VantageNext'
-DRIVER_VERSION = '0.1'
+DRIVER_VERSION = '0.2'
 
 
 def loader(config_dict, engine):
@@ -488,6 +489,9 @@ class VantageNext(weewx.drivers.AbstractDevice):
         set_time_padding: The number of seconds to add to the current time when
         calling setTime. [Optional. Default is 0.75]
 
+        clock_drift_secs: The number of seconds the console clock drifts
+        in a day. [Optional. Default is -2.4]
+
         iss_id: The station number of the ISS [Optional. Default is 1]
 
         model_type: Vantage Pro model type. 1=Vantage Pro; 2=Vantage Pro2
@@ -508,10 +512,12 @@ class VantageNext(weewx.drivers.AbstractDevice):
         # These come from the configuration dictionary:
         self.max_tries        = to_int(vp_dict.get('max_tries', 4))
         self.set_time_padding = to_float(vp_dict.get('set_time_padding', 0.75))
+        self.clock_drift_secs = to_float(vp_dict.get('clock_drift_secs', 2.4))
         self.iss_id           = to_int(vp_dict.get('iss_id'))
         self.model_type       = to_int(vp_dict.get('model_type', 2))
         log.info('max_tries is %d', self.max_tries)
         log.info('set_time_padding is %f', self.set_time_padding)
+        log.info('clock_drift_secs is %f', self.clock_drift_secs)
         log.info('iss_id is %d', self.iss_id)
         log.info('model_type is %d', self.model_type)
         if self.model_type not in list(range(1, 3)):
@@ -862,6 +868,12 @@ class VantageNext(weewx.drivers.AbstractDevice):
                     return True
         return False
 
+    @staticmethod
+    def hours_to_midnight():
+        now = time.time()
+        start_of_day = startOfDay(now)
+        return (start_of_day + (3600 * 24) - now) / 3600.0
+
     def setTime(self):
         """Set the clock on the Davis Vantage console"""
 
@@ -885,10 +897,20 @@ class VantageNext(weewx.drivers.AbstractDevice):
                 self.port.wakeup_console(max_tries=self.max_tries)
                 self.port.send_data(b'SETTIME\n')
 
+                # It has been observed that the console loses time throught the day;
+                # only to jump ahead a similar amount at midnight.  As such, clock_drift_secs
+                # should be set to the average numbers of seconds lost (negative number) in
+                # 24 hours or gained (positive number) in 24 hours if your conole gains time.
+                # This padding adjustment will be used in setting the time.  By playing with
+                # clock_drift_secs and set_time_padding, one may be able to go many days without
+                # setting time while setting max_drift to 2 seconds.
+                padding_adjustment = (self.clock_drift_secs / 2.0) - (VantageNext.hours_to_midnight() / 24.0) * self.clock_drift_secs
+
                 # Unfortunately, clock resolution is only 1 second, and transmission takes a
                 # little while to complete, so round up the clock up. 0.5 for clock resolution
                 # and 0.25 for transmission delay.  As such, set_time_padding defaults to 0.75.
-                newtime_tt = time.localtime(int(time.time() + self.set_time_padding))
+                now = time.time()
+                newtime_tt = time.localtime(int(now + self.set_time_padding + padding_adjustment))
 
                 # The Davis expects the time in reversed order, and the year is since 1900
                 _buffer = struct.pack("<bbbbbb", newtime_tt[5], newtime_tt[4], newtime_tt[3], newtime_tt[2],
@@ -896,7 +918,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
 
                 # Complete the setTime command
                 self.port.send_data_with_crc16(_buffer, max_tries=1)
-                log.info("Clock set to %s (%d)" % (weeutil.weeutil.timestamp_to_string(time.mktime(newtime_tt)), self.pkt_count))
+                log.info("Clock set to %s (%d, %f, %f)" % (weeutil.weeutil.timestamp_to_string(time.mktime(newtime_tt)), self.pkt_count, now, padding_adjustment))
                 return
             except weewx.WeeWxIOError:
                 # Caught an error. Keep retrying...
@@ -2884,6 +2906,9 @@ class VantageNextConfEditor(weewx.drivers.AbstractConfEditor):
 
     # How much time to pad current time when setting time.
     set_time_padding = 1.0
+
+    # Clock drift in seconds
+    clock_drift_secs = -2.4
 
     # Vantage model Type: 1 = Vantage Pro; 2 = Vantage Pro2
     model_type = 2
