@@ -34,14 +34,19 @@ Copyright (C)2020 by John A Kline (john@johnkline.com)
 
 1. set_time_padding can now be specified in the VantageNext section
    so that the padding can be tweaked (it is hardcoded at 0.75 seconds
-   in the Vantage driver.
+   in the Vantage driver).
 
-1. clock_drift_secs can now be specified in the VantageNext section to
-   tweak time adding depending on the time of day (another aid to
-   minimize clock sets).
+1. The actual padding used is also influenced by clock_drifts_sec which
+   should be set to the number of seonds your consoel loses in 24 hours
+   (negative number); or, if you console gains time, the number of seconds
+   gained in 24 hours.  clock_drift_secs defaults to -2.4 seconds.  With
+   careful setting of set_time_padding and clock_drift_secs, one might
+   be able to set max_drift to 2 seconds and still go days without
+   having the clock set.  This is desirable as setting the clock often
+   to zero to four or so read errors when reading loop packets.
 
 1. The day's cumulative rain is now calculated by calling
-   weewx.wxformulas.calculate_delta.
+-   weewx.wxformulas.calculate_delta.
 
 # Installation Instructions
 

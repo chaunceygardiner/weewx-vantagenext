@@ -1,8 +1,8 @@
-0.2 202?-??-??
-
-- clock_drift_secs can now be specified in the VantageNext section to
-  tweak time adding depending on the time of day (another aid to
-  minimize clock sets).
+0.2 2020-12-??
+--------------
+- Set time padding varies by time of day with the newly introduced
+  clock_drift_secs parameter.  Both set_time_padding (default 0.75s)
+  clock_drift_secs (default -2.4s) determine the padding in set_time.
 
 - The day's cumulative rain is now calculated by calling
   weewx.wxformulas.calculate_delta.
