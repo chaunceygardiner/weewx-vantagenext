@@ -1,3 +1,12 @@
-0.1 15 2020-11-15
+0.2 202?-??-??
+
+- clock_drift_secs can now be specified in the VantageNext section to
+  tweak time adding depending on the time of day (another aid to
+  minimize clock sets).
+
+- The day's cumulative rain is now calculated by calling
+  weewx.wxformulas.calculate_delta.
+
+0.1 2020-11-15
 -----------------
 - Initial release.

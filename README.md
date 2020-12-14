@@ -36,6 +36,13 @@ Copyright (C)2020 by John A Kline (john@johnkline.com)
    so that the padding can be tweaked (it is hardcoded at 0.75 seconds
    in the Vantage driver.
 
+1. clock_drift_secs can now be specified in the VantageNext section to
+   tweak time adding depending on the time of day (another aid to
+   minimize clock sets).
+
+1. The day's cumulative rain is now calculated by calling
+   weewx.wxformulas.calculate_delta.
+
 # Installation Instructions
 
 1. Download the lastest release, weewx-vantagenext-0.1.zip, from the

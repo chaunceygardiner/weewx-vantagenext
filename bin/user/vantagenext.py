@@ -1589,13 +1589,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
         # Because the Davis stations do not offer bucket tips in LOOP data, we
         # must calculate it by looking for changes in rain totals. This won't
         # work for the very first rain packet.
-        if self.save_day_rain is None:
-            delta = None
-        else:
-            delta = loop_packet['dayRain'] - self.save_day_rain
-            # If the difference is negative, we're at the beginning of a month.
-            if delta < 0: delta = None
-        loop_packet['rain'] = delta
+        loop_packet['rain'] = weewx.wxformulas.calculate_delta(loop_packet['dayRain'], self.save_day_rain)
         self.save_day_rain = loop_packet['dayRain']
 
         return loop_packet
