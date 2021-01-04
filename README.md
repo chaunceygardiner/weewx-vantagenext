@@ -77,7 +77,7 @@ Copyright (C)2020 by John A Kline (john@johnkline.com)
 
 1. Edit the VantageNext section of weewx.conf to add DST periods for your
    location.  Note: the year to the left of the equals sign is simply a
-   string.  It is not used.  Also note, the first date MUST be the start
+   string and is ingored  Also note, the first date MUST be the start
    of daylight savings time and the second must be the end.  As such, in
    the southern hemisphere, the dst end date (date on the right) will be
    in the following year of the starting date (date on the left).
@@ -92,18 +92,6 @@ Copyright (C)2020 by John A Kline (john@johnkline.com)
         2027 = 2027-03-14 02:00:00, 2027-11-07 02:00:00
         2028 = 2028-03-12 02:00:00, 2028-11-05 02:00:00
         2029 = 2029-03-11 02:00:00, 2029-11-04 02:00:00
-   ```
-    [[dst_periods]]
-   ```
-        2020-2021 = 2020-10-04 02:00:00, 2021-04-04 03:00:00
-        2021-2022 = 2021-10-03 02:00:00, 2022-04-02 03:00:00
-        2022-2023 = 2022-10-02 02:00:00, 2023-04-01 03:00:00
-        2023-2024 = 2023-10-01 02:00:00, 2024-04-07 03:00:00
-        2024-2025 = 2024-10-06 02:00:00, 2025-04-06 03:00:00
-        2025-2026 = 2025-10-05 02:00:00, 2026-04-05 03:00:00
-        2026-2027 = 2026-10-04 02:00:00, 2027-04-04 03:00:00
-        2027-2028 = 2027-10-03 02:00:00, 2028-04-02 03:00:00
-        2028-2029 = 2028-10-01 02:00:00, 2029-04-01 03:00:00
    ```
 
 1. Restart WeeWX
