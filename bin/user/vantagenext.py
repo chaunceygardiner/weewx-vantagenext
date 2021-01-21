@@ -2898,10 +2898,12 @@ class VantageNextConfEditor(weewx.drivers.AbstractConfEditor):
     # How many times to try before giving up:
     max_tries = 4
 
-    # How much time to pad current time when setting time.
+    # The number of seconds to add to current time when setting the time.
+    # (Due to delay in sending and executing the command on the console.)
     set_time_padding = 1.0
 
-    # Clock drift in seconds
+    # The amount of time, in seconds, that the console clock drifts.
+    # A negative number means the console loses time.
     clock_drift_secs = -2.4
 
     # Vantage model Type: 1 = Vantage Pro; 2 = Vantage Pro2
@@ -2910,8 +2912,17 @@ class VantageNextConfEditor(weewx.drivers.AbstractConfEditor):
     # The driver to use:
     driver = user.vantagenext
 
-    # DST periods (so setTime can be ignored during time changes).
-    dst_periods = ,
+    # DST periods (setTime will be ignored during time changes).
+    [[dst_periods]]
+        2021 = 2021-03-14 02:00:00, 2021-11-07 02:00:00
+        2022 = 2022-03-13 02:00:00, 2022-11-06 02:00:00
+        2023 = 2023-03-12 02:00:00, 2023-11-05 02:00:00
+        2024 = 2024-03-10 02:00:00, 2024-11-03 02:00:00
+        2025 = 2025-03-09 02:00:00, 2025-11-02 02:00:00
+        2026 = 2026-03-08 02:00:00, 2026-11-01 02:00:00
+        2027 = 2027-03-14 02:00:00, 2027-11-07 02:00:00
+        2028 = 2028-03-12 02:00:00, 2028-11-05 02:00:00
+        2029 = 2029-03-11 02:00:00, 2029-11-04 02:00:00
 """
 
     def prompt_for_settings(self):
