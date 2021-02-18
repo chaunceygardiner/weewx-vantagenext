@@ -111,12 +111,13 @@ class BaseWrapper(object):
                 if _resp == b'\n\r':
                     log.debug("Rude wake up of console successful")
                     return
-                print("Unable to wake up console... sleeping")
-                time.sleep(self.wait_before_retry)
-                print("Unable to wake up console... retrying")
             except weewx.WeeWxIOError:
                 pass
+
             log.debug("Retry #%d failed", count)
+            print("Unable to wake up console... sleeping")
+            time.sleep(self.wait_before_retry)
+            print("Unable to wake up console... retrying")
 
         log.error("Unable to wake up console")
         raise weewx.WakeupError("Unable to wake up Vantage console")
