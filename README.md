@@ -50,12 +50,12 @@ Copyright (C)2020 by John A Kline (john@johnkline.com)
 
 # Installation Instructions
 
-1. Download the lastest release, weewx-vantagenext-0.1.zip, from the
+1. Download the lastest release, weewx-vantagenext-0.3.zip, from the
    [GitHub Repository](https://github.com/chaunceygardiner/weewx-vantagenext).
 
 1. Run the following command.
 
-   `sudo /home/weewx/bin/wee_extension --install weewx-vantagenext-0.1.zip`
+   `sudo /home/weewx/bin/wee_extension --install weewx-vantagenext-0.3.zip`
 
    Note: this command assumes weewx is installed in /home/weewx.  If it's installed
    elsewhere, adjust the path of wee_extension accordingly.

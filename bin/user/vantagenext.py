@@ -36,7 +36,7 @@ from weewx.crc16 import crc16
 log = logging.getLogger(__name__)
 
 DRIVER_NAME = 'VantageNext'
-DRIVER_VERSION = '0.2'
+DRIVER_VERSION = '0.3'
 
 
 def loader(config_dict, engine):
@@ -1932,7 +1932,7 @@ _loop_map = {
     'UV'              : lambda p, k: float(p[k]) / 10.0 if p[k] != 0xff else None,
     'windchill'       : lambda p, k: float(p[k]) if p[k] & 0xff != 0xff else None,
     'windDir'         : lambda p, k: (float(p[k]) if p[k] != 360 else 0) if p[k] and p[k] != 0x7fff else None,
-    'windGust10'      : _decode_windSpeed_H,
+    'windGust10'      : lambda p, k: float(p[k]) if p[k] != 0xff else None,
     'windGustDir10'   : lambda p, k: (float(p[k]) if p[k] != 360 else 0) if p[k] and p[k] != 0x7fff else None,
     'windSpeed'       : lambda p, k: float(p[k]) if p[k] != 0xff else None,
     'windSpeed10'     : _decode_windSpeed_H,

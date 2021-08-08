@@ -1,3 +1,7 @@
+0.3 2021-08-07
+- Pick up WeeWX bug fix for LOOP2 windGust10.
+  See: https://github.com/weewx/weewx/commit/11b795ba457cd5603803438a21d5e2055e9f3937
+
 0.2 2020-12-??
 --------------
 - Set time padding varies by time of day with the newly introduced
