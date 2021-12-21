@@ -36,7 +36,7 @@ from weewx.crc16 import crc16
 log = logging.getLogger(__name__)
 
 DRIVER_NAME = 'VantageNext'
-DRIVER_VERSION = '0.3'
+DRIVER_VERSION = '0.4'
 
 
 def loader(config_dict, engine):
@@ -55,6 +55,11 @@ def confeditor_loader():
 _ack    = b'\x06'
 _resend = b'\x15' # NB: The Davis documentation gives this code as 0x21, but it's actually decimal 21
 
+#===============================================================================
+#                           class ShortReadIOError
+#===============================================================================
+class ShortReadIOError(weewx.WeeWxIOError):
+    """Exception raised when too few bytes read from serial port."""
 
 #===============================================================================
 #                           class BaseWrapper
@@ -290,7 +295,7 @@ class SerialWrapper(BaseWrapper):
             raise weewx.WeeWxIOError(e)
         N = len(_buffer)
         if N != chars:
-            raise weewx.WeeWxIOError("Expected to read %d chars; got %d instead" % (chars, N))
+            raise ShortReadIOError("Expected to read %d chars; got %d instead" % (chars, N))
         return _buffer
 
     def write(self, data):
@@ -488,7 +493,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
         Default is 4]
 
         set_time_padding: The number of seconds to add to the current time when
-        calling setTime. [Optional. Default is 0.75]
+        calling setTime. [Optional. Default is 0.19]
 
         clock_drift_secs: The number of seconds the console clock drifts
         in a day. [Optional. Default is -2.4]
@@ -512,7 +517,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
 
         # These come from the configuration dictionary:
         self.max_tries        = to_int(vp_dict.get('max_tries', 4))
-        self.set_time_padding = to_float(vp_dict.get('set_time_padding', 0.75))
+        self.set_time_padding = to_float(vp_dict.get('set_time_padding', 0.19))
         self.clock_drift_secs = to_float(vp_dict.get('clock_drift_secs', 2.4))
         self.iss_id           = to_int(vp_dict.get('iss_id'))
         self.model_type       = to_int(vp_dict.get('model_type', 2))
@@ -614,17 +619,14 @@ class VantageNext(weewx.drivers.AbstractDevice):
                 try:
                     loop_packet = self._get_packet()
                     log.debug('%s: Loop packet success!' % weeutil.weeutil.timestamp_to_string(loop_packet['dateTime']))
+                except ShortReadIOError as e:
+                    log.info('get_packet: %s. (%d)' % (e, self.pkt_count))
+                    # If already on a bad read, log that fact.
+                    if self.on_bad_read:
+                        log.info('genDavisLoopPackets: repeated bad read.')
+                    self.on_bad_read = True
+                    return
                 except weewx.WeeWxIOError as e:
-                    if str(e).endswith('instead'):
-                        if str(e).endswith('got 0 instead'):
-                            log.info('get_packet returned 0 bytes. (%d)' % self.pkt_count)
-                        else:
-                            log.info('get_packet returned too few bytes. (%d)' % self.pkt_count)
-                        # If already on a bad read, log that fact.
-                        if self.on_bad_read:
-                            log.info('genDavisLoopPackets: repeated bad read.')
-                        self.on_bad_read = True
-                        return
                     log.error("LOOP try #%d; error: %s", count + 1, e)
                     time.sleep(self.wait_before_retry)
                 else:
@@ -907,9 +909,15 @@ class VantageNext(weewx.drivers.AbstractDevice):
                 # setting time while setting max_drift to 2 seconds.
                 padding_adjustment = (self.clock_drift_secs / 2.0) - (VantageNext.hours_to_midnight() / 24.0) * self.clock_drift_secs
 
-                # Unfortunately, clock resolution is only 1 second, and transmission takes a
-                # little while to complete, so round up the clock up. 0.5 for clock resolution
-                # and 0.25 for transmission delay.  As such, set_time_padding defaults to 0.75.
+                # The time can only be set to a full second.  As such, the actual
+                # time can vary wildly.  Let's sleep until the top of the second
+                # to get a better time set.
+                sleep_secs = 1.0 - (time.time() % 1)
+                # There is some lag,set time a little early.
+                sleep_secs -= self.set_time_padding
+                if sleep_secs > 0.0:
+                    time.sleep(sleep_secs)
+
                 now = time.time()
                 newtime_tt = time.localtime(int(now + self.set_time_padding + padding_adjustment))
 

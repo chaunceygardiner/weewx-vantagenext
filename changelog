@@ -1,3 +1,6 @@
+0.4 2021-12-xx
+- Code cleanup.
+
 0.3 2021-08-07
 - Pick up WeeWX bug fix for LOOP2 windGust10.
   See: https://github.com/weewx/weewx/commit/11b795ba457cd5603803438a21d5e2055e9f3937
