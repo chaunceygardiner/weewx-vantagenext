@@ -295,7 +295,7 @@ class SerialWrapper(BaseWrapper):
             raise weewx.WeeWxIOError(e)
         N = len(_buffer)
         if N != chars:
-            raise ShortReadIOError("Expected to read %d chars; got %d instead" % (chars, N))
+            raise ShortReadIOError("Expected %d chars; got %d" % (chars, N))
         return _buffer
 
     def write(self, data):
@@ -493,7 +493,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
         Default is 4]
 
         set_time_padding: The number of seconds to add to the current time when
-        calling setTime. [Optional. Default is 0.19]
+        calling setTime. [Optional. Default is 0.50]
 
         clock_drift_secs: The number of seconds the console clock drifts
         in a day. [Optional. Default is -2.4]
@@ -517,7 +517,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
 
         # These come from the configuration dictionary:
         self.max_tries        = to_int(vp_dict.get('max_tries', 4))
-        self.set_time_padding = to_float(vp_dict.get('set_time_padding', 0.19))
+        self.set_time_padding = to_float(vp_dict.get('set_time_padding', 0.50))
         self.clock_drift_secs = to_float(vp_dict.get('clock_drift_secs', 2.4))
         self.iss_id           = to_int(vp_dict.get('iss_id'))
         self.model_type       = to_int(vp_dict.get('model_type', 2))
