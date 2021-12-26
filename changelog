@@ -1,3 +1,7 @@
+0.5 2021-12-25
+- New calculation when setting clock.  day_start_jump
+  is also used in the calculation (see README).
+
 0.4 2021-12-xx
 - Code cleanup.
 
@@ -8,7 +12,7 @@
 0.2 2020-12-??
 --------------
 - Set time padding varies by time of day with the newly introduced
-  clock_drift_secs parameter.  Both set_time_padding (default 0.75s)
+  clock_drift_secs parameter.  Both set_time_padding (default 0.2s)
   clock_drift_secs (default -2.4s) determine the padding in set_time.
 
 - The day's cumulative rain is now calculated by calling

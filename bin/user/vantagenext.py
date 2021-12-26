@@ -36,7 +36,7 @@ from weewx.crc16 import crc16
 log = logging.getLogger(__name__)
 
 DRIVER_NAME = 'VantageNext'
-DRIVER_VERSION = '0.4'
+DRIVER_VERSION = '0.5'
 
 
 def loader(config_dict, engine):
@@ -493,10 +493,13 @@ class VantageNext(weewx.drivers.AbstractDevice):
         Default is 4]
 
         set_time_padding: The number of seconds to add to the current time when
-        calling setTime. [Optional. Default is 0.50]
+        calling setTime. [Optional. Default is 0.20]
 
         clock_drift_secs: The number of seconds the console clock drifts
         in a day. [Optional. Default is -2.4]
+
+        day_start_jump: The number of seconds the clock jumps at the
+        start of the day.  [Optional.  Default is 2.0]
 
         iss_id: The station number of the ISS [Optional. Default is 1]
 
@@ -517,13 +520,15 @@ class VantageNext(weewx.drivers.AbstractDevice):
 
         # These come from the configuration dictionary:
         self.max_tries        = to_int(vp_dict.get('max_tries', 4))
-        self.set_time_padding = to_float(vp_dict.get('set_time_padding', 0.50))
-        self.clock_drift_secs = to_float(vp_dict.get('clock_drift_secs', 2.4))
+        self.set_time_padding = to_float(vp_dict.get('set_time_padding', 0.20))
+        self.clock_drift_secs = to_float(vp_dict.get('clock_drift_secs', -2.4))
+        self.day_start_jump   = to_float(vp_dict.get('day_start_jump', 2.0))
         self.iss_id           = to_int(vp_dict.get('iss_id'))
         self.model_type       = to_int(vp_dict.get('model_type', 2))
         log.info('max_tries is %d', self.max_tries)
         log.info('set_time_padding is %f', self.set_time_padding)
         log.info('clock_drift_secs is %f', self.clock_drift_secs)
+        log.info('day_start_jump is %f', self.day_start_jump)
         log.info('iss_id is %d', self.iss_id)
         log.info('model_type is %d', self.model_type)
         if self.model_type not in list(range(1, 3)):
@@ -877,6 +882,31 @@ class VantageNext(weewx.drivers.AbstractDevice):
         start_of_day = startOfDay(now)
         return (start_of_day + (3600 * 24) - now) / 3600.0
 
+    @staticmethod
+    def compute_clock_target_adj(clock_drift_secs, day_start_jump):
+        # It has been observed that the console loses time throught the day;
+        # only to jump ahead at midnight.  As such, clock_drift_secs
+        # should be set to the average number of seconds lost (negative number) in
+        # 24 hours or gained (positive number) in 24 hours if your conole gains time.
+        # day_start_jump is the average number of seconds jumped (positive number) just
+        # after midnight.
+        # Target is +1.9s just after midnight (if Vantage loses time; else -1.9).
+        if clock_drift_secs == 0:
+            target_adj = 0.0
+        elif clock_drift_secs < 0:
+            target_adj = 1.9
+        else:
+            target_adj = -1.9
+        log.debug("Target time just after midnight is %f" % target_adj)
+        # Adjust for the time we'll lose (gain) from now until midnight.
+        delta_to_midnight = VantageNext.hours_to_midnight() / 24.0 * clock_drift_secs
+        log.debug("Delta to midnight is %f" % delta_to_midnight)
+        target_adj -= VantageNext.hours_to_midnight() / 24.0 * clock_drift_secs
+        # Adjust for the jump after midnight
+        target_adj -= day_start_jump
+        log.debug("After adjusting for jump after midnight of %f, target adj is %f" % (day_start_jump, target_adj))
+        return target_adj
+
     def setTime(self):
         """Set the clock on the Davis Vantage console"""
 
@@ -900,14 +930,8 @@ class VantageNext(weewx.drivers.AbstractDevice):
                 self.port.wakeup_console(max_tries=self.max_tries)
                 self.port.send_data(b'SETTIME\n')
 
-                # It has been observed that the console loses time throught the day;
-                # only to jump ahead a similar amount at midnight.  As such, clock_drift_secs
-                # should be set to the average numbers of seconds lost (negative number) in
-                # 24 hours or gained (positive number) in 24 hours if your conole gains time.
-                # This padding adjustment will be used in setting the time.  By playing with
-                # clock_drift_secs and set_time_padding, one may be able to go many days without
-                # setting time while setting max_drift to 2 seconds.
-                padding_adjustment = (self.clock_drift_secs / 2.0) - (VantageNext.hours_to_midnight() / 24.0) * self.clock_drift_secs
+                # Adjust for clock drift and clock jump after midnight.
+                target_adj = VantageNext.compute_clock_target_adj(self.clock_drift_secs, self.day_start_jump)
 
                 # The time can only be set to a full second.  As such, the actual
                 # time can vary wildly.  Let's sleep until the top of the second
@@ -919,7 +943,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
                     time.sleep(sleep_secs)
 
                 now = time.time()
-                newtime_tt = time.localtime(int(now + self.set_time_padding + padding_adjustment))
+                newtime_tt = time.localtime(int(now + self.set_time_padding + target_adj))
 
                 # The Davis expects the time in reversed order, and the year is since 1900
                 _buffer = struct.pack("<bbbbbb", newtime_tt[5], newtime_tt[4], newtime_tt[3], newtime_tt[2],
@@ -927,7 +951,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
 
                 # Complete the setTime command
                 self.port.send_data_with_crc16(_buffer, max_tries=1)
-                log.info("Clock set to %s (%d, %f, %f)" % (weeutil.weeutil.timestamp_to_string(time.mktime(newtime_tt)), self.pkt_count, now, padding_adjustment))
+                log.info("Clock set to %s (%d, %f, %f)" % (weeutil.weeutil.timestamp_to_string(time.mktime(newtime_tt)), self.pkt_count, now, target_adj))
                 return
             except weewx.WeeWxIOError:
                 # Caught an error. Keep retrying...

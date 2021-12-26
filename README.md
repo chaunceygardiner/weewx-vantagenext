@@ -34,28 +34,36 @@ Copyright (C)2020 by John A Kline (john@johnkline.com)
 
 1. set_time_padding can now be specified in the VantageNext section
    so that the padding can be tweaked (it is hardcoded at 0.75 seconds
-   in the Vantage driver).
+   in the Vantage driver).  Default is 0.2 seconds.
 
-1. The actual padding used is also influenced by clock_drifts_sec which
-   should be set to the number of seonds your consoel loses in 24 hours
-   (negative number); or, if you console gains time, the number of seconds
-   gained in 24 hours.  clock_drift_secs defaults to -2.4 seconds.  With
-   careful setting of set_time_padding and clock_drift_secs, one might
-   be able to set max_drift to 2 seconds and still go days without
-   having the clock set.  This is desirable as setting the clock often
-   to zero to four or so read errors when reading loop packets.
+1. The actual padding used is also influenced by clock_drift_secs and
+   day_start_jump (both added in this versio of the driver).
+   clock_drift_secs should be set to the number of seconds
+   your console loses in 24 hours (negative number); or, if you console
+   gains time, the number of seconds gained in 24 hours (positive number).
+   Note: only time loss has been observed over a 24 hour period.
+   clock_drift_secs defaults to -2.4 seconds.
+   day_start_jump is the number of seconds the console [inexplicably]
+   jumps just after midnight (positive number) or falls back (negative
+   number).  Note: only positive jumps have been observed just after
+   midnight.  day_start_jump defaults to 2.0 seconds.
+   With careful setting of set_time_padding, clock_drift_secs and day
+   start jump; one might be able to set max_drift to 2 seconds (a tight
+   settig) and still manage to go days without having the clock set.
+   This is desirable as setting the clock often results in multiple
+   zero read errors when reading loop packets.
 
 1. The day's cumulative rain is now calculated by calling
 -   weewx.wxformulas.calculate_delta.
 
 # Installation Instructions
 
-1. Download the lastest release, weewx-vantagenext-0.4.zip, from the
+1. Download the lastest release, weewx-vantagenext-0.5.zip, from the
    [GitHub Repository](https://github.com/chaunceygardiner/weewx-vantagenext).
 
 1. Run the following command.
 
-   `sudo /home/weewx/bin/wee_extension --install weewx-vantagenext-0.4.zip`
+   `sudo /home/weewx/bin/wee_extension --install weewx-vantagenext-0.5.zip`
 
    Note: this command assumes weewx is installed in /home/weewx.  If it's installed
    elsewhere, adjust the path of wee_extension accordingly.
