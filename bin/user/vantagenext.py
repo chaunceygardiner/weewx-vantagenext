@@ -892,19 +892,22 @@ class VantageNext(weewx.drivers.AbstractDevice):
         # after midnight.
         # Target is +1.9s just after midnight (if Vantage loses time; else -1.9).
         if clock_drift_secs == 0:
-            target_adj = 0.0
+            goal = 0.0
         elif clock_drift_secs < 0:
-            target_adj = 1.9
+            goal = 1.9
         else:
-            target_adj = -1.9
+            goal = -1.9
+        target_adj = goal
         log.debug("Target time just after midnight is %f" % target_adj)
         # Adjust for the time we'll lose (gain) from now until midnight.
         delta_to_midnight = VantageNext.hours_to_midnight() / 24.0 * clock_drift_secs
         log.debug("Delta to midnight is %f" % delta_to_midnight)
-        target_adj -= VantageNext.hours_to_midnight() / 24.0 * clock_drift_secs
+        midnight_delta = VantageNext.hours_to_midnight()
+        target_adj -= midnight_delta / 24.0 * clock_drift_secs
         # Adjust for the jump after midnight
         target_adj -= day_start_jump
         log.debug("After adjusting for jump after midnight of %f, target adj is %f" % (day_start_jump, target_adj))
+        log.info("compute_clock_target_adj: %f, %f, %f, %f, %f" % (goal, clock_drift_secs, delta_to_midnight, day_start_jump, target_adj))
         return target_adj
 
     def setTime(self):
@@ -945,13 +948,14 @@ class VantageNext(weewx.drivers.AbstractDevice):
                 now = time.time()
                 newtime_tt = time.localtime(int(now + self.set_time_padding + target_adj))
 
-                # The Davis expects the time in reversed order, and the year is since 1900
+                # The Davis expects the time in reverse order, and the year is since 1900
                 _buffer = struct.pack("<bbbbbb", newtime_tt[5], newtime_tt[4], newtime_tt[3], newtime_tt[2],
                                                  newtime_tt[1], newtime_tt[0] - 1900)
 
                 # Complete the setTime command
                 self.port.send_data_with_crc16(_buffer, max_tries=1)
-                log.info("Clock set to %s (%d, %f, %f)" % (weeutil.weeutil.timestamp_to_string(time.mktime(newtime_tt)), self.pkt_count, now, target_adj))
+                log.info("Clock set to %s (%d, %f, %f, %f)" % (
+                    weeutil.weeutil.timestamp_to_string(time.mktime(newtime_tt)), self.pkt_count, now, self.set_time_padding, self.set_time_padding + target_adj))
                 return
             except weewx.WeeWxIOError:
                 # Caught an error. Keep retrying...
