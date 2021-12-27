@@ -1,3 +1,6 @@
+0.51 2021-12-26
+- Add time_set_goal for setting time (see README).
+
 0.5 2021-12-25
 - New calculation when setting clock.  day_start_jump
   is also used in the calculation (see README).

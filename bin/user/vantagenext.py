@@ -36,7 +36,7 @@ from weewx.crc16 import crc16
 log = logging.getLogger(__name__)
 
 DRIVER_NAME = 'VantageNext'
-DRIVER_VERSION = '0.5'
+DRIVER_VERSION = '0.51'
 
 
 def loader(config_dict, engine):
@@ -501,6 +501,10 @@ class VantageNext(weewx.drivers.AbstractDevice):
         day_start_jump: The number of seconds the clock jumps at the
         start of the day.  [Optional.  Default is 2.0]
 
+        time_set_goal: The time ahead of actual time (postive number) or
+        behind actual time (negative) number to shoot for just after midnight
+        when the clock jumps.  [Optional.  Default is 1.85]
+
         iss_id: The station number of the ISS [Optional. Default is 1]
 
         model_type: Vantage Pro model type. 1=Vantage Pro; 2=Vantage Pro2
@@ -523,22 +527,24 @@ class VantageNext(weewx.drivers.AbstractDevice):
         self.set_time_padding = to_float(vp_dict.get('set_time_padding', 0.20))
         self.clock_drift_secs = to_float(vp_dict.get('clock_drift_secs', -2.4))
         self.day_start_jump   = to_float(vp_dict.get('day_start_jump', 2.0))
+        self.time_set_goal    = to_float(vp_dict.get('time_set_goal', 1.85))
         self.iss_id           = to_int(vp_dict.get('iss_id'))
         self.model_type       = to_int(vp_dict.get('model_type', 2))
-        log.info('max_tries is %d', self.max_tries)
-        log.info('set_time_padding is %f', self.set_time_padding)
-        log.info('clock_drift_secs is %f', self.clock_drift_secs)
-        log.info('day_start_jump is %f', self.day_start_jump)
-        log.info('iss_id is %d', self.iss_id)
-        log.info('model_type is %d', self.model_type)
+        log.info('max_tries          : %d', self.max_tries)
+        log.info('set_time_padding   : %f', self.set_time_padding)
+        log.info('clock_drift_secs   : %f', self.clock_drift_secs)
+        log.info('day_start_jump     : %f', self.day_start_jump)
+        log.info('time_set_goal      : %f', self.time_set_goal)
+        log.info('iss_id             : %d', self.iss_id)
+        log.info('model_type         : %d', self.model_type)
         if self.model_type not in list(range(1, 3)):
             raise weewx.UnsupportedFeature("Unknown model_type (%d)" % self.model_type)
         self.loop_request = to_int(vp_dict.get('loop_request', 1))
-        log.info("Option loop_request=%d", self.loop_request)
+        log.info("Option loop_request: %d", self.loop_request)
         self.time_change_windows = VantageNext.compose_time_change_windows(vp_dict.get('dst_periods', []))
         for key in self.time_change_windows:
             for window in self.time_change_windows[key]:
-                log.info('time_change_window: %s: %s-%s' % (key, window[0], window[1]))
+                log.info('time_change_window : %s: %s-%s' % (key, window[0], window[1]))
         self.save_day_rain = None
         self.max_dst_jump = 7200
 
@@ -883,21 +889,15 @@ class VantageNext(weewx.drivers.AbstractDevice):
         return (start_of_day + (3600 * 24) - now) / 3600.0
 
     @staticmethod
-    def compute_clock_target_adj(clock_drift_secs, day_start_jump):
+    def compute_clock_target_adj(time_set_goal, clock_drift_secs, day_start_jump):
         # It has been observed that the console loses time throught the day;
         # only to jump ahead at midnight.  As such, clock_drift_secs
         # should be set to the average number of seconds lost (negative number) in
-        # 24 hours or gained (positive number) in 24 hours if your conole gains time.
+        # 24 hours or gained (positive number) in 24 hours if your console gains time.
         # day_start_jump is the average number of seconds jumped (positive number) just
         # after midnight.
-        # Target is +1.9s just after midnight (if Vantage loses time; else -1.9).
-        if clock_drift_secs == 0:
-            goal = 0.0
-        elif clock_drift_secs < 0:
-            goal = 1.9
-        else:
-            goal = -1.9
-        target_adj = goal
+        # Target is time_set_goal just after midnight.
+        target_adj = time_set_goal
         log.debug("Target time just after midnight is %f" % target_adj)
         # Adjust for the time we'll lose (gain) from now until midnight.
         delta_to_midnight = VantageNext.hours_to_midnight() / 24.0 * clock_drift_secs
@@ -907,7 +907,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
         # Adjust for the jump after midnight
         target_adj -= day_start_jump
         log.debug("After adjusting for jump after midnight of %f, target adj is %f" % (day_start_jump, target_adj))
-        log.info("compute_clock_target_adj: %f, %f, %f, %f, %f" % (goal, clock_drift_secs, delta_to_midnight, day_start_jump, target_adj))
+        log.info("compute_clock_target_adj: %f, %f, %f, %f, %f" % (time_set_goal, clock_drift_secs, delta_to_midnight, day_start_jump, target_adj))
         return target_adj
 
     def setTime(self):
@@ -934,7 +934,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
                 self.port.send_data(b'SETTIME\n')
 
                 # Adjust for clock drift and clock jump after midnight.
-                target_adj = VantageNext.compute_clock_target_adj(self.clock_drift_secs, self.day_start_jump)
+                target_adj = VantageNext.compute_clock_target_adj(self.time_set_goal, self.clock_drift_secs, self.day_start_jump)
 
                 # The time can only be set to a full second.  As such, the actual
                 # time can vary wildly.  Let's sleep until the top of the second
@@ -2942,6 +2942,10 @@ class VantageNextConfEditor(weewx.drivers.AbstractConfEditor):
     # The amount of time, in seconds, that the console clock drifts.
     # A negative number means the console loses time.
     clock_drift_secs = -2.4
+
+    # When setting time, the delta in seconds from actual time to shoot for,
+    # just after midnight when the clock jumps.
+    time_set_goal = 1.85
 
     # Vantage model Type: 1 = Vantage Pro; 2 = Vantage Pro2
     model_type = 2
