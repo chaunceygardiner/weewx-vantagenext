@@ -107,7 +107,7 @@ def loader():
 class VantageNextInstaller(ExtensionInstaller):
     def __init__(self):
         super(VantageNextInstaller, self).__init__(
-            version="0.51",
+            version="0.6",
             name='VantageNext',
             description='Capture weather data from Vantage weather stations',
             author="John A Kline",

@@ -36,7 +36,7 @@ from weewx.crc16 import crc16
 log = logging.getLogger(__name__)
 
 DRIVER_NAME = 'VantageNext'
-DRIVER_VERSION = '0.51'
+DRIVER_VERSION = '0.6'
 
 
 def loader(config_dict, engine):
@@ -1668,6 +1668,19 @@ class VantageNext(weewx.drivers.AbstractDevice):
             # Divide archive interval by 60 to keep consistent with wview
             'interval': int(self.archive_interval // 60),
         }
+        # If inside the time change window, we could misinterpret the console
+        # time by 1 hour.  Check for that and adjust as necessary.
+        now = datetime.datetime.now()
+        if self.inTimeChangeWindow(now):
+            time_error = archive_record['dateTime'] - now
+            # Check for ahead by one hour.
+            if time_error > 3550 and time_error < 3650:
+                archive_record['dateTime'] -= 3600
+                log.info('DST adjustment: subtracted 1 hour from archive record dateTime field.')
+            # Check for behind by one hour.
+            elif time_error > -3650 and time_error < -3550:
+                archive_record['dateTime'] += 3600
+                log.info('DST adjustment: added 1 hour to archive record dateTime field.')
 
         archive_record['rxCheckPercent'] = _rxcheck(self.model_type,
                                                     archive_record['interval'],
@@ -2955,7 +2968,6 @@ class VantageNextConfEditor(weewx.drivers.AbstractConfEditor):
 
     # DST periods (setTime will be ignored during time changes).
     [[dst_periods]]
-        2021 = 2021-03-14 02:00:00, 2021-11-07 02:00:00
         2022 = 2022-03-13 02:00:00, 2022-11-06 02:00:00
         2023 = 2023-03-12 02:00:00, 2023-11-05 02:00:00
         2024 = 2024-03-10 02:00:00, 2024-11-03 02:00:00
@@ -2964,6 +2976,17 @@ class VantageNextConfEditor(weewx.drivers.AbstractConfEditor):
         2027 = 2027-03-14 02:00:00, 2027-11-07 02:00:00
         2028 = 2028-03-12 02:00:00, 2028-11-05 02:00:00
         2029 = 2029-03-11 02:00:00, 2029-11-04 02:00:00
+        2030 = 2030-03-10 02:00:00, 2030-11-03 02:00:00
+        2031 = 2031-03-09 02:00:00, 2031-11-02 02:00:00
+        2032 = 2032-03-14 02:00:00, 2032-11-07 02:00:00
+        2033 = 2033-03-13 02:00:00, 2033-11-06 02:00:00
+        2034 = 2034-03-12 02:00:00, 2034-11-05 02:00:00
+        2035 = 2035-03-11 02:00:00, 2035-11-04 02:00:00
+        2036 = 2036-03-09 02:00:00, 2036-11-02 02:00:00
+        2037 = 2037-03-08 02:00:00, 2037-11-01 02:00:00
+        2038 = 2038-03-14 02:00:00, 2038-11-07 02:00:00
+        2039 = 2039-03-13 02:00:00, 2039-11-06 02:00:00
+        2040 = 2040-03-11 02:00:00, 2040-11-04 02:00:00
 """
 
     def prompt_for_settings(self):

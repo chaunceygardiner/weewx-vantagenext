@@ -30,7 +30,10 @@ Copyright (C)2020 by John A Kline (john@johnkline.com)
    console back an hour (but keep DST), and an hours worth of data would
    be lost as the timestamps would be duplicates.  DST periods can now
    be specified in the VantageNext section, and setTime will be a no-op
-   durint time change windows.
+   during time change windows.  Furthermore, if an archive record's time
+   is misinterpreted during this period (an hour ahead or an hour behind),
+   the driver will fix the issue by subtracting or adding one hour,
+   respectively.
 
 1. set_time_padding can now be specified in the VantageNext section
    so that the padding can be tweaked (it is hardcoded at 0.75 seconds
@@ -61,12 +64,12 @@ Copyright (C)2020 by John A Kline (john@johnkline.com)
 
 # Installation Instructions
 
-1. Download the lastest release, weewx-vantagenext-0.51.zip, from the
+1. Download the lastest release, weewx-vantagenext-0.6.zip, from the
    [GitHub Repository](https://github.com/chaunceygardiner/weewx-vantagenext).
 
 1. Run the following command.
 
-   `sudo /home/weewx/bin/wee_extension --install weewx-vantagenext-0.51.zip`
+   `sudo /home/weewx/bin/wee_extension --install weewx-vantagenext-0.6.zip`
 
    Note: this command assumes weewx is installed in /home/weewx.  If it's installed
    elsewhere, adjust the path of wee_extension accordingly.
