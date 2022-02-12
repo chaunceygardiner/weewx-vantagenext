@@ -1633,7 +1633,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
 
     @staticmethod
     def adjust_for_dst(now, dateTime, in_time_change_window):
-        log.info('adjust_for_dst: now: %r, now.timestamp(): %r, dateTime: %r, in_time_change_window: %r' % (now, now.timestamp(), dateTime, in_time_change_window))
+        log.debug('adjust_for_dst: now: %r, now.timestamp(): %r, dateTime: %r, in_time_change_window: %r' % (now, now.timestamp(), dateTime, in_time_change_window))
         if in_time_change_window:
             time_error = dateTime - now.timestamp()
             # Check for ahead by one hour.
