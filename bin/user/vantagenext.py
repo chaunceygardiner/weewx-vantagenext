@@ -1631,6 +1631,21 @@ class VantageNext(weewx.drivers.AbstractDevice):
 
         return loop_packet
 
+    @staticmethod
+    def adjust_for_dst(now, dateTime, in_time_change_window):
+        log.info('adjust_for_dst: now: %r, now.timestamp(): %r, dateTime: %r, in_time_change_window: %r' % (now, now.timestamp(), dateTime, in_time_change_window))
+        if in_time_change_window:
+            time_error = dateTime - now.timestamp()
+            # Check for ahead by one hour.
+            if time_error > 3580 and time_error < 3620:
+                log.info('DST adjustment: subtracted 1 hour from archive record dateTime field.')
+                return dateTime - 3600
+            # Check for behind by one hour.
+            elif time_error > -3620 and time_error < -3580:
+                log.info('DST adjustment: added 1 hour to archive record dateTime field.')
+                return dateTime + 3600
+        return dateTime
+
     def _unpackArchivePacket(self, raw_archive_buffer):
         """Decode a Davis archive packet, returning the results as a dictionary.
 
@@ -1671,16 +1686,8 @@ class VantageNext(weewx.drivers.AbstractDevice):
         # If inside the time change window, we could misinterpret the console
         # time by 1 hour.  Check for that and adjust as necessary.
         now = datetime.datetime.now()
-        if self.inTimeChangeWindow(now):
-            time_error = archive_record['dateTime'] - now
-            # Check for ahead by one hour.
-            if time_error > 3550 and time_error < 3650:
-                archive_record['dateTime'] -= 3600
-                log.info('DST adjustment: subtracted 1 hour from archive record dateTime field.')
-            # Check for behind by one hour.
-            elif time_error > -3650 and time_error < -3550:
-                archive_record['dateTime'] += 3600
-                log.info('DST adjustment: added 1 hour to archive record dateTime field.')
+        archive_record['dateTime'] = VantageNext.adjust_for_dst(
+                now, archive_record['dateTime'], self.inTimeChangeWindow(now))
 
         archive_record['rxCheckPercent'] = _rxcheck(self.model_type,
                                                     archive_record['interval'],
@@ -3030,6 +3037,8 @@ if __name__ == '__main__':
     parser = optparse.OptionParser(usage=usage)
     parser.add_option('--version', action='store_true',
                       help='Display driver version')
+    parser.add_option('--test-dst-handling', dest='test_dst_handling', action='store_true',
+                      help='Display driver version')
     parser.add_option('--port', default='/dev/ttyUSB0',
                       help='Serial port to use. Default is "/dev/ttyUSB0"',
                       metavar="PORT")
@@ -3037,6 +3046,60 @@ if __name__ == '__main__':
 
     if options.version:
         print("VantageNext driver version %s" % DRIVER_VERSION)
+        exit(0)
+
+    if options.test_dst_handling:
+        print('Testing Daylight Savings Time handling.')
+        now = datetime.datetime.now()
+
+        archive_record = { 'dateTime': now.timestamp() }
+        archive_record['dateTime'] = VantageNext.adjust_for_dst(
+                now, archive_record['dateTime'], False)
+        if archive_record['dateTime'] == now.timestamp():
+            print('Identical time, not in DST window, test PASSED')
+        else:
+            print('Identical time, not in DST window, test FAILED')
+
+        archive_record['dateTime'] = now.timestamp()
+        archive_record['dateTime'] = VantageNext.adjust_for_dst(
+                now, archive_record['dateTime'], True)
+        if archive_record['dateTime'] == now.timestamp():
+            print('Identical time, in DST window, test     PASSED')
+        else:
+            print('Identical time, in DST window, test     FAILED')
+
+        archive_record['dateTime'] = now.timestamp() - 3602
+        archive_record['dateTime'] = VantageNext.adjust_for_dst(
+                now, archive_record['dateTime'], False)
+        if archive_record['dateTime'] == now.timestamp() - 3602:
+            print('1 hour slow, not in DST window, test    PASSED')
+        else:
+            print('1 hour slow, not in DST window, test    FAILED')
+
+        archive_record['dateTime'] = now.timestamp() - 3602
+        archive_record['dateTime'] = VantageNext.adjust_for_dst(
+                now, archive_record['dateTime'], True)
+        if archive_record['dateTime'] == now.timestamp() - 2:
+            print('1 hour slow, in DST window, test        PASSED')
+        else:
+            print('1 hour slow, in DST window, test        FAILED')
+
+        archive_record['dateTime'] = now.timestamp() + 3602
+        archive_record['dateTime'] = VantageNext.adjust_for_dst(
+                now, archive_record['dateTime'], False)
+        if archive_record['dateTime'] == now.timestamp() + 3602:
+            print('1 hour fast, not in DST window, test    PASSED')
+        else:
+            print('1 hour fast, not in DST window, test    FAILED')
+
+        archive_record['dateTime'] = now.timestamp() + 3602
+        archive_record['dateTime'] = VantageNext.adjust_for_dst(
+                now, archive_record['dateTime'], True)
+        if archive_record['dateTime'] == now.timestamp() + 2:
+            print('1 hour fast, in DST window, test        PASSED')
+        else:
+            print('1 hour fast, in DST window, test        FAILED')
+
         exit(0)
 
     vantagenext = VantageNext(connection_type = 'serial', port=options.port)

@@ -1,4 +1,4 @@
-0.6 2022-02-11
+0.6 2022-02-12
 - If during time change period, check if archive record's time is misinterpreted
   to be an hour ahead or an hour behind.  Auto adjust to fix this.
   Fixes DST change errors.
