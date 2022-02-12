@@ -3052,50 +3052,50 @@ if __name__ == '__main__':
         print('Testing Daylight Savings Time handling.')
         now = datetime.datetime.now()
 
-        archive_record = { 'dateTime': now.timestamp() }
+        archive_record = { 'dateTime': int(now.timestamp()) }
         archive_record['dateTime'] = VantageNext.adjust_for_dst(
                 now, archive_record['dateTime'], False)
-        if archive_record['dateTime'] == now.timestamp():
+        if archive_record['dateTime'] == int(now.timestamp()):
             print('Identical time, not in DST window, test PASSED')
         else:
             print('Identical time, not in DST window, test FAILED')
 
-        archive_record['dateTime'] = now.timestamp()
+        archive_record['dateTime'] = int(now.timestamp())
         archive_record['dateTime'] = VantageNext.adjust_for_dst(
                 now, archive_record['dateTime'], True)
-        if archive_record['dateTime'] == now.timestamp():
+        if archive_record['dateTime'] == int(now.timestamp()):
             print('Identical time, in DST window, test     PASSED')
         else:
             print('Identical time, in DST window, test     FAILED')
 
-        archive_record['dateTime'] = now.timestamp() - 3602
+        archive_record['dateTime'] = int(now.timestamp()) - 3602
         archive_record['dateTime'] = VantageNext.adjust_for_dst(
                 now, archive_record['dateTime'], False)
-        if archive_record['dateTime'] == now.timestamp() - 3602:
+        if archive_record['dateTime'] == int(now.timestamp()) - 3602:
             print('1 hour slow, not in DST window, test    PASSED')
         else:
             print('1 hour slow, not in DST window, test    FAILED')
 
-        archive_record['dateTime'] = now.timestamp() - 3602
+        archive_record['dateTime'] = int(now.timestamp()) - 3602
         archive_record['dateTime'] = VantageNext.adjust_for_dst(
                 now, archive_record['dateTime'], True)
-        if archive_record['dateTime'] == now.timestamp() - 2:
+        if archive_record['dateTime'] == int(now.timestamp()) - 2:
             print('1 hour slow, in DST window, test        PASSED')
         else:
             print('1 hour slow, in DST window, test        FAILED')
 
-        archive_record['dateTime'] = now.timestamp() + 3602
+        archive_record['dateTime'] = int(now.timestamp()) + 3602
         archive_record['dateTime'] = VantageNext.adjust_for_dst(
                 now, archive_record['dateTime'], False)
-        if archive_record['dateTime'] == now.timestamp() + 3602:
+        if archive_record['dateTime'] == int(now.timestamp()) + 3602:
             print('1 hour fast, not in DST window, test    PASSED')
         else:
             print('1 hour fast, not in DST window, test    FAILED')
 
-        archive_record['dateTime'] = now.timestamp() + 3602
+        archive_record['dateTime'] = int(now.timestamp()) + 3602
         archive_record['dateTime'] = VantageNext.adjust_for_dst(
                 now, archive_record['dateTime'], True)
-        if archive_record['dateTime'] == now.timestamp() + 2:
+        if archive_record['dateTime'] == int(now.timestamp()) + 2:
             print('1 hour fast, in DST window, test        PASSED')
         else:
             print('1 hour fast, in DST window, test        FAILED')
