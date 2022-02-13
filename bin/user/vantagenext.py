@@ -873,10 +873,11 @@ class VantageNext(weewx.drivers.AbstractDevice):
         log.error("Max retries exceeded while getting time")
         raise weewx.RetriesExceeded("While getting console time")
 
-    def inTimeChangeWindow(self, t):
+    @staticmethod
+    def inTimeChangeWindow(time_change_windows, t):
         """Return true if datetime value t is in a time change window."""
-        for key in self.time_change_windows:
-            for window in self.time_change_windows[key]:
+        for key in time_change_windows:
+            for window in time_change_windows[key]:
                 if t > window[0] and t < window[1]:
                     log.info("Ignoring clock set during daylight savings time transition.")
                     return True
@@ -924,7 +925,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
         # of data was lost.
         # Nov  1 01:00:04 ella weewx[7206] INFO weewx.engine: Clock error is -3599.62 seconds (positive is fast)
         # Nov  1 01:00:04 ella weewx[7206] INFO user.vantagenext: Clock set to 2020-11-01 01:00:05 PST (1604221205) (225027)
-        if self.inTimeChangeWindow(datetime.datetime.now()):
+        if VantageNext.inTimeChangeWindow(self.time_change_windows, datetime.datetime.now()):
             return
 
         for unused_count in range(self.max_tries):
@@ -1687,7 +1688,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
         # time by 1 hour.  Check for that and adjust as necessary.
         now = datetime.datetime.now()
         archive_record['dateTime'] = VantageNext.adjust_for_dst(
-                now, archive_record['dateTime'], self.inTimeChangeWindow(now))
+                now, archive_record['dateTime'], VantageNext.inTimeChangeWindow(self.time_change_windows, now))
 
         archive_record['rxCheckPercent'] = _rxcheck(self.model_type,
                                                     archive_record['interval'],
@@ -3037,8 +3038,10 @@ if __name__ == '__main__':
     parser = optparse.OptionParser(usage=usage)
     parser.add_option('--version', action='store_true',
                       help='Display driver version')
+    parser.add_option('--test-in-time-change-window', dest='test_in_time_change_window', action='store_true',
+                      help='Test inTimeChangeWindow function')
     parser.add_option('--test-dst-handling', dest='test_dst_handling', action='store_true',
-                      help='Display driver version')
+                      help='Test DST handling')
     parser.add_option('--port', default='/dev/ttyUSB0',
                       help='Serial port to use. Default is "/dev/ttyUSB0"',
                       metavar="PORT")
@@ -3046,6 +3049,92 @@ if __name__ == '__main__':
 
     if options.version:
         print("VantageNext driver version %s" % DRIVER_VERSION)
+        exit(0)
+
+    if options.test_in_time_change_window:
+        dst_periods = {
+                '2022': ['2022-03-13 02:00:00', '2022-11-06 02:00:00'],
+                '2023': ['2023-03-12 02:00:00', '2023-11-05 02:00:00'],
+                '2024': ['2024-03-10 02:00:00', '2024-11-03 02:00:00'] }
+        time_change_windows = VantageNext.compose_time_change_windows(dst_periods)
+        for key in time_change_windows:
+            for window in time_change_windows[key]:
+                print('time_change_window : %s: %s-%s' % (key, window[0], window[1]))
+
+        print('now in time change window                     : %r' % VantageNext.inTimeChangeWindow(time_change_windows, datetime.datetime.now()))
+
+        now = datetime.datetime(2022, 3, 13, 1, 54, 0)
+        if not VantageNext.inTimeChangeWindow(time_change_windows, now):
+            print('6 minutes before spring 2022 time change test : PASS')
+        else:
+            print('6 minutes before spring 2022 time change test : FAIL')
+
+        now = datetime.datetime(2022, 3, 13, 1, 59, 0)
+        if VantageNext.inTimeChangeWindow(time_change_windows, now):
+            print('1 minute before spring 2022 time change test  : PASS')
+        else:
+            print('1 minute before spring 2022 time change test  : FAIL')
+
+        now = datetime.datetime(2022, 3, 13, 2, 10, 0)
+        if VantageNext.inTimeChangeWindow(time_change_windows, now):
+            print('10 minutes after spring 2022 time change test : PASS')
+        else:
+            print('10 minutes after spring 2022 time change test : FAIL')
+
+        now = datetime.datetime(2022, 3, 13, 3, 0, 0)
+        if VantageNext.inTimeChangeWindow(time_change_windows, now):
+            print('1 hour after spring 2022 time change test     : PASS')
+        else:
+            print('1 hour after spring 2022 time change test     : FAIL')
+
+        now = datetime.datetime(2022, 3, 13, 3, 4, 59)
+        if VantageNext.inTimeChangeWindow(time_change_windows, now):
+            print('1:04:59 after spring 2022 time change test    : PASS')
+        else:
+            print('1:04:59 after spring 2022 time change test    : FAIL')
+
+        now = datetime.datetime(2022, 3, 13, 3, 6, 0)
+        if not VantageNext.inTimeChangeWindow(time_change_windows, now):
+            print('1:05   after spring 2022 time change test     : PASS')
+        else:
+            print('1:05   after spring 2022 time change test     : FAIL')
+
+        now = datetime.datetime(2023, 11, 5, 0, 54, 0)
+        if not VantageNext.inTimeChangeWindow(time_change_windows, now):
+            print('1:06      before fall   2023 time change test : PASS')
+        else:
+            print('1:06      before fall   2023 time change test : FAIL')
+
+        now = datetime.datetime(2023, 11, 5, 0, 59, 0)
+        if VantageNext.inTimeChangeWindow(time_change_windows, now):
+            print('1:01     before fall   2023 time change test  : PASS')
+        else:
+            print('1:01     before fall   2023 time change test  : FAIL')
+
+        now = datetime.datetime(2023, 11, 5, 1, 10, 0)
+        if VantageNext.inTimeChangeWindow(time_change_windows, now):
+            print('10 minutes into  fall   2023 time change test : PASS')
+        else:
+            print('10 minutes into  fall   2023 time change test : FAIL')
+
+        now = datetime.datetime(2023, 11, 5, 2, 0, 0)
+        if VantageNext.inTimeChangeWindow(time_change_windows, now):
+            print('1 hour after fall   2023 time change test     : PASS')
+        else:
+            print('1 hour after fall   2023 time change test     : FAIL')
+
+        now = datetime.datetime(2023, 11, 5, 2, 4, 59)
+        if VantageNext.inTimeChangeWindow(time_change_windows, now):
+            print('1:04:59 after fall   2023 time change test    : PASS')
+        else:
+            print('1:04:59 after fall   2023 time change test    : FAIL')
+
+        now = datetime.datetime(2023, 11, 5, 2, 6, 0)
+        if not VantageNext.inTimeChangeWindow(time_change_windows, now):
+            print('1:05   after fall   2023 time change test     : PASS')
+        else:
+            print('1:05   after fall   2023 time change test     : FAIL')
+
         exit(0)
 
     if options.test_dst_handling:
