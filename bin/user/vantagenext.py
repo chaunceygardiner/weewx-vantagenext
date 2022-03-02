@@ -314,7 +314,14 @@ class SerialWrapper(BaseWrapper):
     def openPort(self):
         import serial
         # Open up the port and store it
-        self.serial_port = serial.Serial(self.port, self.baudrate, timeout=self.timeout)
+        try:
+            self.serial_port = serial.Serial(self.port, self.baudrate, timeout=self.timeout)
+        except OSError:
+            # On debian bullseye, the /dev/vantage link is sometimes not ready on a reboot
+            # (NUC7i5).  Sleep 5s, then try again.
+            log.info('Could not open serial port %s, sleeping 5s and trying again.' % self.port)
+            time.sleep(5)
+            self.serial_port = serial.Serial(self.port, self.baudrate, timeout=self.timeout)
         log.debug("Opened up serial port %s; baud %d; timeout %.2f", self.port, self.baudrate, self.timeout)
 
     def closePort(self):
