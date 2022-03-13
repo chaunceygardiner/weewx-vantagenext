@@ -886,7 +886,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
         for key in time_change_windows:
             for window in time_change_windows[key]:
                 if t > window[0] and t < window[1]:
-                    log.info("Ignoring clock set during daylight savings time transition.")
+                    log.info("In time change transition period.")
                     return True
         return False
 
@@ -933,6 +933,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
         # Nov  1 01:00:04 ella weewx[7206] INFO weewx.engine: Clock error is -3599.62 seconds (positive is fast)
         # Nov  1 01:00:04 ella weewx[7206] INFO user.vantagenext: Clock set to 2020-11-01 01:00:05 PST (1604221205) (225027)
         if VantageNext.inTimeChangeWindow(self.time_change_windows, datetime.datetime.now()):
+            log.info("setTime ignored during time change transition period.")
             return
 
         for unused_count in range(self.max_tries):
