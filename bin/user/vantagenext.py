@@ -646,7 +646,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
                     return
                 except weewx.WeeWxIOError as e:
                     log.error("LOOP try #%d; error: %s", count + 1, e)
-                    time.sleep(self.wait_before_retry)
+                    time.sleep(self.port.wait_before_retry)
                 else:
                     self.on_bad_read = False
                     self.pkt_count += 1
