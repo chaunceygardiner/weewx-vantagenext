@@ -1,3 +1,7 @@
+0.7 ?
+- Pick up WeeWX bug fix:
+  Fix problem that causes `leafWet3` and `leafWet4` to be emitted in VP2
+  stations that do not have the necessary sensors.
 0.6 2022-02-12
 - If during time change period, check if archive record's time is misinterpreted
   to be an hour ahead or an hour behind.  Auto adjust to fix this.
