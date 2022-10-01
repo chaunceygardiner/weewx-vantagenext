@@ -608,8 +608,13 @@ class VantageNext(weewx.drivers.AbstractDevice):
             # Get LOOP packets in big batches This is necessary because there is
             # an undocumented limit to how many LOOP records you can request
             # on the VP (somewhere around 220).
-            for _loop_packet in self.genDavisLoopPackets(200):
-                yield _loop_packet
+            for i in range(5):
+                try:
+                    for _loop_packet in self.genDavisLoopPackets(200):
+                        yield _loop_packet
+                    break
+                except weewx.WeeWxIOError as e:
+                    log.info('genLoopPackets: Error: %s. (try %d)' % (e, i))
 
     def genDavisLoopPackets(self, N=1):
         """Generator function to return N loop packets from a Vantage console
@@ -910,11 +915,11 @@ class VantageNext(weewx.drivers.AbstractDevice):
         # Adjust for the time we'll lose (gain) from now until midnight.
         delta_to_midnight = VantageNext.hours_to_midnight() / 24.0 * clock_drift_secs
         log.debug("Delta to midnight is %f" % delta_to_midnight)
-        midnight_delta = VantageNext.hours_to_midnight()
-        target_adj -= midnight_delta / 24.0 * clock_drift_secs
+        target_adj -= delta_to_midnight
         # Adjust for the jump after midnight
         target_adj -= day_start_jump
         log.debug("After adjusting for jump after midnight of %f, target adj is %f" % (day_start_jump, target_adj))
+        # compute_clock_target_adj: goal: 1.850000, drift: -2.700000, delta: -0.009272, day_jump: 2.090000, target_adj: -0.230728
         log.info("compute_clock_target_adj: %f, %f, %f, %f, %f" % (time_set_goal, clock_drift_secs, delta_to_midnight, day_start_jump, target_adj))
         return target_adj
 
