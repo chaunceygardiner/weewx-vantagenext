@@ -527,6 +527,8 @@ class VantageNext(weewx.drivers.AbstractDevice):
 
         log.info('Driver version is %s', DRIVER_VERSION)
 
+        self.last_pkt_time = 0 # Used to prevent duplicate loop packets
+
         self.hardware_type = None
 
         # These come from the configuration dictionary:
@@ -611,7 +613,11 @@ class VantageNext(weewx.drivers.AbstractDevice):
             for i in range(5):
                 try:
                     for _loop_packet in self.genDavisLoopPackets(200):
-                        yield _loop_packet
+                        if _loop_packet['dateTime'] == self.last_pkt_time:
+                            log.info('Skipping duplicate packet: %r' % _loop_packet)
+                        else:
+                            self.last_pkt_time = _loop_packet['dateTime']
+                            yield _loop_packet
                     break
                 except weewx.WeeWxIOError as e:
                     log.info('genLoopPackets: Error: %s. (try %d)' % (e, i))
