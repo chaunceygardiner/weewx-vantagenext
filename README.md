@@ -11,6 +11,9 @@ Copyright (C)2020 by John A Kline (john@johnkline.com)
 
 # VantageNext Changes vis. a vis. WeeWX's Vantage Driver
 
+1. Fixes a bug where the vantage drive sometimes (always) sends a duplicate loop packet
+   after processing an archive record.
+
 1. Support using weewx_device to pick the sonic anemometer.  The Vantage
    driver was offering two choices, small or big cups and was changing
    a single bit on the console.  In fact, there are two bits (in a different
@@ -64,12 +67,12 @@ Copyright (C)2020 by John A Kline (john@johnkline.com)
 
 # Installation Instructions
 
-1. Download the lastest release, weewx-vantagenext-0.6.zip, from the
+1. Download the lastest release, weewx-vantagenext-0.8.zip, from the
    [GitHub Repository](https://github.com/chaunceygardiner/weewx-vantagenext).
 
 1. Run the following command.
 
-   `sudo /home/weewx/bin/wee_extension --install weewx-vantagenext-0.6.zip`
+   `sudo /home/weewx/bin/wee_extension --install weewx-vantagenext-0.8.zip`
 
    Note: this command assumes weewx is installed in /home/weewx.  If it's installed
    elsewhere, adjust the path of wee_extension accordingly.

@@ -36,7 +36,7 @@ from weewx.crc16 import crc16
 log = logging.getLogger(__name__)
 
 DRIVER_NAME = 'VantageNext'
-DRIVER_VERSION = '0.6'
+DRIVER_VERSION = '0.8'
 
 
 def loader(config_dict, engine):

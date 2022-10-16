@@ -1,23 +1,32 @@
-0.7 ?
+0.8 2022-10-16
+--------------
+- Fix bug where driver can send a duplicate loop packet after processing an archive record.
+- Retry in genLoopPackets on WeeWxIOError.
 - Pick up WeeWX bug fix:
   Fix problem that causes `leafWet3` and `leafWet4` to be emitted in VP2
   stations that do not have the necessary sensors.
+
 0.6 2022-02-12
+--------------
 - If during time change period, check if archive record's time is misinterpreted
   to be an hour ahead or an hour behind.  Auto adjust to fix this.
   Fixes DST change errors.
 
 0.51 2021-12-26
+---------------
 - Add time_set_goal for setting time (see README).
 
 0.5 2021-12-25
+--------------
 - New calculation when setting clock.  day_start_jump
   is also used in the calculation (see README).
 
 0.4 2021-12-xx
+--------------
 - Code cleanup.
 
 0.3 2021-08-07
+--------------
 - Pick up WeeWX bug fix for LOOP2 windGust10.
   See: https://github.com/weewx/weewx/commit/11b795ba457cd5603803438a21d5e2055e9f3937
 
