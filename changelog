@@ -1,3 +1,8 @@
+0.9 2022-10-16
+--------------
+Don't bother checking for duplicate packets.
+
+
 0.8 2022-10-16
 --------------
 - Fix bug where driver can send a duplicate loop packet after processing an archive record.
