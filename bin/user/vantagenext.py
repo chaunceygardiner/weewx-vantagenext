@@ -36,7 +36,7 @@ from weewx.crc16 import crc16
 log = logging.getLogger(__name__)
 
 DRIVER_NAME = 'VantageNext'
-DRIVER_VERSION = '0.9'
+DRIVER_VERSION = '0.10'
 
 
 def loader(config_dict, engine):
@@ -527,6 +527,8 @@ class VantageNext(weewx.drivers.AbstractDevice):
 
         log.info('Driver version is %s', DRIVER_VERSION)
 
+        self.last_pkt_time = 0 # Used to prevent duplicate loop packets
+
         self.hardware_type = None
 
         # These come from the configuration dictionary:
@@ -611,7 +613,11 @@ class VantageNext(weewx.drivers.AbstractDevice):
             for i in range(5):
                 try:
                     for _loop_packet in self.genDavisLoopPackets(200):
-                        yield _loop_packet
+                        if _loop_packet['dateTime'] == self.last_pkt_time:
+                            log.info('Skipping duplicate packet: %r' % _loop_packet)
+                        else:
+                            self.last_pkt_time = _loop_packet['dateTime']
+                            yield _loop_packet
                     break
                 except weewx.WeeWxIOError as e:
                     log.info('genLoopPackets: Error: %s. (try %d)' % (e, i))
@@ -877,7 +883,18 @@ class VantageNext(weewx.drivers.AbstractDevice):
                 _buffer = self.port.get_data_with_crc16(8, max_tries=1)
                 (sec, minute, hr, day, mon, yr, unused_crc) = struct.unpack("<bbbbbbH", _buffer)
 
-                return datetime.datetime(yr + 1900, mon, day, hr, minute, sec)
+                device_time = time.mktime(datetime.datetime(yr + 1900, mon, day, hr, minute, sec).timetuple())
+                now = datetime.datetime.now()
+                adjusted_time = VantageNext.adjust_for_dst(
+                    now, device_time, VantageNext.inTimeChangeWindow(self.time_change_windows, now))
+                if device_time != adjusted_time:
+                    log.info('getConsoleTime: adjusted by %d for DST' % int(device_time - adjusted_time))
+                log.debug('getConsoleTime: device_time(%s): %r, adjusted_time(%s): %r' % (type(device_time), device_time, type(adjusted_time), adjusted_time))
+                # Create DateTime from timestamp.
+                adjusted_date_time = datetime.datetime.fromtimestamp(adjusted_time)
+                was_returning = datetime.datetime(yr + 1900, mon, day, hr, minute, sec)
+                log.debug('was returning(%s): %r, now returning(%s): %r' % (type(was_returning), was_returning, type(adjusted_date_time), adjusted_date_time))
+                return adjusted_date_time
 
             except weewx.WeeWxIOError:
                 # Caught an error. Keep retrying...

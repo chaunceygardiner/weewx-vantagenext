@@ -1,3 +1,9 @@
+0.10  2022-11-05
+- Adjust getTime if it's about to return a time of one hour off to weewx.engine (DST).
+- Prevent duplicate packets (which often occur after an archive period because the
+  loop is restarted all within the same second as the last packet delivered).
+  Not a big deal, but averages will be ever so slightly off with the extra packet.
+
 0.9 2022-10-16
 --------------
 Don't bother checking for duplicate packets.

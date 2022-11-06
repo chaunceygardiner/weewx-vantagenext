@@ -7,11 +7,11 @@ This driver builds on WeeWX built-in Vantage driver.  If deemed desirable, and a
 it will be merged into WeeWX at a later date.  This driver is not recommended.  The
 vantage driver that ships with WeeWX is well supported and the recommended driver to use.
 
-Copyright (C)2020 by John A Kline (john@johnkline.com)
+Copyright (C)2022 by John A Kline (john@johnkline.com)
 
 # VantageNext Changes vis. a vis. WeeWX's Vantage Driver
 
-1. Fixes a bug where the vantage drive sometimes (always) sends a duplicate loop packet
+1. Fixes a bug where the vantage drive sometimes produces a duplicate loop packet
    after processing an archive record.
 
 1. Support using weewx_device to pick the sonic anemometer.  The Vantage
@@ -36,7 +36,8 @@ Copyright (C)2020 by John A Kline (john@johnkline.com)
    during time change windows.  Furthermore, if an archive record's time
    is misinterpreted during this period (an hour ahead or an hour behind),
    the driver will fix the issue by subtracting or adding one hour,
-   respectively.
+   respectively.  Also, if getTime is about to return a bad time to
+   weewx.engine, it is adjusted to return the correct time.
 
 1. set_time_padding can now be specified in the VantageNext section
    so that the padding can be tweaked (it is hardcoded at 0.75 seconds
