@@ -11,9 +11,6 @@ Copyright (C)2022 by John A Kline (john@johnkline.com)
 
 # VantageNext Changes vis. a vis. WeeWX's Vantage Driver
 
-1. Fixes a bug where the vantage drive sometimes produces a duplicate loop packet
-   after processing an archive record.
-
 1. Support using weewx_device to pick the sonic anemometer.  The Vantage
    driver was offering two choices, small or big cups and was changing
    a single bit on the console.  In fact, there are two bits (in a different
@@ -27,14 +24,12 @@ Copyright (C)2022 by John A Kline (john@johnkline.com)
    subsequent get_packet() calls would also fail and WeeWX would sleep 60s
    and then restart.
 
-1. If set time happened to be called around a DST/ST time change (because
-   the drift value was exceeded), bad things would happen.  It would be
-   determined that the console was an hour fast, it would then set the
-   console back an hour (but keep DST), and an hours worth of data would
-   be lost as the timestamps would be duplicates.  DST periods can now
-   be specified in the VantageNext section, and setTime will be a no-op
-   during time change windows.  Furthermore, if an archive record's time
-   is misinterpreted during this period (an hour ahead or an hour behind),
+1. If set time happened to be called around a DST/ST time change,
+   the device would have no way of knowing if the time being set was
+   pre DST ending time (or post) during the one hour overlap.
+   DST periods can be specified in the VantageNext section, and setTime will
+   be a no-op during time change windows.  Furthermore, if an archive record's
+   time is misinterpreted during this period (an hour ahead or an hour behind),
    the driver will fix the issue by subtracting or adding one hour,
    respectively.  Also, if getTime is about to return a bad time to
    weewx.engine, it is adjusted to return the correct time.
@@ -68,12 +63,12 @@ Copyright (C)2022 by John A Kline (john@johnkline.com)
 
 # Installation Instructions
 
-1. Download the lastest release, weewx-vantagenext-0.8.zip, from the
+1. Download the lastest release, weewx-vantagenext-0.11.zip, from the
    [GitHub Repository](https://github.com/chaunceygardiner/weewx-vantagenext).
 
 1. Run the following command.
 
-   `sudo /home/weewx/bin/wee_extension --install weewx-vantagenext-0.8.zip`
+   `sudo /home/weewx/bin/wee_extension --install weewx-vantagenext-0.11.zip`
 
    Note: this command assumes weewx is installed in /home/weewx.  If it's installed
    elsewhere, adjust the path of wee_extension accordingly.

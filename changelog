@@ -1,4 +1,12 @@
+0.11 2022-11-07
+---------------
+Remove dup pkt elminination.  These packets with the same timestamp are "almost"
+identical; but just almost.  Better to keep them.  The duplicate timestamps
+do not present an issue for weewx (as evidenced by WeeWX's vantage driver
+serving duplicte timestamps for many years.
+
 0.10  2022-11-05
+----------------
 - Adjust getTime if it's about to return a time of one hour off to weewx.engine (DST).
 - Prevent duplicate packets (which often occur after an archive period because the
   loop is restarted all within the same second as the last packet delivered).
