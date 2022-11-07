@@ -3,9 +3,11 @@
 
 ## Description
 
-This driver builds on WeeWX built-in Vantage driver.  If deemed desirable, and accepted,
-it will be merged into WeeWX at a later date.  This driver is not recommended.  The
-vantage driver that ships with WeeWX is well supported and the recommended driver to use.
+This driver builds on WeeWX built-in Vantage driver.  This driver is not
+recommended for general use.  Stick with the vantage driver that ships
+with WeeWX.  The WeeWX vantage driver is well supported.  This driver
+is an experiment; but it is used in production for the author's site
+at [www.paloaltoweather.com/](https://www.paloaltoweather.com/).
 
 Copyright (C)2022 by John A Kline (john@johnkline.com)
 
