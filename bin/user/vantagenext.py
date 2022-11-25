@@ -2939,11 +2939,6 @@ class VantageNextConfEditor(weewx.drivers.AbstractConfEditor):
     # If the connection type is ethernet, an IP Address/hostname is required:
     host = 1.2.3.4
 
-    ######################################################
-    # The rest of this section rarely needs any attention.
-    # You can safely leave it "as is."
-    ######################################################
-
     # Serial baud rate (usually 19200)
     baudrate = 19200
 
