@@ -500,13 +500,13 @@ class VantageNext(weewx.drivers.AbstractDevice):
         Default is 4]
 
         set_time_padding: The number of seconds to add to the current time when
-        calling setTime. [Optional. Default is 0.20]
+        calling setTime. [Optional. Default is 0.17]
 
         clock_drift_secs: The number of seconds the console clock drifts
-        in a day. [Optional. Default is -2.4]
+        in a day. [Optional. Default is -3.1]
 
         day_start_jump: The number of seconds the clock jumps at the
-        start of the day.  [Optional.  Default is 2.0]
+        start of the day.  [Optional.  Default is 2.83]
 
         time_set_goal: The time ahead of actual time (postive number) or
         behind actual time (negative) number to shoot for just after midnight
@@ -531,9 +531,9 @@ class VantageNext(weewx.drivers.AbstractDevice):
 
         # These come from the configuration dictionary:
         self.max_tries        = to_int(vp_dict.get('max_tries', 4))
-        self.set_time_padding = to_float(vp_dict.get('set_time_padding', 0.20))
-        self.clock_drift_secs = to_float(vp_dict.get('clock_drift_secs', -2.4))
-        self.day_start_jump   = to_float(vp_dict.get('day_start_jump', 2.0))
+        self.set_time_padding = to_float(vp_dict.get('set_time_padding', 0.17))
+        self.clock_drift_secs = to_float(vp_dict.get('clock_drift_secs', -3.1))
+        self.day_start_jump   = to_float(vp_dict.get('day_start_jump', 2.83))
         self.time_set_goal    = to_float(vp_dict.get('time_set_goal', 1.85))
         self.iss_id           = to_int(vp_dict.get('iss_id'))
         self.model_type       = to_int(vp_dict.get('model_type', 2))
@@ -2934,7 +2934,7 @@ class VantageNextConfEditor(weewx.drivers.AbstractConfEditor):
     #     /dev/ttyS0   is a common serial port name
     #   BSD:
     #     /dev/cuaU0   is a common serial port name
-    port = /dev/ttyUSB0
+    port = /dev/vantage
 
     # If the connection type is ethernet, an IP Address/hostname is required:
     host = 1.2.3.4
@@ -2967,11 +2967,14 @@ class VantageNextConfEditor(weewx.drivers.AbstractConfEditor):
 
     # The number of seconds to add to current time when setting the time.
     # (Due to delay in sending and executing the command on the console.)
-    set_time_padding = 1.0
+    set_time_padding = 0.17
 
     # The amount of time, in seconds, that the console clock drifts.
     # A negative number means the console loses time.
-    clock_drift_secs = -2.4
+    clock_drift_secs = -3.1
+
+    # The number of seconds the console jumps just after midnight.
+    day_start_jump = 2.83
 
     # When setting time, the delta in seconds from actual time to shoot for,
     # just after midnight when the clock jumps.
@@ -3016,7 +3019,7 @@ class VantageNextConfEditor(weewx.drivers.AbstractConfEditor):
         if settings['type'] == 'serial':
             print("Specify a port for stations with a serial interface, for")
             print("example /dev/ttyUSB0 or /dev/ttyS0.")
-            settings['port'] = self._prompt('port', '/dev/ttyUSB0')
+            settings['port'] = self._prompt('port', '/dev/vantage')
         else:
             print("Specify the IP address (e.g., 192.168.0.10) or hostname")
             print("(e.g., console or console.example.com) for stations with")
@@ -3051,8 +3054,8 @@ if __name__ == '__main__':
                       help='Test inTimeChangeWindow function')
     parser.add_option('--test-dst-handling', dest='test_dst_handling', action='store_true',
                       help='Test DST handling')
-    parser.add_option('--port', default='/dev/ttyUSB0',
-                      help='Serial port to use. Default is "/dev/ttyUSB0"',
+    parser.add_option('--port', default='/dev/vantage',
+                      help='Serial port to use. Default is "/dev/vantage"',
                       metavar="PORT")
     (options, args) = parser.parse_args()
 
