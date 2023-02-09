@@ -63,14 +63,16 @@ Copyright (C)2022 by John A Kline (john@johnkline.com)
 1. The day's cumulative rain is now calculated by calling
 -   weewx.wxformulas.calculate_delta.
 
+1. This driver only supports WeeWX 4 and Python 3.7 or greater.
+
 # Installation Instructions
 
-1. Download the lastest release, weewx-vantagenext-0.11.zip, from the
+1. Download the lastest release, weewx-vantagenext-0.12.zip, from the
    [GitHub Repository](https://github.com/chaunceygardiner/weewx-vantagenext).
 
 1. Run the following command.
 
-   `sudo /home/weewx/bin/wee_extension --install weewx-vantagenext-0.11.zip`
+   `sudo /home/weewx/bin/wee_extension --install weewx-vantagenext-0.12.zip`
 
    Note: this command assumes weewx is installed in /home/weewx.  If it's installed
    elsewhere, adjust the path of wee_extension accordingly.

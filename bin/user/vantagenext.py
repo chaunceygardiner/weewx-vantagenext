@@ -10,19 +10,11 @@
 or VantageVue weather station"""
 
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import datetime
 import logging
 import struct
 import sys
 import time
-
-from six import int2byte, indexbytes, byte2int
-from six.moves import map
-from six.moves import zip
 
 import weeutil.weeutil
 import weewx.drivers
@@ -36,7 +28,15 @@ from weewx.crc16 import crc16
 log = logging.getLogger(__name__)
 
 DRIVER_NAME = 'VantageNext'
-DRIVER_VERSION = '0.11'
+DRIVER_VERSION = '0.12'
+
+if sys.version_info[0] < 3 or (sys.version_info[0] == 3 and sys.version_info[1] < 7):
+    raise weewx.UnsupportedFeature(
+        "weewx-loopdata requires Python 3.7 or later, found %s.%s" % (sys.version_info[0], sys.version_info[1]))
+
+if weewx.__version__ < "4":
+    raise weewx.UnsupportedFeature(
+        "weewx-vantagenext requires WeeWX 4, found %s" % weewx.__version__)
 
 
 def loader(config_dict, engine):
@@ -1000,12 +1000,12 @@ class VantageNext(weewx.drivers.AbstractDevice):
         # Set flag whether DST is auto or manual:
         man_auto = 0 if _dst == 'auto' else 1
         self.port.send_data(b"EEBWR 12 01\n")
-        self.port.send_data_with_crc16(int2byte(man_auto))
+        self.port.send_data_with_crc16(bytes((man_auto,)))
         # If DST is manual, set it on or off:
         if _dst in ['on', 'off']:
             on_off = 0 if _dst == 'off' else 1
             self.port.send_data(b"EEBWR 13 01\n")
-            self.port.send_data_with_crc16(int2byte(on_off))
+            self.port.send_data_with_crc16(bytes((on_off,)))
 
     def setTZcode(self, code):
         """Set the console's time zone code. See the Davis Vantage manual for the table
@@ -1014,10 +1014,10 @@ class VantageNext(weewx.drivers.AbstractDevice):
             raise weewx.ViolatedPrecondition("Invalid time zone code %d" % code)
         # Set the GMT_OR_ZONE byte to use TIME_ZONE value
         self.port.send_data(b"EEBWR 16 01\n")
-        self.port.send_data_with_crc16(int2byte(0))
+        self.port.send_data_with_crc16(bytes((0,)))
         # Set the TIME_ZONE value
         self.port.send_data(b"EEBWR 11 01\n")
-        self.port.send_data_with_crc16(int2byte(code))
+        self.port.send_data_with_crc16(bytes((code,)))
 
     def setTZoffset(self, offset):
         """Set the console's time zone to a custom offset.
@@ -1025,7 +1025,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
         offset: Offset. This is an integer in hundredths of hours. E.g., -175 would be 1h45m negative offset."""
         # Set the GMT_OR_ZONE byte to use GMT_OFFSET value
         self.port.send_data(b"EEBWR 16 01\n")
-        self.port.send_data_with_crc16(int2byte(1))
+        self.port.send_data_with_crc16(bytes((1,)))
         # Set the GMT_OFFSET value
         self.port.send_data(b"EEBWR 14 02\n")
         self.port.send_data_with_crc16(struct.pack("<h", offset))
@@ -1044,7 +1044,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
         # Tell the console to put one byte in hex location 0xC3
         self.port.send_data(b"EEBWR C3 01\n")
         # Follow it up with the data:
-        self.port.send_data_with_crc16(int2byte(new_setup_bits), max_tries=1)
+        self.port.send_data_with_crc16(bytes((new_setup_bits,)), max_tries=1)
         # Then call NEWSETUP to get it to stick:
         self.port.send_data(b"NEWSETUP\n")
 
@@ -1064,7 +1064,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
         # Tell the console to put one byte in hex location 0x2B
         self.port.send_data(b"EEBWR 2B 01\n")
         # Follow it up with the data:
-        self.port.send_data_with_crc16(int2byte(new_setup_bits), max_tries=1)
+        self.port.send_data_with_crc16(bytes((new_setup_bits,)), max_tries=1)
         # Then call NEWSETUP to get it to stick:
         self.port.send_data(b"NEWSETUP\n")
 
@@ -1082,7 +1082,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
         # Tell the console to put one byte in hex location 0x2C
         self.port.send_data(b"EEBWR 2C 01\n")
         # Follow it up with the data:
-        self.port.send_data_with_crc16(int2byte(new_rain_year_start), max_tries=1)
+        self.port.send_data_with_crc16(bytes((new_rain_year_start,)), max_tries=1)
 
         self._setup()
         log.info("Rain year start set to %d", self.rain_year_start)
@@ -1226,7 +1226,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
         # Tell the console to put one byte in hex location 0x18
         self.port.send_data(b"EEBWR 18 01\n")
         # Follow it up with the data:
-        self.port.send_data_with_crc16(int2byte(new_channel), max_tries=1)
+        self.port.send_data_with_crc16(bytes((new_channel,)), max_tries=1)
         # Then call NEWSETUP to get it to stick:
         self.port.send_data(b"NEWSETUP\n")
 
@@ -1246,7 +1246,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
         # Tell the console to put one byte in hex location 0x2B
         self.port.send_data(b"EEBWR FFC 01\n")
         # Follow it up with the data:
-        self.port.send_data_with_crc16(int2byte(_setting), max_tries=1)
+        self.port.send_data_with_crc16(bytes((_setting,)), max_tries=1)
         # Then call NEWSETUP to get it to stick:
         self.port.send_data(b"NEWSETUP\n")
 
@@ -1471,7 +1471,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
         for count in range(self.max_tries):
             try:
                 self.port.send_data(b"WRD\x12\x4d\n")
-                self.hardware_type = byte2int(self.port.read())
+                self.hardware_type = self.port.read()[0]
                 log.debug("Hardware type is %d", self.hardware_type)
                 # 16 = Pro, Pro2, 17 = Vue
                 return self.hardware_type
@@ -1603,7 +1603,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
         the observation in physical units."""
 
         # Get the packet type. It's in byte 4.
-        packet_type = indexbytes(raw_loop_buffer, 4)
+        packet_type = raw_loop_buffer[4]
         if packet_type == 0:
             loop_struct = loop1_struct
             loop_types = loop1_types
@@ -1683,7 +1683,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
         the observation in physical units."""
 
         # Get the record type. It's in byte 42.
-        record_type = indexbytes(raw_archive_buffer, 42)
+        record_type = raw_archive_buffer[42]
 
         if record_type == 0xff:
             # Rev A packet type:

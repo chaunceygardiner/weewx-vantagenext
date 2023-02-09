@@ -1,3 +1,7 @@
+0.12 2022-12-22
+---------------
+Remove Python 2 compatability.
+
 0.11 2022-11-07
 ---------------
 Remove dup pkt elminination.  These packets with the same timestamp are "almost"

@@ -14,14 +14,20 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
-try:
-    # Python 2
-    from StringIO import StringIO
-except ImportError:
-    # Python 3
-    from io import StringIO
+from io import StringIO
 from weecfg.extension import ExtensionInstaller
+
 import configobj
+import sys
+import weewx
+
+if sys.version_info[0] < 3 or (sys.version_info[0] == 3 and sys.version_info[1] < 7):
+    raise weewx.UnsupportedFeature(
+        "weewx-loopdata requires Python 3.7 or later, found %s.%s" % (sys.version_info[0], sys.version_info[1]))
+
+if weewx.__version__ < "4":
+    raise weewx.UnsupportedFeature(
+        "weewx-vantagenext requires WeeWX 4, found %s" % weewx.__version__)
 
 vantagenext_config = """
 [VantageNext]
@@ -119,7 +125,7 @@ def loader():
 class VantageNextInstaller(ExtensionInstaller):
     def __init__(self):
         super(VantageNextInstaller, self).__init__(
-            version="0.11",
+            version="0.12",
             name='VantageNext',
             description='Capture weather observations from Vantage weather stations',
             author="John A Kline",
