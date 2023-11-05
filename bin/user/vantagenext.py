@@ -11,6 +11,7 @@ or VantageVue weather station"""
 
 
 import datetime
+import inspect
 import logging
 import struct
 import sys
@@ -868,7 +869,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
         """Get the current time from the console, returning it as timestamp"""
 
         time_dt = self.getConsoleTime()
-        return time.mktime(time_dt.timetuple())
+        return time_dt.timestamp()
 
     def getConsoleTime(self):
         """Return the raw time on the console, uncorrected for DST or timezone."""
@@ -889,7 +890,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
                 adjusted_time = VantageNext.adjust_for_dst(
                     now, device_time, VantageNext.inTimeChangeWindow(self.time_change_windows, now))
                 if device_time != adjusted_time:
-                    log.info('getConsoleTime: adjusted by %d for DST' % int(device_time - adjusted_time))
+                    log.info('getConsoleTime: adjusted by %d for DST' % int(adjusted_time - device_time))
                 log.debug('getConsoleTime: device_time(%s): %r, adjusted_time(%s): %r' % (type(device_time), device_time, type(adjusted_time), adjusted_time))
                 # Create DateTime from timestamp.
                 adjusted_date_time = datetime.datetime.fromtimestamp(adjusted_time)
@@ -1704,14 +1705,17 @@ class VantageNext(weewx.drivers.AbstractDevice):
     def adjust_for_dst(now, dateTime, in_time_change_window):
         log.debug('adjust_for_dst: now: %r, now.timestamp(): %r, dateTime: %r, in_time_change_window: %r' % (now, now.timestamp(), dateTime, in_time_change_window))
         if in_time_change_window:
+            curframe = inspect.currentframe()
+            calframe = inspect.getouterframes(curframe, 2)
+            caller = calframe[1][3]
             time_error = dateTime - now.timestamp()
             # Check for ahead by one hour.
             if time_error > 3580 and time_error < 3620:
-                log.info('DST adjustment: subtracted 1 hour from archive record dateTime field.')
+                log.info('DST adjustment: subtracted 1 hour; caller: %s' % caller)
                 return dateTime - 3600
             # Check for behind by one hour.
             elif time_error > -3620 and time_error < -3580:
-                log.info('DST adjustment: added 1 hour to archive record dateTime field.')
+                log.info('DST adjustment: added 1 hour; caller: %s' % caller)
                 return dateTime + 3600
         return dateTime
 
