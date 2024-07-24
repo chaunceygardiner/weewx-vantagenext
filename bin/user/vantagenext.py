@@ -1505,7 +1505,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
         elif self.hardware_type == 17:
             return "Vantage Vue"
         else:
-            raise weewx.UnsupportedFeature("Unknown hardware type %d" % self.hardware_type)
+            raise weewx.UnsupportedFeature("Unknown hardware type %s" % self.hardware_type)
 
     @property
     def archive_interval(self):
@@ -2680,44 +2680,44 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
 
         # Wind direction can also be calibrated.
         if variable == "windDir":
-            offset = int(offset_str)
-            if not -359 <= offset <= 359:
-                print("Wind direction offset %d is out of range." % offset, file=sys.stderr)
+            windDir_offset = int(offset_str)
+            if not -359 <= windDir_offset <= 359:
+                print("Wind direction offset %d is out of range." % windDir_offset, file=sys.stderr)
             else:
-                ans = weeutil.weeutil.y_or_n("Proceeding will set offset for wind direction to %+d.\n" % offset +
+                ans = weeutil.weeutil.y_or_n("Proceeding will set offset for wind direction to %+d.\n" % windDir_offset +
                                              "Are you sure you want to proceed (y/n)? ",
                                              noprompt)
                 if ans == 'y':
-                    station.setCalibrationWindDir(offset)
-                    print("Wind direction offset now set to %+d." % offset)
+                    station.setCalibrationWindDir(windDir_offset)
+                    print("Wind direction offset now set to %+d." % windDir_offset)
                 else:
                     print("Nothing done.")
         elif variable in temp_variables:
-            offset = float(offset_str)
-            if not -12.8 <= offset <= 12.7:
-                print("Temperature offset %+.1f is out of range." % (offset), file=sys.stderr)
+            temp_offset = float(offset_str)
+            if not -12.8 <= temp_offset <= 12.7:
+                print("Temperature offset %+.1f is out of range." % (temp_offset), file=sys.stderr)
             else:
                 ans = weeutil.weeutil.y_or_n("Proceeding will set offset for "
-                                             "temperature %s to %+.1f.\n" % (variable, offset) +
+                                             "temperature %s to %+.1f.\n" % (variable, temp_offset) +
                                              "Are you sure you want to proceed (y/n)? ",
                                              noprompt)
                 if ans == 'y':
-                    station.setCalibrationTemp(variable, offset)
-                    print("Temperature offset %s now set to %+.1f." % (variable, offset))
+                    station.setCalibrationTemp(variable, temp_offset)
+                    print("Temperature offset %s now set to %+.1f." % (variable, temp_offset))
                 else:
                     print("Nothing done.")
         elif variable in humid_variables:
-            offset = int(offset_str)
-            if not 0 <= offset <= 100:
-                print("Humidity offset %+d is out of range." % (offset), file=sys.stderr)
+            humidity_offset = int(offset_str)
+            if not 0 <= humidity_offset <= 100:
+                print("Humidity offset %+d is out of range." % (humidity_offset), file=sys.stderr)
             else:
                 ans = weeutil.weeutil.y_or_n("Proceeding will set offset for "
-                                             "humidity %s to %+d.\n" % (variable, offset) +
+                                             "humidity %s to %+d.\n" % (variable, humidity_offset) +
                                              "Are you sure you want to proceed (y/n)? ",
                                              noprompt)
                 if ans == 'y':
-                    station.setCalibrationHumid(variable, offset)
-                    print("Humidity offset %s now set to %+d." % (variable, offset))
+                    station.setCalibrationHumid(variable, humidity_offset)
+                    print("Humidity offset %s now set to %+d." % (variable, humidity_offset))
                 else:
                     print("Nothing done.")
         else:
