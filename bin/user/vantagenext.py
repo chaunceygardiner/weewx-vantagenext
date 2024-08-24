@@ -31,6 +31,8 @@ log = logging.getLogger(__name__)
 DRIVER_NAME = 'VantageNext'
 DRIVER_VERSION = '0.13'
 
+int2byte = struct.Struct(">B").pack
+
 if sys.version_info[0] < 3 or (sys.version_info[0] == 3 and sys.version_info[1] < 7):
     raise weewx.UnsupportedFeature(
         "weewx-loopdata requires Python 3.7 or later, found %s.%s" % (sys.version_info[0], sys.version_info[1]))
@@ -1256,18 +1258,31 @@ class VantageNext(weewx.drivers.AbstractDevice):
                  VantageNext.transmitter_type_dict[transmitter_type],
                  VantageNext.repeater_dict[repeater_id], VantageNext.listen_dict[in_use])
 
-    def setRetransmit(self, new_channel):
-        """Set console retransmit channel."""
+    def setRetransmit(self, channel):
+        """Set console retransmit channel.
+
+        Args:
+            channel (int): Zero to turn off all retransmitting. Otherwise, a channel number [1-8]
+                to turn on retransmitting.
+        """
+        if channel:
+            # Get the old retransmit data
+            retransmit_data = self._getEEPROM_value(0x18)[0]
+            # Turn on the appropriate channel by ORing in the new channel
+            retransmit_data |= 1 << channel - 1
+        else:
+            # Turn off all channels
+            retransmit_data = 0
         # Tell the console to put one byte in hex location 0x18
         self.port.send_data(b"EEBWR 18 01\n")
         # Follow it up with the data:
-        self.port.send_data_with_crc16(bytes((new_channel,)), max_tries=1)
+        self.port.send_data_with_crc16(int2byte(retransmit_data), max_tries=1)
         # Then call NEWSETUP to get it to stick:
         self.port.send_data(b"NEWSETUP\n")
 
         self._setup()
-        if new_channel != 0:
-            log.info("Retransmit set to 'ON' at channel: %d", new_channel)
+        if channel:
+            log.info("Retransmit set to 'ON' at channel: %d", channel)
         else:
             log.info("Retransmit set to 'OFF'")
 
@@ -1411,8 +1426,9 @@ class VantageNext(weewx.drivers.AbstractDevice):
     def getStnTransmitters(self):
         """ Get the types of transmitters on the eight channels."""
 
-        transmitters = [ ]
-        use_tx =           self._getEEPROM_value(0x17)[0]
+        transmitters = []
+        use_tx = self._getEEPROM_value(0x17)[0]
+        retransmit_data = self._getEEPROM_value(0x18)[0]
         transmitter_data = self._getEEPROM_value(0x19, "16B")
 
         # Iterate over channels 1, 2, ..., 8
@@ -1420,22 +1436,30 @@ class VantageNext(weewx.drivers.AbstractDevice):
             lower_byte, upper_byte = transmitter_data[2 * channel - 2: 2 * channel]
             # Transmitter type in the lower nibble
             transmitter_type = lower_byte & 0x0f
-            # Repeater ID in the upper nibble
-            repeater_id = lower_byte >> 4
+            # Repeater ID in the upper nibble.
+            repeater_no = lower_byte >> 4
+            # Convert the number to the repeater channel letter, or None.
+            repeater_id = chr(repeater_no - 8 + ord('A')) if repeater_no else None
             # The least significant bit of use_tx will be whether to listen to the current channel.
             use_flag = use_tx & 0x01
             # Shift use_tx over by one bit to get it ready for the next channel.
             use_tx >>= 1
+            # The least significant bit of retransmit_data will be whether to retransmit
+            # the current channel.
+            retransmit = retransmit_data & 0x01
+            # Shift retransmit_data by one bit to get it ready for the next channel.
+            retransmit_data >>= 1
             transmitter_dict = {
-                'transmitter_type' : VantageNext.transmitter_type_dict[transmitter_type],
-                'repeater' : VantageNext.repeater_dict[repeater_id],
-                'listen' : VantageNext.listen_dict[use_flag]
+                'transmitter_type': VantageNext.transmitter_type_dict[transmitter_type],
+                'repeater': repeater_id,
+                'listen': VantageNext.listen_dict[use_flag],
+                'retransmit' : 'Y' if retransmit else 'N'
             }
             if transmitter_dict['transmitter_type'] in ['temp', 'temp_hum']:
-                # Extra temperature is origin 0.
-                transmitter_dict['temp'] = upper_byte & 0xF + 1
+                # Extra temperature is origin 1.
+                transmitter_dict['temp'] = (upper_byte & 0xF) + 1
             if transmitter_dict['transmitter_type'] in ['hum', 'temp_hum']:
-                # Extra humidity is origin 1.
+                # Extra humidity is origin 0.
                 transmitter_dict['hum'] = upper_byte >> 4
 
             transmitters.append(transmitter_dict)
@@ -2175,6 +2199,32 @@ class VantageNextService(VantageNext, weewx.engine.StdService):
 #===============================================================================
 
 class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
+    """Configures the Davis Vantage weather station."""
+
+    # Comments about retransmitting and repeaters
+    #
+    # Retransmitting
+    #    Any console can retransmit (not to be confused with acting as a repeater).
+    #    This is done through either the setup screen, or by using weectl device. For example,
+    #        weectl device --set-retransmit=on,4
+    #    would tell the console to retransmit data from the ISS on channel 4.
+    #    Another console can then be configured to receive information from this channel,
+    #    rather than directly from the ISS:
+    #        weectl device --set-transmitter-type=4,0
+    #    This says listen for an ISS on channel 4. Note that no repeater is involved.
+
+    # Repeaters
+    #    A repeater is a specialized bit of Davis hardware that retransmits signals of any kind
+    #    (not just the ISS). If you want to use a repeater, you need to tell the console not only
+    #    which channel to listen to, but also what sensor will be on that channel.
+    #    The setting up of a repeater is covered in the VP2 Console Manual, Appendix C (last page).
+    #    You must set both the channel, and the repeater ID. For example, a temperature/humidity
+    #    station on channel 5, which uses repeater B, would be set with the following:
+    #        weectl device --set-transmitter-type=5,3,2,4,B
+    #    This says to look for the station on channel 5. It will be of type temp_hum (3). The
+    #    temperature will appear as extraTemp2, the humidity as extraHumid4. It will use
+    #    repeater "B".
+
     @property
     def description(self):
         return "Configures the Davis Vantage weather station."
@@ -2404,27 +2454,33 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
         transmitter_list = None
         try:
             transmitter_list = station.getStnTransmitters()
+        except weewx.RetriesExceeded:
+            transmitter_list = None
+        else:
             print("    TRANSMITTERS: ", file=dest)
-            print("      Channel   Receive   Repeater  Type", file=dest)
-            for transmitter_id in range(0, 8):
+            print("      Channel   Receive   Retransmit  Repeater    Type", file=dest)
+            for tx_id in range(8):
                 comment = ""
-                transmitter_type = transmitter_list[transmitter_id]["transmitter_type"]
-                repeater         = transmitter_list[transmitter_id]["repeater"]
-                listen           = transmitter_list[transmitter_id]["listen"]
+                transmitter_type = transmitter_list[tx_id]["transmitter_type"]
+                retransmit = transmitter_list[tx_id]["retransmit"]
+                repeater = transmitter_list[tx_id]["repeater"]
+                repeater_str = repeater if repeater else "NONE"
+                listen = transmitter_list[tx_id]["listen"]
                 if transmitter_type == 'temp_hum':
-                    comment = "(as extra temperature %d and extra humidity %d)" % \
-                        (transmitter_list[transmitter_id]["temp"], transmitter_list[transmitter_id]["hum"])
+                    comment = "(as extra temperature %d and extra humidity %d)" \
+                              % (transmitter_list[tx_id]["temp"],
+                                 transmitter_list[tx_id]["hum"])
                 elif transmitter_type == 'temp':
-                    comment = "(as extra temperature %d)" % transmitter_list[transmitter_id]["temp"]
+                    comment = "(as extra temperature %d)" \
+                              % transmitter_list[tx_id]["temp"]
                 elif transmitter_type == 'hum':
-                    comment = "(as extra humidity %d)" % transmitter_list[transmitter_id]["hum"]
+                    comment = "(as extra humidity %d)" \
+                              % transmitter_list[tx_id]["hum"]
                 elif transmitter_type == 'none':
                     transmitter_type = "(N/A)"
-                print("         %d      %-8s    %-4s    %s %s"
-                      % (transmitter_id + 1, listen, repeater, transmitter_type, comment), file=dest)
+                print("         %d      %-8s      %-10s%-5s     %s %s"
+                      % (tx_id + 1, listen, retransmit, repeater_str, transmitter_type, comment), file=dest)
             print("", file=dest)
-        except weewx.RetriesExceeded:
-            pass
 
         # Add reception statistics if we can:
         try:
