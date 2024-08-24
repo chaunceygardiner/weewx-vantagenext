@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 #
-#    VantageNext Copyright (c) 2020-2023 John A Kline <john@johnkline.com>
+#    VantageNext Copyright (c) 2020-2024 John A Kline <john@johnkline.com>
 #    Largely based on Vantage driver:
-#    Copyright (c) 2009-2023 Tom Keffer <tkeffer@gmail.com>
+#    Copyright (c) 2009-2024 Tom Keffer <tkeffer@gmail.com>
 #
 #    See the file LICENSE.txt for your full rights.
 #
@@ -21,15 +21,15 @@ import weeutil.weeutil
 import weewx.drivers
 import weewx.engine
 import weewx.units
+from weeutil.weeutil import to_int, to_sorted_string
 from weeutil.weeutil import startOfDay
 from weeutil.weeutil import to_float
-from weeutil.weeutil import to_int
 from weewx.crc16 import crc16
 
 log = logging.getLogger(__name__)
 
 DRIVER_NAME = 'VantageNext'
-DRIVER_VERSION = '0.13'
+DRIVER_VERSION = '1.0'
 
 int2byte = struct.Struct(">B").pack
 
@@ -68,7 +68,7 @@ class ShortReadIOError(weewx.WeeWxIOError):
 #                           class BaseWrapper
 #===============================================================================
 
-class BaseWrapper(object):
+class BaseWrapper():
     """Base class for (Serial|Ethernet)Wrapper"""
 
     def __init__(self, wait_before_retry, command_delay):
@@ -177,7 +177,7 @@ class BaseWrapper(object):
                 pass
             log.debug("send_data_with_crc16; try #%d", count + 1)
 
-        log.error("Unable to pass CRC16 check while sending data")
+        log.error("Unable to pass CRC16 check while sending data to Vantage console")
         raise weewx.CRCError("Unable to pass CRC16 check while sending data to Vantage console")
 
     def send_command(self, command, max_tries=3):
@@ -216,7 +216,7 @@ class BaseWrapper(object):
         """Get a packet of data and do a CRC16 check on it, asking for retransmit if necessary.
 
         It is guaranteed that the length of the returned data will be of the requested length.
-        An exception of type CRCError will be thrown if the data cannot pass the CRC test
+        An exception of type CRCError will be raised if the data cannot pass the CRC test
         in the requested number of retries.
 
         nbytes: The number of bytes (including the 2 byte CRC) to get.
@@ -275,7 +275,7 @@ class SerialWrapper(BaseWrapper):
     """Wraps a serial connection returned from package serial"""
 
     def __init__(self, port, baudrate, timeout, wait_before_retry, command_delay):
-        super(SerialWrapper, self).__init__(wait_before_retry=wait_before_retry,
+        super().__init__(wait_before_retry=wait_before_retry,
                                             command_delay=command_delay)
         self.port     = port
         self.baudrate = baudrate
@@ -317,9 +317,9 @@ class SerialWrapper(BaseWrapper):
             log.error("   ****  %s", e)
             # Reraise as a Weewx error I/O error:
             raise weewx.WeeWxIOError(e)
-        # Python version 2.5 and earlier returns 'None', so it cannot be used to test for completion.
         if N is not None and N != len(data):
-            raise weewx.WeeWxIOError("Expected to write %d chars; sent %d instead" % (len(data), N))
+            raise weewx.WeeWxIOError("Expected to write %d chars; sent %d instead"
+                                     % (len(data), N))
 
     def openPort(self):
         import serial
@@ -351,7 +351,7 @@ class EthernetWrapper(BaseWrapper):
 
     def __init__(self, host, port, timeout, tcp_send_delay, wait_before_retry, command_delay):
 
-        super(EthernetWrapper, self).__init__(wait_before_retry=wait_before_retry,
+        super().__init__(wait_before_retry=wait_before_retry,
                                               command_delay=command_delay)
 
         self.host           = host
@@ -780,7 +780,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
             # The starting index for pages other than the first is always zero
             _start_index = 0
 
-    def genArchiveDump(self):
+    def genArchiveDump(self, progress_fn=None):
         """A generator function to return all archive packets in the memory of a Davis Vantage station.
 
         yields: a sequence of dictionaries containing the data
@@ -2231,26 +2231,38 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
 
     @property
     def usage(self):
-        return """%prog [config_file] [--help] [-y] [--info] [--clear-memory]
-    [--set-interval=MINUTES]
-    [--set-latitude=DEGREE] [--set-longitude=DEGREE]
-    [--set-altitude=FEET] [--set-barometer=inHg]
-    [--set-wind-cup=CODE] [--set-bucket=CODE]
-    [--set-rain-year-start=MM]
-    [--set-offset=VARIABLE,OFFSET]
-    [--set-transmitter-type=CHANNEL,TYPE,TEMP,HUM,REPEATER_ID]
-    [--set-retransmit=[OFF|ON|ON,CHANNEL]]
-    [--set-temperature-logging=[LAST|AVERAGE]]
-    [--set-time] [--set-dst=[AUTO|ON|OFF]]
-    [--set-tz-code=TZCODE] [--set-tz-offset=HHMM]
-    [--set-lamp=[ON|OFF]] [--dump] [--logger-summary=FILE]
-    [--start | --stop]"""
+        return """%prog --help
+       %prog --info [FILENAME|--config=FILENAME]
+       %prog --current [FILENAME|--config=FILENAME]
+       %prog --clear-memory [FILENAME|--config=FILENAME] [-y]
+       %prog --set-interval=MINUTES [FILENAME|--config=FILENAME] [-y]
+       %prog --set-latitude=DEGREE [FILENAME|--config=FILENAME] [-y]
+       %prog --set-longitude=DEGREE [FILENAME|--config=FILENAME] [-y]
+       %prog --set-altitude=FEET [FILENAME|--config=FILENAME] [-y]
+       %prog --set-barometer=inHg [FILENAME|--config=FILENAME] [-y]
+       %prog --set-wind-cup=CODE [FILENAME|--config=FILENAME] [-y]
+       %prog --set-bucket=CODE [FILENAME|--config=FILENAME] [-y]
+       %prog --set-rain-year-start=MM [FILENAME|--config=FILENAME] [-y]
+       %prog --set-offset=VARIABLE,OFFSET [FILENAME|--config=FILENAME] [-y]
+       %prog --set-transmitter-type=CHANNEL,TYPE,TEMP,HUM,REPEATER_ID [FILENAME|--config=FILENAME] [-y]
+       %prog --set-retransmit=[OFF|ON|ON,CHANNEL] [FILENAME|--config=FILENAME] [-y]
+       %prog --set-temperature-logging=[LAST|AVERAGE] [FILENAME|--config=FILENAME] [-y]
+       %prog --set-time [FILENAME|--config=FILENAME] [-y]
+       %prog --set-dst=[AUTO|ON|OFF] [FILENAME|--config=FILENAME] [-y]
+       %prog --set-tz-code=TZCODE [FILENAME|--config=FILENAME] [-y]
+       %prog --set-tz-offset=HHMM [FILENAME|--config=FILENAME] [-y]
+       %prog --set-lamp=[ON|OFF] [FILENAME|--config=FILENAME]
+       %prog --dump [--batch-size=BATCH_SIZE] [FILENAME|--config=FILENAME] [-y]
+       %prog --logger-summary=FILE [FILENAME|--config=FILENAME] [-y]
+       %prog [--start | --stop] [FILENAME|--config=FILENAME]"""
 
     def add_options(self, parser):
-        super(VantageNextConfigurator, self).add_options(parser)
+        super().add_options(parser)
         parser.add_option("--info", action="store_true", dest="info",
                           help="To print configuration, reception, and barometer "
                                "calibration information about your weather station.")
+        parser.add_option("--current", action="store_true",
+                          help="To print current LOOP information.")
         parser.add_option("--clear-memory", action="store_true", dest="clear_memory",
                           help="To clear the memory of your weather station.")
         parser.add_option("--set-interval", type=int, dest="set_interval",
@@ -2289,13 +2301,13 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
         parser.add_option("--set-transmitter-type", type=str,
                           dest="set_transmitter_type",
                           metavar="CHANNEL,TYPE,TEMP,HUM,REPEATER_ID",
-                          help="Set the transmitter type for CHANNEL (1-8), TYPE (0=iss, 1=temp, 2=hum, "
-                               "3=temp_hum, 4=wind, 5=rain, 6=leaf, 7=soil, 8=leaf_soil, 9=sensorlink, 10=none), "
-                               "as extra TEMP station and extra HUM station (both 1-7, if applicable), "
-                               "REPEATER_ID ('A'-'H', if used)")
+                          help="Set the transmitter type for CHANNEL (1-8), TYPE (0=iss, 1=temp, "
+                               "2=hum, 3=temp_hum, 4=wind, 5=rain, 6=leaf, 7=soil, 8=leaf_soil, "
+                               "9=sensorlink, 10=none), as extra TEMP station and extra HUM "
+                               "station (both 1-7, if applicable), REPEATER_ID (A-H, or 0=OFF)")
         parser.add_option("--set-retransmit", type=str, dest="set_retransmit",
                           metavar="OFF|ON|ON,CHANNEL",
-                          help="Turn console retransmit function 'ON' or 'OFF'.")
+                          help="Turn ISS retransmit 'ON' or 'OFF', using optional CHANNEL.")
         parser.add_option("--set-temperature-logging", dest="set_temp_logging",
                           metavar="LAST|AVERAGE",
                           help="Set console temperature logging to either 'LAST' or 'AVERAGE'.")
@@ -2306,22 +2318,30 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
                           help="Set DST to 'ON', 'OFF', or 'AUTO'")
         parser.add_option("--set-tz-code", type=int, dest="set_tz_code",
                           metavar="TZCODE",
-                          help="Set timezone code to TZCODE. See your Vantage manual for valid codes.")
+                          help="Set timezone code to TZCODE. See your Vantage manual for "
+                               "valid codes.")
         parser.add_option("--set-tz-offset", dest="set_tz_offset",
-                          help="Set timezone offset to HHMM. E.g. '-0800' for U.S. Pacific Time.", metavar="HHMM")
+                          help="Set timezone offset to HHMM. E.g. '-0800' for U.S. Pacific Time.",
+                          metavar="HHMM")
         parser.add_option("--set-lamp", dest="set_lamp",
                           metavar="ON|OFF",
                           help="Turn the console lamp 'ON' or 'OFF'.")
+        parser.add_option("--dump", action="store_true",
+                          help="Dump all data to the archive. "
+                               "NB: This may result in many duplicate primary key errors.")
+        parser.add_option("--batch-size", type=int, default=1, metavar="BATCH_SIZE",
+                          help="Use with option --dump. Pages are read off the console in batches "
+                               "of BATCH_SIZE. A BATCH_SIZE of zero means dump all data first, "
+                               "then put it in the database. This can improve performance in "
+                               "high-latency environments, but requires sufficient memory to "
+                               "hold all station data. Default is 1 (one).")
+        parser.add_option("--logger-summary", type="string",
+                          dest="logger_summary", metavar="FILE",
+                          help="Save diagnostic summary to FILE (for debugging the logger).")
         parser.add_option("--start", action="store_true",
                           help="Start the logger.")
         parser.add_option("--stop", action="store_true",
                           help="Stop the logger.")
-        parser.add_option("--dump", action="store_true",
-                          help="Dump all data to the archive. "
-                               "NB: This may result in many duplicate primary key errors.")
-        parser.add_option("--logger-summary", type="string",
-                          dest="logger_summary", metavar="FILE",
-                          help="Save diagnostic summary to FILE (for debugging the logger).")
 
     def do_options(self, options, parser, config_dict, prompt):  # @UnusedVariable
         if options.start and options.stop:
@@ -2332,6 +2352,8 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
         station = VantageNext(**config_dict[DRIVER_NAME])
         if options.info:
             self.show_info(station)
+        if options.current:
+            self.current(station)
         if options.set_interval is not None:
             self.set_interval(station, options.set_interval, options.noprompt)
         if options.set_latitude is not None:
@@ -2373,7 +2395,7 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
         if options.stop:
             self.stop_logger(station)
         if options.dump:
-            self.dump_logger(station, config_dict, options.noprompt)
+            self.dump_logger(station, config_dict, options.noprompt, options.batch_size)
         if options.logger_summary:
             self.logger_summary(station, options.logger_summary)
 
@@ -2550,6 +2572,14 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
                         print("      Leaf Temperature %d:           %+.1f F"
                               % (leaf, calibration_dict["leafTemp%d" % leaf]), file=dest)
         print("", file=dest)
+
+    @staticmethod
+    def current(station):
+        """Print a single, current LOOP packet."""
+        print('Querying the station for current weather data...')
+        for pack in station.genDavisLoopPackets(1):
+            print(weeutil.weeutil.timestamp_to_string(pack['dateTime']),
+                  to_sorted_string(pack))
 
     @staticmethod
     def set_interval(station, new_interval_minutes, noprompt):
@@ -2981,7 +3011,7 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
         print("Logger stopped")
 
     @staticmethod
-    def dump_logger(station, config_dict, noprompt):
+    def dump_logger(station, config_dict, noprompt, batch_size=1):
         import weewx.manager
         ans = weeutil.weeutil.y_or_n("Proceeding will dump all data in the logger.\n"
                                      "Are you sure you want to proceed (y/n)? ",
@@ -2990,19 +3020,28 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
             with weewx.manager.open_manager_with_config(config_dict, 'wx_binding',
                                                         initialize=True) as archive:
                 nrecs = 0
-                # Wrap the Vantage generator function in a converter, which will convert the units to the
-                # same units used by the database:
-                converted_generator = weewx.units.GenWithConvert(station.genArchiveDump(), archive.std_unit_system)
+                # Determine whether to use something to show our progress:
+                progress_fn = print_page if batch_size == 0 else None
+
+                # Wrap the Vantage generator function in a converter, which will convert the units
+                # to the same units used by the database:
+                converted_generator = weewx.units.GenWithConvert(
+                    station.genArchiveDump(progress_fn=progress_fn),
+                    archive.std_unit_system)
+
+                # Wrap it again, to dump in the requested batch size
+                converted_generator = weeutil.weeutil.GenByBatch(converted_generator, batch_size)
+
                 print("Starting dump ...")
+
                 for record in converted_generator:
                     archive.addRecord(record)
                     nrecs += 1
-                    if nrecs % 10 == 0:
-                        print("Records processed: %d; Timestamp: %s\r"
-                              % (nrecs, weeutil.weeutil.timestamp_to_string(record['dateTime'])),
-                              end=' ',
-                              file=sys.stdout)
-                        sys.stdout.flush()
+                    print("Records processed: %d; Timestamp: %s\r"
+                          % (nrecs, weeutil.weeutil.timestamp_to_string(record['dateTime'])),
+                          end=' ',
+                          file=sys.stdout)
+                    sys.stdout.flush()
                 print("\nFinished dump. %d records added" % (nrecs,))
         else:
             print("Nothing done.")
@@ -3147,6 +3186,10 @@ class VantageNextConfEditor(weewx.drivers.AbstractConfEditor):
             print("an ethernet interface.")
             settings['host'] = self._prompt('host')
         return settings
+
+def print_page(ipage):
+    print("Requesting page %d/512\r" % ipage, end=' ', file=sys.stdout)
+    sys.stdout.flush()
 
 # Define a main entry point for basic testing of the station without weewx
 # engine and service overhead.  Invoke this as follows from the weewx root directory:
