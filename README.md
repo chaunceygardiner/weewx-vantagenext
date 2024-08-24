@@ -1,5 +1,5 @@
 # weewx-vantagenext
-*WeeWX driver for Vantage devices largely based on built-in driver Copyright (c) 2009-2020 Tom Keefer
+*WeeWX driver for Vantage devices largely based on built-in driver Copyright (c) 2009-2024 Tom Keefer
 
 ## Description
 
@@ -9,7 +9,7 @@ with WeeWX.  The WeeWX vantage driver is well supported.  This driver
 is an experiment; but it is used in production for the author's site
 at [www.paloaltoweather.com](https://www.paloaltoweather.com/).
 
-Copyright (C)2022 by John A Kline (john@johnkline.com)
+Copyright (C)2020-2024 by John A Kline (john@johnkline.com)
 
 # VantageNext Changes vis. a vis. WeeWX's Vantage Driver
 
@@ -63,16 +63,15 @@ Copyright (C)2022 by John A Kline (john@johnkline.com)
 1. The day's cumulative rain is now calculated by calling
 -   weewx.wxformulas.calculate_delta.
 
-1. This driver only supports WeeWX 4 and Python 3.7 or greater.
+1. This driver only supports WeeWX 4/5 and Python 3.9 or greater.
 
 # Installation Instructions
 
-1. Download the lastest release, weewx-vantagenext-0.12.zip, from the
-   [GitHub Repository](https://github.com/chaunceygardiner/weewx-vantagenext).
+1. Download the [lastest release](https://github.com/chaunceygardiner/weewx-vantagenext/releases/latest/download/weewx-vantagenext.zip).
 
 1. Run the following command.
 
-   `sudo /home/weewx/bin/wee_extension --install weewx-vantagenext-0.12.zip`
+   `sudo /home/weewx/bin/wee_extension --install weewx-vantagenext.zip`
 
    Note: this command assumes weewx is installed in /home/weewx.  If it's installed
    elsewhere, adjust the path of wee_extension accordingly.

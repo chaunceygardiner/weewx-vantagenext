@@ -1,3 +1,7 @@
+1.0 2024-08-24
+--------------
+Incorporate upstream changes related to configuring the vantage device.
+
 0.13 2023-11-05
 ---------------
 Assure getTime returns proper timestamp even during DST transition.
