@@ -1,3 +1,7 @@
+1.0.1 2024-08-30
+---------------
+Take Tom Keffer's fix for ghost values when using Vantage Vue.
+
 1.0 2024-08-24
 --------------
 Incorporate upstream changes related to configuring the vantage device.
