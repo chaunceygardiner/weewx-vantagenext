@@ -1,3 +1,7 @@
+1.1 2024-08-31
+--------------
+Major effort to sync with upstream repository.
+
 1.0.1 2024-08-30
 ---------------
 Take Tom Keffer's fix for ghost values when using Vantage Vue.

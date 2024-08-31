@@ -29,7 +29,7 @@ from weewx.crc16 import crc16
 log = logging.getLogger(__name__)
 
 DRIVER_NAME = 'VantageNext'
-DRIVER_VERSION = '1.0.1'
+DRIVER_VERSION = '1.1'
 
 int2byte = struct.Struct(">B").pack
 
@@ -55,20 +55,20 @@ def confeditor_loader():
 
 
 # A few handy constants:
-_ack    = b'\x06'
-_resend = b'\x15' # NB: The Davis documentation gives this code as 0x21, but it's actually decimal 21
+_ack = b'\x06'
+_resend = b'\x15'  # NB: The Davis documentation gives this code as 0x21, but it's actually decimal 21
 
-#===============================================================================
+# ===============================================================================
 #                           class ShortReadIOError
-#===============================================================================
+# ===============================================================================
 class ShortReadIOError(weewx.WeeWxIOError):
     """Exception raised when too few bytes read from serial port."""
 
-#===============================================================================
+# ===============================================================================
 #                           class BaseWrapper
-#===============================================================================
+# ===============================================================================
 
-class BaseWrapper():
+class BaseWrapper:
     """Base class for (Serial|Ethernet)Wrapper"""
 
     def __init__(self, wait_before_retry, command_delay):
@@ -85,9 +85,9 @@ class BaseWrapper():
     def flush_input(self):
         raise NotImplementedError
 
-    #===============================================================================
+    # ===============================================================================
     #          Primitives for working with the Davis Console
-    #===============================================================================
+    # ===============================================================================
 
     def wakeup_console(self, max_tries=3):
         """Wake up a Davis Vantage console.
@@ -122,12 +122,12 @@ class BaseWrapper():
             except weewx.WeeWxIOError:
                 pass
 
-            log.debug("Retry #%d failed", count)
+            log.debug("Retry #%d unable to wake up console... sleeping", count)
             print("Unable to wake up console... sleeping")
             time.sleep(self.wait_before_retry)
             print("Unable to wake up console... retrying")
 
-        log.error("Unable to wake up console")
+        log.error("Unable to wake up Vantage console")
         raise weewx.WakeupError("Unable to wake up Vantage console")
 
     def send_data(self, data):
@@ -145,7 +145,7 @@ class BaseWrapper():
         # Look for the acknowledging ACK character
         _resp = self.read()
         if _resp != _ack:
-            log.error("No <ACK> received from console")
+            log.error("send_data: no <ACK> received from Vantage console")
             raise weewx.WeeWxIOError("No <ACK> received from Vantage console")
 
     def send_data_with_crc16(self, data, max_tries=3):
@@ -153,10 +153,11 @@ class BaseWrapper():
         acknowledging <ack>. If none received, resend up to max_tries times.
 
         Args:
-            data(bytes): The data to send, as bytes.
-            max_tries(int): How many times to try. Default is 3.
+            data(bytearray | bytes): The data to send, as a bytearray
+            max_tries(int): The maximum number of times to try before raising an error.
+
         Raises:
-              weewx.CRCError: If unable to successfully transmit.
+              weewx.CRCError: The send failed to pass a CRC check.
         """
 
         # Calculate the crc for the data:
@@ -192,8 +193,8 @@ class BaseWrapper():
                 self.write(command)
                 # Takes some time for the Vantage to react and fill up the buffer. Sleep for a bit:
                 time.sleep(self.command_delay)
-                # Can't use function serial.readline() because the VP responds with \n\r, not just \n.
-                # So, instead find how many bytes are waiting and fetch them all
+                # Can't use function serial.readline() because the VP responds with \n\r,
+                # not just \n. So, instead find how many bytes are waiting and fetch them all
                 nc = self.queued_bytes()
                 _buffer = self.read(nc)
                 # Split the buffer on the newlines
@@ -219,13 +220,19 @@ class BaseWrapper():
         An exception of type CRCError will be raised if the data cannot pass the CRC test
         in the requested number of retries.
 
-        nbytes: The number of bytes (including the 2 byte CRC) to get.
+        Args:
 
-        prompt: Any string to be sent before requesting the data. Default=None
+            nbytes(int): The number of bytes (including the 2 byte CRC) to get.
+            prompt(bytes|None): Any byte string to be sent before requesting the data. Default=None
+            max_tries(int): Number of tries before giving up. Default=3
 
-        max_tries: Number of tries before giving up. Default=3
+        Returns:
+            bytes: The packet data as a bytes array. The last 2 bytes will be the CRC
 
-        returns: the packet data as a byte string. The last 2 bytes will be the CRC"""
+        Raises:
+            weewx.CRCError: Fail to pass a CRC check while getting data
+            weewx.WeeWxIOError: Other I/O error, such as a timeout
+        """
         if prompt:
             self.write(prompt)
 
@@ -251,9 +258,10 @@ class BaseWrapper():
             log.debug("Timeout in get_data_with_crc16")
             raise weewx.WeeWxIOError("Timeout in get_data_with_crc16")
 
-#===============================================================================
+
+# ===============================================================================
 #                           class Serial Wrapper
-#===============================================================================
+# ===============================================================================
 
 def guard_termios(fn):
     """Decorator function that converts termios exceptions into weewx exceptions."""
@@ -277,9 +285,9 @@ class SerialWrapper(BaseWrapper):
     def __init__(self, port, baudrate, timeout, wait_before_retry, command_delay):
         super().__init__(wait_before_retry=wait_before_retry,
                                             command_delay=command_delay)
-        self.port     = port
+        self.port = port
         self.baudrate = baudrate
-        self.timeout  = timeout
+        self.timeout = timeout
 
     @guard_termios
     def flush_input(self):
@@ -342,9 +350,10 @@ class SerialWrapper(BaseWrapper):
             pass
         self.serial_port.close()
 
-#===============================================================================
+
+# ===============================================================================
 #                           class EthernetWrapper
-#===============================================================================
+# ===============================================================================
 
 class EthernetWrapper(BaseWrapper):
     """Wrap a socket"""
@@ -354,9 +363,9 @@ class EthernetWrapper(BaseWrapper):
         super().__init__(wait_before_retry=wait_before_retry,
                                               command_delay=command_delay)
 
-        self.host           = host
-        self.port           = port
-        self.timeout        = timeout
+        self.host = host
+        self.port = port
+        self.timeout = timeout
         self.tcp_send_delay = tcp_send_delay
 
     def openPort(self):
@@ -366,7 +375,8 @@ class EthernetWrapper(BaseWrapper):
             self.socket.settimeout(self.timeout)
             self.socket.connect((self.host, self.port))
         except (socket.error, socket.timeout, socket.herror) as ex:
-            log.error("Socket error while opening port %d to ethernet host %s.", self.port, self.host)
+            log.error("Socket error while opening port %d to ethernet host %s.", self.port,
+                      self.host)
             # Reraise as a weewx I/O error:
             raise weewx.WeeWxIOError(ex)
         except:
@@ -444,8 +454,9 @@ class EthernetWrapper(BaseWrapper):
         import socket
         try:
             self.socket.sendall(data)
-            # A delay of 0.0 gives socket write error; 0.01 gives no ack error; 0.05 is OK for weewx program
-            # Note: a delay of 0.5 s is required for wee_device --logger=logger_info
+            # A delay of 0.0 gives socket write error; 0.01 gives no ack error;
+            # 0.05 is OK for weewx program.
+            # Note: a delay of 0.5 s is required for weectl device --logger=logger_info
             time.sleep(self.tcp_send_delay)
         except (socket.timeout, socket.error) as ex:
             log.error("ip-write error: %s", ex)
@@ -453,9 +464,9 @@ class EthernetWrapper(BaseWrapper):
             raise weewx.WeeWxIOError(ex)
 
 
-#===============================================================================
+# ===============================================================================
 #                           class VantageNext
-#===============================================================================
+# ===============================================================================
 
 class VantageNext(weewx.drivers.AbstractDevice):
     """Class that represents a connection to a Davis Vantage console.
@@ -481,59 +492,59 @@ class VantageNext(weewx.drivers.AbstractDevice):
     def __init__(self, **vp_dict):
         """Initialize an object of type VantageNext.
 
-        NAMED ARGUMENTS:
+        Args:
 
-        connection_type: The type of connection (serial|ethernet) [Required]
+            connection_type: The type of connection (serial|ethernet) [Required]
 
-        port: The serial port of the VP. [Required if serial/USB
-        communication]
+            port: The serial port of the VP. [Required if serial/USB
+            communication]
 
-        host: The Vantage network host [Required if Ethernet communication]
+            host: The Vantage network host [Required if Ethernet communication]
 
-        baudrate: Baudrate of the port. [Optional. Default 19200]
+            baudrate: Baudrate of the port. [Optional. Default 19200]
 
-        tcp_port: TCP port to connect to [Optional. Default 22222]
+            tcp_port: TCP port to connect to [Optional. Default 22222]
 
-        tcp_send_delay: Block after sending data to WeatherLinkIP to allow it
-        to process the command [Optional. Default is 0.5]
+            tcp_send_delay: Block after sending data to WeatherLinkIP to allow it
+            to process the command [Optional. Default is 0.5]
 
-        timeout: How long to wait before giving up on a response from the
-        serial port. [Optional. Default is 4]
+            timeout: How long to wait before giving up on a response from the
+            serial port. [Optional. Default is 4]
 
-        wait_before_retry: How long to wait before retrying. [Optional.
-        Default is 1.2 seconds]
+            wait_before_retry: How long to wait before retrying. [Optional.
+            Default is 1.2 seconds]
 
-        command_delay: How long to wait after sending a command before looking
-        for acknowledgement. [Optional. Default is 0.5 seconds]
+            command_delay: How long to wait after sending a command before looking
+            for acknowledgement. [Optional. Default is 0.5 seconds]
 
-        max_tries: How many times to try again before giving up. [Optional.
-        Default is 4]
+            max_tries: How many times to try again before giving up. [Optional.
+            Default is 4]
 
-        set_time_padding: The number of seconds to add to the current time when
-        calling setTime. [Optional. Default is 0.17]
+            set_time_padding: The number of seconds to add to the current time when
+            calling setTime. [Optional. Default is 0.17]
 
-        clock_drift_secs: The number of seconds the console clock drifts
-        in a day. [Optional. Default is -3.1]
+            clock_drift_secs: The number of seconds the console clock drifts
+            in a day. [Optional. Default is -3.1]
 
-        day_start_jump: The number of seconds the clock jumps at the
-        start of the day.  [Optional.  Default is 2.83]
+            day_start_jump: The number of seconds the clock jumps at the
+            start of the day.  [Optional.  Default is 2.83]
 
-        time_set_goal: The time ahead of actual time (postive number) or
-        behind actual time (negative) number to shoot for just after midnight
-        when the clock jumps.  [Optional.  Default is 1.85]
+            time_set_goal: The time ahead of actual time (postive number) or
+            behind actual time (negative) number to shoot for just after midnight
+            when the clock jumps.  [Optional.  Default is 1.85]
 
-        iss_id: The station number of the ISS [Optional. Default is 1]
+            dst_periods: The start and end times of daylight savings time periods.
+            [Optional. Default is no dst periods are defined.  If DST periods are
+            defined, setTime will be ignored from 5 minutes before to 5 minutes
+            after the time change.  This amounts to a 1 hour and ten minute period.
 
-        model_type: Vantage Pro model type. 1=Vantage Pro; 2=Vantage Pro2
-        [Optional. Default is 2]
+            iss_id: The station number of the ISS [Optional. Default is 1]
 
-        loop_request: Requested packet type. 1=LOOP; 2=LOOP2; 3=both.
+            model_type: Vantage Pro model type. 1=Vantage Pro; 2=Vantage Pro2
+            [Optional. Default is 2]
 
-        dst_periods: The start and end times of daylight savings time periods.
-        [Optional. Default is no dst periods are defined.  If DST periods are
-        defined, setTime will be ignored from 5 minutes before to 5 minutes
-        after the time change.  This amounts to a 1 hour and ten minute period.
-        """
+            loop_request: Requested packet type. 1=LOOP; 2=LOOP2; 3=both.
+            """
 
         log.info('Driver version is %s', DRIVER_VERSION)
 
@@ -672,24 +683,34 @@ class VantageNext(weewx.drivers.AbstractDevice):
                 raise weewx.RetriesExceeded("Max tries exceeded while getting LOOP data.")
 
     def _get_packet(self):
-        """Get a single LOOP packet"""
+        """Get a single LOOP packet
+
+        Returns:
+            dict: A single LOOP packet
+        """
         # Fetch a packet...
         _buffer = self.port.read(99)
         # ... see if it passes the CRC test ...
-        if crc16(_buffer):
+        crc = crc16(_buffer)
+        if crc:
+            if weewx.debug > 1:
+                log.error("LOOP buffer failed CRC check. Calculated CRC=%d", crc)
+                log.error("Buffer: %s", _buffer)
             raise weewx.CRCError("LOOP buffer failed CRC check")
         # ... decode it ...
         loop_packet = self._unpackLoopPacket(_buffer[:95])
-        # .. then return it
+        # ... then return it
         return loop_packet
 
     def genArchiveRecords(self, since_ts):
         """A generator function to return archive packets from a Davis Vantage station.
 
-        since_ts: A timestamp. All data since (but not including) this time will be returned.
-        Pass in None for all data
+        Args:
+            since_ts(float|None): A timestamp. All data since (but not including) this time
+                will be returned. Pass in None for all data
 
-        yields: a sequence of dictionaries containing the data
+        Yields:
+            dict: a sequence of dictionaries containing the data
         """
 
         count = 0
@@ -721,7 +742,8 @@ class VantageNext(weewx.drivers.AbstractDevice):
             # From experimentation, 2000 seems to be right, at least for the newer models:
             _vantageDateStamp = since_tt[2] + (since_tt[1] << 5) + ((since_tt[0] - 2000) << 9)
             _vantageTimeStamp = since_tt[3] * 100 + since_tt[4]
-            log.debug('Getting archive packets since %s', weeutil.weeutil.timestamp_to_string(since_ts))
+            log.debug('Getting archive packets since %s',
+                      weeutil.weeutil.timestamp_to_string(since_ts))
         else:
             _vantageDateStamp = _vantageTimeStamp = 0
             log.debug('Getting all archive packets')
@@ -739,10 +761,11 @@ class VantageNext(weewx.drivers.AbstractDevice):
         # ... from the designated date (allow only one try because that's all the console allows):
         self.port.send_data_with_crc16(_datestr, max_tries=1)
 
-        # Get the response with how many pages and starting index and decode it. Again, allow only one try:
+        # Get the response with how many pages and starting index and decode it.
+        # Again, allow only one try:
         _buffer = self.port.get_data_with_crc16(6, max_tries=1)
 
-        (_npages, _start_index) = struct.unpack("<HH", _buffer[:4])
+        _npages, _start_index = struct.unpack("<HH", _buffer[:4])
         log.debug("Retrieving %d page(s); starting index= %d", _npages, _start_index)
 
         # Cycle through the pages...
@@ -766,7 +789,8 @@ class VantageNext(weewx.drivers.AbstractDevice):
 
                 # Check to see if the time stamps are declining, which would
                 # signal that we are done.
-                if _record['dateTime'] is None or _record['dateTime'] <= _last_good_ts - self.max_dst_jump:
+                if _record['dateTime'] is None \
+                        or _record['dateTime'] <= _last_good_ts - self.max_dst_jump:
                     # The time stamp is declining. We're done.
                     log.debug("DMPAFT complete: page timestamp %s less than final timestamp %s",
                               weeutil.weeutil.timestamp_to_string(_record['dateTime']),
@@ -781,9 +805,15 @@ class VantageNext(weewx.drivers.AbstractDevice):
             _start_index = 0
 
     def genArchiveDump(self, progress_fn=None):
-        """A generator function to return all archive packets in the memory of a Davis Vantage station.
+        """
+        A generator function to return all archive packets in the memory of a Davis Vantage station.
 
-        yields: a sequence of dictionaries containing the data
+        Args:
+            progress_fn: A function that will be called before every page request. It should have
+            a single argument: the page number. If set to None, no progress will be reported.
+
+        Yields: a sequence of dictionaries containing the data
+
         """
         import weewx.wxformulas
 
@@ -796,6 +826,9 @@ class VantageNext(weewx.drivers.AbstractDevice):
 
         # Cycle through the pages...
         for ipage in range(512):
+            # If requested, provide users with some feedback:
+            if progress_fn:
+                progress_fn(ipage)
             # ... get a page of archive data
             _page = self.port.get_data_with_crc16(267, prompt=_ack, max_tries=self.max_tries)
             # Now extract each record from the page
@@ -820,7 +853,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
                     R = _record['outHumidity']
                     W = _record['windSpeed']
 
-                    _record['dewpoint']  = weewx.wxformulas.dewpointF(T, R)
+                    _record['dewpoint'] = weewx.wxformulas.dewpointF(T, R)
                     _record['heatindex'] = weewx.wxformulas.heatindexF(T, R)
                     _record['windchill'] = weewx.wxformulas.windchillF(T, W)
                 except KeyError:
@@ -859,11 +892,11 @@ class VantageNext(weewx.drivers.AbstractDevice):
                     # Extract the date and time from the raw buffer:
                     datestamp, timestamp = struct.unpack("<HH", _record_string[0:4])
                     time_ts = _archive_datetime(datestamp, timestamp)
-                    y  = (0xfe00 & datestamp) >> 9    # year
-                    mo = (0x01e0 & datestamp) >> 5    # month
-                    d  = (0x001f & datestamp)         # day
-                    h  = timestamp // 100             # hour
-                    mn = timestamp % 100              # minute
+                    y = (0xfe00 & datestamp) >> 9  # year
+                    mo = (0x01e0 & datestamp) >> 5  # month
+                    d = (0x001f & datestamp)  # day
+                    h = timestamp // 100  # hour
+                    mn = timestamp % 100  # minute
                 yield (_ipage, _index, y, mo, d, h, mn, time_ts)
         log.debug("VantageNext: Finished logger summary.")
 
@@ -996,12 +1029,13 @@ class VantageNext(weewx.drivers.AbstractDevice):
                 # Caught an error. Keep retrying...
                 continue
         log.error("Max retries exceeded while setting time")
-        raise weewx.RetriesExceeded("While setting console time")
+        raise weewx.RetriesExceeded("Max retries exceeded while setting time")
 
     def setDST(self, dst='auto'):
         """Turn DST on or off, or set it to auto.
-
-        dst: One of 'auto', 'on' or 'off' """
+        Args:
+            dst(str): One of 'auto', 'on' or 'off'
+        """
 
         _dst = dst.strip().lower()
         if _dst not in ['auto', 'on', 'off']:
@@ -1010,32 +1044,35 @@ class VantageNext(weewx.drivers.AbstractDevice):
         # Set flag whether DST is auto or manual:
         man_auto = 0 if _dst == 'auto' else 1
         self.port.send_data(b"EEBWR 12 01\n")
-        self.port.send_data_with_crc16(bytes((man_auto,)))
+        self.port.send_data_with_crc16(int2byte(man_auto))
         # If DST is manual, set it on or off:
         if _dst in ['on', 'off']:
             on_off = 0 if _dst == 'off' else 1
             self.port.send_data(b"EEBWR 13 01\n")
-            self.port.send_data_with_crc16(bytes((on_off,)))
+            self.port.send_data_with_crc16(int2byte(on_off))
 
     def setTZcode(self, code):
-        """Set the console's time zone code. See the Davis Vantage manual for the table
-        of preset time zones."""
-        if code < 0 or code > 46:
+        """Set the console's time zone code.
+        Args:
+            code(int): See the Davis Vantage manual for the table of preset time zones.
+        """
+        if not 0 <= code <= 46:
             raise weewx.ViolatedPrecondition("Invalid time zone code %d" % code)
         # Set the GMT_OR_ZONE byte to use TIME_ZONE value
         self.port.send_data(b"EEBWR 16 01\n")
-        self.port.send_data_with_crc16(bytes((0,)))
+        self.port.send_data_with_crc16(int2byte(0))
         # Set the TIME_ZONE value
         self.port.send_data(b"EEBWR 11 01\n")
-        self.port.send_data_with_crc16(bytes((code,)))
+        self.port.send_data_with_crc16(int2byte(code))
 
     def setTZoffset(self, offset):
         """Set the console's time zone to a custom offset.
-
-        offset: Offset. This is an integer in hundredths of hours. E.g., -175 would be 1h45m negative offset."""
+        Args:
+            offset(int): Offset. This is an integer in hundredths of hours.
+                E.g., -175 would be 1h45m negative offset."""
         # Set the GMT_OR_ZONE byte to use GMT_OFFSET value
         self.port.send_data(b"EEBWR 16 01\n")
-        self.port.send_data_with_crc16(bytes((1,)))
+        self.port.send_data_with_crc16(int2byte(1))
         # Set the GMT_OFFSET value
         self.port.send_data(b"EEBWR 14 02\n")
         self.port.send_data_with_crc16(struct.pack("<h", offset))
@@ -1054,7 +1091,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
         # Tell the console to put one byte in hex location 0xC3
         self.port.send_data(b"EEBWR C3 01\n")
         # Follow it up with the data:
-        self.port.send_data_with_crc16(bytes((new_setup_bits,)), max_tries=1)
+        self.port.send_data_with_crc16(int2byte(new_setup_bits), max_tries=1)
         # Then call NEWSETUP to get it to stick:
         self.port.send_data(b"NEWSETUP\n")
 
@@ -1064,7 +1101,8 @@ class VantageNext(weewx.drivers.AbstractDevice):
     def setBucketType(self, new_bucket_code):
         """Set the rain bucket type.
 
-        new_bucket_code: The new bucket type. Must be one of 0, 1, or 2
+        Args:
+            new_bucket_code(int): The new bucket type. Must be one of 0, 1, or 2
         """
         if new_bucket_code not in (0, 1, 2):
             raise weewx.ViolatedPrecondition("Invalid bucket code %d" % new_bucket_code)
@@ -1074,7 +1112,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
         # Tell the console to put one byte in hex location 0x2B
         self.port.send_data(b"EEBWR 2B 01\n")
         # Follow it up with the data:
-        self.port.send_data_with_crc16(bytes((new_setup_bits,)), max_tries=1)
+        self.port.send_data_with_crc16(int2byte(new_setup_bits), max_tries=1)
         # Then call NEWSETUP to get it to stick:
         self.port.send_data(b"NEWSETUP\n")
 
@@ -1084,15 +1122,17 @@ class VantageNext(weewx.drivers.AbstractDevice):
     def setRainYearStart(self, new_rain_year_start):
         """Set the start of the rain season.
 
-        new_rain_year_start: Must be in the closed range 1...12
+        Args:
+            new_rain_year_start(int): Must be in the closed range 1...12
         """
         if not 1 <= new_rain_year_start <= 12:
-            raise weewx.ViolatedPrecondition("Invalid rain season start %d" % (new_rain_year_start,))
+            raise weewx.ViolatedPrecondition(
+                "Invalid rain season start %d" % (new_rain_year_start,))
 
         # Tell the console to put one byte in hex location 0x2C
         self.port.send_data(b"EEBWR 2C 01\n")
         # Follow it up with the data:
-        self.port.send_data_with_crc16(bytes((new_rain_year_start,)), max_tries=1)
+        self.port.send_data_with_crc16(int2byte(new_rain_year_start), max_tries=1)
 
         self._setup()
         log.info("Rain year start set to %d", self.rain_year_start)
@@ -1100,9 +1140,10 @@ class VantageNext(weewx.drivers.AbstractDevice):
     def setBarData(self, new_barometer_inHg, new_altitude_foot):
         """Set the internal barometer calibration and altitude settings in the console.
 
-        new_barometer_inHg: The local, reference barometric pressure in inHg.
-
-        new_altitude_foot: The new altitude in feet."""
+        Args:
+            new_barometer_inHg(float): The local, reference barometric pressure in inHg.
+            new_altitude_foot(int|float): The new altitude in feet.
+        """
 
         new_barometer = int(new_barometer_inHg * 1000.0)
         new_altitude = int(new_altitude_foot)
@@ -1113,9 +1154,10 @@ class VantageNext(weewx.drivers.AbstractDevice):
         log.info("Set barometer calibration.")
 
     def setLatitude(self, latitude_dg):
-        """Set the stations latitude.
+        """Set the station's latitude.
 
-        latitude_dg: Must be in the closed range -90.0...90.0
+        Args:
+            latitude_dg(float): Must be in the closed range -90.0...90.0
         """
         latitude = int(round((latitude_dg * 10), 0))
         if not -900 <= latitude <= 900:
@@ -1124,16 +1166,18 @@ class VantageNext(weewx.drivers.AbstractDevice):
         # Tell the console to put one byte in hex location 0x0B
         self.port.send_data(b"EEBWR 0B 02\n")
         # Follow it up with the data:
-        self.port.send_data_with_crc16(struct.pack('<BB', latitude & 0xff, (latitude // 256) & 0xff), max_tries=1)
+        self.port.send_data_with_crc16(
+            struct.pack('<BB', latitude & 0xff, (latitude // 256) & 0xff), max_tries=1)
         # Then call NEWSETUP to get it to stick:
         self.port.send_data(b"NEWSETUP\n")
 
         log.info("Station latitude set to %.1f degree", latitude_dg)
 
     def setLongitude(self, longitude_dg):
-        """Set the stations longitude.
+        """Set the station's longitude.
 
-        longitude_dg: Must be in the closed range -180.0...180.0
+        Args:
+            longitude_dg(float): Must be in the closed range -180.0...180.0
         """
         longitude = int(round((longitude_dg * 10), 0))
         if not -1800 <= longitude <= 1800:
@@ -1142,7 +1186,8 @@ class VantageNext(weewx.drivers.AbstractDevice):
         # Tell the console to put one byte in hex location 0x0D
         self.port.send_data(b"EEBWR 0D 02\n")
         # Follow it up with the data:
-        self.port.send_data_with_crc16(struct.pack('<BB', longitude & 0xff, (longitude // 256) & 0xff), max_tries = 1)
+        self.port.send_data_with_crc16(
+            struct.pack('<BB', longitude & 0xff, (longitude // 256) & 0xff), max_tries=1)
         # Then call NEWSETUP to get it to stick:
         self.port.send_data(b"NEWSETUP\n")
 
@@ -1151,11 +1196,13 @@ class VantageNext(weewx.drivers.AbstractDevice):
     def setArchiveInterval(self, archive_interval_seconds):
         """Set the archive interval of the Vantage.
 
-        archive_interval_seconds: The new interval to use in seconds. Must be one of
-        60, 300, 600, 900, 1800, 3600, or 7200
+        Args:
+            archive_interval_seconds(int): The new interval to use in seconds. Must be one of
+                60, 300, 600, 900, 1800, 3600, or 7200
         """
-        if archive_interval_seconds not in (60, 300, 600, 900, 1800, 3600, 7200):
-            raise weewx.ViolatedPrecondition("Invalid archive interval (%d)" % (archive_interval_seconds,))
+        if archive_interval_seconds not in {60, 300, 600, 900, 1800, 3600, 7200}:
+            raise weewx.ViolatedPrecondition("Invalid archive interval (%d)"
+                                             % archive_interval_seconds)
 
         # The console expects the interval in minutes. Divide by 60.
         command = b'SETPER %d\n' % int(archive_interval_seconds // 60)
@@ -1192,17 +1239,21 @@ class VantageNext(weewx.drivers.AbstractDevice):
                 cause results to be emitted as extraTempN where N is the ID number. [1-8]
             extra_hum_id(int|None):  The ID to be used if this is a humidity channel. This will
                 cause results to be emitted as extraHumidN where N is the ID number. [1-8]
-            repeater_id(int): The repeater number for this channel.
-                Zero means no repeater. [0-8]
+            repeater_id(str|None): The repeater ID for this channel [A-H], or None for no repeater.
         """
+
+        if repeater_id is not None:
+            repeater_id = repeater_id.upper()
 
         # Check arguments for validity
         if not 1 <= channel <= 8:
-            raise weewx.ViolatedPrecondition("Invalid channel %d" % channel)
+            raise weewx.ViolatedPrecondition(f"Invalid channel {channel:d}")
+
         if not 0 <= transmitter_type <= 10:
-            raise weewx.ViolatedPrecondition("Invalid transmitter type %d" % transmitter_type)
-        if not 0 <= repeater_id <= 8:
-            raise weewx.ViolatedPrecondition("Invalid repeater %d" % repeater_id)
+            raise weewx.ViolatedPrecondition(f"Invalid transmitter type {transmitter_type:d}")
+        # The repeater ID must be either None, or in the range A-H:
+        if repeater_id is not None and not (ord('A') <= ord(repeater_id) <= ord('H')):
+            raise weewx.ViolatedPrecondition(f"Invalid repeater ID {repeater_id}")
 
         extra_id_bits = 0xFF
 
@@ -1225,18 +1276,17 @@ class VantageNext(weewx.drivers.AbstractDevice):
         transmitter_type_bits = transmitter_type & 0x0F
         if repeater_id:
             # The transmitter uses a repeater. Add it in.
-            transmitter_type_bits |= (repeater_id + 7) << 4
+            repeater_code = ord(repeater_id) - ord('A') + 8
+            transmitter_type_bits |= repeater_code << 4
 
         usetx_bits = self._getEEPROM_value(0x17)[0]
-        # A transmitter type of 10 indicates that channel does not have a transmitter.
+        # A transmitter type of 10 indicates do not listen to that channel
         if transmitter_type == 10:
             # The given channel is not being used. We need to clear the bit:
             usetx_bits &= ~(1 << channel - 1)
-            in_use = 0
         else:
             # The channel is being used. We need to set it:
             usetx_bits |= 1 << channel - 1
-            in_use = 1
 
         # Each channel uses two bytes. Find the correct starting byte for this channel
         start_byte = 0x19 + (channel - 1) * 2
@@ -1253,10 +1303,6 @@ class VantageNext(weewx.drivers.AbstractDevice):
         self.port.send_data(b"NEWSETUP\n")
 
         self._setup()
-        log.info("Transmitter type for channel %d set to %d (%s), repeater: %s, %s",
-                 channel, transmitter_type,
-                 VantageNext.transmitter_type_dict[transmitter_type],
-                 VantageNext.repeater_dict[repeater_id], VantageNext.listen_dict[in_use])
 
     def setRetransmit(self, channel):
         """Set console retransmit channel.
@@ -1291,12 +1337,13 @@ class VantageNext(weewx.drivers.AbstractDevice):
         try:
             _setting = {'LAST': 1, 'AVERAGE': 0}[new_tempLogging.upper()]
         except KeyError:
-            raise ValueError("Unknown console temperature logging setting '%s'" % new_tempLogging.upper())
+            raise ValueError("Unknown console temperature logging setting '%s'"
+                             % new_tempLogging.upper())
 
         # Tell the console to put one byte in hex location 0x2B
         self.port.send_data(b"EEBWR FFC 01\n")
         # Follow it up with the data:
-        self.port.send_data_with_crc16(bytes((_setting,)), max_tries=1)
+        self.port.send_data_with_crc16(int2byte(_setting), max_tries=1)
         # Then call NEWSETUP to get it to stick:
         self.port.send_data(b"NEWSETUP\n")
 
@@ -1318,7 +1365,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
         if not -12.8 <= offset <= 12.7:
             raise weewx.ViolatedPrecondition("Offset %.1f out of range [-12.8, 12.7]." % offset)
         byte = struct.pack("b", int(round(offset * 10)))
-        variable_dict = { 'outTemp': 0x34 }
+        variable_dict = {'outTemp': 0x34}
         for i in range(1, 8): variable_dict['extraTemp%d' % i] = 0x34 + i
         for i in range(1, 5): variable_dict['soilTemp%d' % i] = 0x3B + i
         for i in range(1, 5): variable_dict['leafTemp%d' % i] = 0x3F + i
@@ -1341,7 +1388,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
         if not -100 <= offset <= 100:
             raise weewx.ViolatedPrecondition("Offset %d out of range [-100, 100]." % offset)
         byte = struct.pack("b", offset)
-        variable_dict = { 'inHumid': 0x44, 'outHumid': 0x45 }
+        variable_dict = {'inHumid': 0x44, 'outHumid': 0x45}
         for i in range(1, 8):
             variable_dict['extraHumid%d' % i] = 0x45 + i
         if variable in variable_dict:
@@ -1363,7 +1410,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
                 # Caught an error. Keey trying...
                 continue
         log.error("Max retries exceeded while clearing log")
-        raise weewx.RetriesExceeded("While clearing log")
+        raise weewx.RetriesExceeded("Max retries exceeded while clearing log")
 
     def getRX(self):
         """Returns reception statistics from the console.
@@ -1374,7 +1421,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
 
         rx_list = self.port.send_command(b'RXCHECK\n')
         if weewx.debug:
-            assert(len(rx_list) == 1)
+            assert (len(rx_list) == 1)
 
         # The following is a list of the reception statistics, but the elements are byte strings
         rx_list_str = rx_list[0].split()
@@ -1418,10 +1465,8 @@ class VantageNext(weewx.drivers.AbstractDevice):
         zone_code   = self._getEEPROM_value(0x11)[0]
         gmt_offset  = self._getEEPROM_value(0x14, "<h")[0] / 100.0
         tempLogging = "LAST"  if self._getEEPROM_value(0xffc)[0] else "AVERAGE"
-        retransmit_channel = self._getEEPROM_value(0x18)[0]
 
-        return (stnlat, stnlon, man_or_auto, dst, gmt_or_zone, zone_code, gmt_offset,
-                tempLogging, retransmit_channel)
+        return stnlat, stnlon, man_or_auto, dst, gmt_or_zone, zone_code, gmt_offset,tempLogging
 
     def getStnTransmitters(self):
         """ Get the types of transmitters on the eight channels."""
@@ -1469,11 +1514,10 @@ class VantageNext(weewx.drivers.AbstractDevice):
     def getStnCalibration(self):
         """ Get the temperature/humidity/wind calibrations built into the console. """
         (inTemp, inTempComp, outTemp,
-            extraTemp1, extraTemp2, extraTemp3, extraTemp4, extraTemp5, extraTemp6, extraTemp7,
-            soilTemp1, soilTemp2, soilTemp3, soilTemp4, leafTemp1, leafTemp2, leafTemp3, leafTemp4,
-            inHumid,
-            outHumid, extraHumid1, extraHumid2, extraHumid3, extraHumid4, extraHumid5, extraHumid6, extraHumid7,
-            wind) = self._getEEPROM_value(0x32, "<27bh")
+         extraTemp1, extraTemp2, extraTemp3, extraTemp4, extraTemp5, extraTemp6, extraTemp7,
+         soilTemp1, soilTemp2, soilTemp3, soilTemp4, leafTemp1, leafTemp2, leafTemp3, leafTemp4,
+         inHumid, outHumid, extraHumid1, extraHumid2, extraHumid3, extraHumid4, extraHumid5,
+         extraHumid6, extraHumid7, wind) = self._getEEPROM_value(0x32, "<27bh")
         # inTempComp is 1's complement of inTemp.
         if inTemp + inTempComp != -1:
             log.error("Inconsistent EEPROM calibration values")
@@ -1515,9 +1559,9 @@ class VantageNext(weewx.drivers.AbstractDevice):
     def stopLogger(self):
         self.port.send_command(b'STOP\n')
 
-    #===========================================================================
+    # ===========================================================================
     #              Davis Vantage utility functions
-    #===========================================================================
+    # ===========================================================================
 
     @property
     def hardware_name(self):
@@ -1589,7 +1633,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
         # Try to guess the ISS ID for gauging reception strength.
         if self.iss_id is None:
             stations = self.getStnTransmitters()
-            # Wind retransmitter is best candidate.
+            # Wind retransmitter is the best candidate.
             for station_id in range(0, 8):
                 if stations[station_id]['transmitter_type'] == 'wind':
                     self.iss_id = station_id + 1  # Origin 1.
@@ -1612,12 +1656,13 @@ class VantageNext(weewx.drivers.AbstractDevice):
         log.debug("ISS ID is %s", self.iss_id)
 
     def _getEEPROM_value(self, offset, v_format="B"):
-        """Return a list of values from the EEPROM starting at a specified offset, using a specified format"""
+        """Return a list of values from the EEPROM starting at a specified offset, using a
+        specified format"""
 
         nbytes = struct.calcsize(v_format)
         # Don't bother waking up the console for the first try. It's probably
         # already awake from opening the port. However, if we fail, then do a
-        # wakeup.
+        # wake-up.
         firsttime = True
 
         command = b"EEBRD %X %X\n" % (offset, nbytes)
@@ -1633,16 +1678,17 @@ class VantageNext(weewx.drivers.AbstractDevice):
             except weewx.WeeWxIOError:
                 continue
 
-        log.error("Max retries exceeded while getting EEPROM data at address 0x%X", offset)
-        raise weewx.RetriesExceeded("While getting EEPROM data value at address 0x%X" % offset)
+        msg = "While getting EEPROM data value at address 0x%X" % offset
+        log.error(msg)
+        raise weewx.RetriesExceeded(msg)
 
     @staticmethod
     def _port_factory(vp_dict):
         """Produce a serial or ethernet port object"""
 
-        timeout           = float(vp_dict.get('timeout', 4.0))
+        timeout = float(vp_dict.get('timeout', 4.0))
         wait_before_retry = float(vp_dict.get('wait_before_retry', 1.2))
-        command_delay     = float(vp_dict.get('command_delay', 0.5))
+        command_delay = float(vp_dict.get('command_delay', 0.5))
 
         # Get the connection type. If it is not specified, assume 'serial':
         connection_type = vp_dict.get('type', 'serial').lower()
@@ -1663,13 +1709,13 @@ class VantageNext(weewx.drivers.AbstractDevice):
     def _unpackLoopPacket(self, raw_loop_buffer):
         """Decode a raw Davis LOOP packet, returning the results as a dictionary in physical units.
 
-        raw_loop_buffer: The loop packet data buffer, passed in as
-        a string (Python 2), or a byte array (Python 3).
+        Args:
+            raw_loop_buffer(bytearray): The loop packet data buffer, passed in as a byte array
 
-        returns:
-
-        A dictionary. The key will be an observation type, the value will be
-        the observation in physical units."""
+        Returns:
+            dict: The key will be an observation type, the value will be the observation
+                in physical units.
+        """
 
         # Get the packet type. It's in byte 4.
         packet_type = raw_loop_buffer[4]
@@ -1697,7 +1743,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
 
         loop_packet = {
             'dateTime': int(time.time() + 0.5),
-            'usUnits' : weewx.US
+            'usUnits': weewx.US
         }
         # Now we need to map the raw values to physical units.
         for _type in raw_loop_packet:
@@ -1809,9 +1855,9 @@ class VantageNext(weewx.drivers.AbstractDevice):
 
         return archive_record
 
-#===============================================================================
+# ===============================================================================
 #                                 LOOP packet
-#===============================================================================
+# ===============================================================================
 
 
 # A list of all the types held in a Vantage LOOP packet in their native order.
@@ -1873,9 +1919,9 @@ loop1_struct = struct.Struct('<' + ''.join(loop1_code))
 loop2_types, loop2_code = list(zip(*loop2_schema))
 loop2_struct = struct.Struct('<' + ''.join(loop2_code))
 
-#===============================================================================
+# ===============================================================================
 #                              archive packet
-#===============================================================================
+# ===============================================================================
 
 rec_A_schema =[
     ('date_stamp',              'H'), ('time_stamp',    'H'), ('outTemp',    'h'),
@@ -1943,16 +1989,17 @@ def _rxcheck(model_type, interval, iss_id, number_of_wind_samples):
         _frac = 100.0
     return _frac
 
-#===============================================================================
+
+# ===============================================================================
 #                      Decoding routines
-#===============================================================================
+# ===============================================================================
 
 
 def _archive_datetime(datestamp, timestamp):
     """Returns the epoch time of the archive packet."""
     try:
         # Construct a time tuple from Davis time. Unfortunately, as timestamps come
-        # off the Vantage logger, there is no way of telling whether or not DST is
+        # off the Vantage logger, there is no way of telling whether DST is
         # in effect. So, have the operating system guess by using a '-1' in the last
         # position of the time tuple. It's the best we can do...
         time_tuple = (((0xfe00 & datestamp) >> 9) + 2000, # year
@@ -2006,7 +2053,7 @@ def _decode_rain(p, k):
         # 0.1 mm bucket
         return p[k] * 0.00393700787
     else:
-        log.warning("Unknown bucket type $s" % p['bucket_type'])
+        log.warning("Unknown bucket type %s" % p['bucket_type'])
 
 
 def _decode_windSpeed_H(p, k):
@@ -2163,9 +2210,10 @@ _archive_map = {
     'windSpeed'      : lambda p, k: float(p[k]) if p[k] != 0xff else None,
 }
 
-#===============================================================================
-#                      class VantageService
-#===============================================================================
+
+# ===============================================================================
+#                      class VantageNextService
+# ===============================================================================
 
 # This class uses multiple inheritance:
 
@@ -2180,7 +2228,7 @@ class VantageNextService(VantageNext, weewx.engine.StdService):
         self.max_loop_gustdir = None
 
         self.bind(weewx.STARTUP, self.startup)
-        self.bind(weewx.NEW_LOOP_PACKET,    self.new_loop_packet)
+        self.bind(weewx.NEW_LOOP_PACKET, self.new_loop_packet)
         self.bind(weewx.END_ARCHIVE_PERIOD, self.end_archive_period)
 
     def startup(self, event):  # @UnusedVariable
@@ -2197,7 +2245,7 @@ class VantageNextService(VantageNext, weewx.engine.StdService):
         # Calculate the max gust seen since the start of this archive record
         # and put it in the packet.
         windSpeed = event.packet.get('windSpeed')
-        windDir   = event.packet.get('windDir')
+        windDir = event.packet.get('windDir')
         if windSpeed is not None and windSpeed > self.max_loop_gust:
             self.max_loop_gust = windSpeed
             self.max_loop_gustdir = windDir
@@ -2210,9 +2258,9 @@ class VantageNextService(VantageNext, weewx.engine.StdService):
         self.max_loop_gustdir = None
 
 
-#===============================================================================
+# ===============================================================================
 #                      Class VantageNextConfigurator
-#===============================================================================
+# ===============================================================================
 
 class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
     """Configures the Davis Vantage weather station."""
@@ -2406,14 +2454,14 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
             self.set_tz_offset(station, options.set_tz_offset)
         if options.set_lamp:
             self.set_lamp(station, options.set_lamp)
-        if options.start:
-            self.start_logger(station)
-        if options.stop:
-            self.stop_logger(station)
         if options.dump:
             self.dump_logger(station, config_dict, options.noprompt, options.batch_size)
         if options.logger_summary:
             self.logger_summary(station, options.logger_summary)
+        if options.start:
+            self.start_logger(station)
+        if options.stop:
+            self.stop_logger(station)
 
     @staticmethod
     def show_info(station, dest=sys.stdout):
@@ -2463,8 +2511,8 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
              station.rain_unit, station.wind_unit), file=dest)
 
         try:
-            (stnlat, stnlon, man_or_auto, dst, gmt_or_zone, zone_code, gmt_offset,
-             tempLogging, retransmit_channel) = station.getStnInfo()
+            stnlat, stnlon, man_or_auto, dst, gmt_or_zone, \
+                zone_code, gmt_offset, tempLogging = station.getStnInfo()
             if man_or_auto == 'AUTO':
                 dst = 'N/A'
             if gmt_or_zone == 'ZONE_CODE':
@@ -2472,7 +2520,6 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
             else:
                 gmt_offset_str = "%+.1f hours" % gmt_offset
                 zone_code = 'N/A'
-            on_off = "ON" if retransmit_channel else "OFF"
             print("""    CONSOLE STATION INFO:
       Latitude (onboard):           %+0.1f
       Longitude (onboard):          %+0.1f
@@ -2482,9 +2529,8 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
       Time zone code:               %s
       GMT offset:                   %s
       Temperature logging:          %s
-      Retransmit channel:           %s (%d)
         """ % (stnlat, stnlon, man_or_auto, dst, gmt_or_zone, zone_code, gmt_offset_str,
-               tempLogging, on_off, retransmit_channel), file=dest)
+               tempLogging), file=dest)
         except weewx.RetriesExceeded:
             pass
 
@@ -2567,14 +2613,16 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
                     if t_type in ['temp', 'temp_hum'] and \
                             extraTemp == transmitter_list[t_id]["temp"]:
                         print("      Extra Temperature %d:          %+.1f F"
-                              % (extraTemp, calibration_dict["extraTemp%d" % extraTemp]), file=dest)
+                              % (extraTemp, calibration_dict["extraTemp%d" % extraTemp]),
+                              file=dest)
             for extraHumid in range(1, 8):
                 for t_id in range(0, 8):
                     t_type = transmitter_list[t_id]["transmitter_type"]
                     if t_type in ['hum', 'temp_hum'] and \
                             extraHumid == transmitter_list[t_id]["hum"]:
                         print("      Extra Humidity %d:             %+.1f F"
-                              % (extraHumid, calibration_dict["extraHumid%d" % extraHumid]), file=dest)
+                              % (extraHumid, calibration_dict["extraHumid%d" % extraHumid]),
+                              file=dest)
             for t_id in range(0, 8):
                 t_type = transmitter_list[t_id]["transmitter_type"]
                 if t_type in ['soil', 'leaf_soil']:
@@ -2707,7 +2755,8 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
 
         if station.hardware_type != 16:
             print("Unable to set new wind cup type.")
-            print ("Reason: command only valid with Vantage Pro or Vantage Pro2 station.", file=sys.stderr)
+            print("Reason: command only valid with Vantage Pro or Vantage Pro2 station.",
+                  file=sys.stderr)
             return
 
         print("Old rain wind cup type is %d (%s), new one is %d (%s)."
@@ -2724,7 +2773,8 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
                                          noprompt)
             if ans == 'y':
                 station.setWindCupType(new_wind_cup_type)
-                print("Wind cup type set to %d (%s)." % (station.wind_cup_type, station.wind_cup_size))
+                print("Wind cup type set to %d (%s)."
+                      % (station.wind_cup_type, station.wind_cup_size))
             else:
                 print("Nothing done.")
 
@@ -2753,7 +2803,8 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
     @staticmethod
     def set_rain_year_start(station, rain_year_start, noprompt):
 
-        print("Old rain season start is %d, new one is %d." % (station.rain_year_start, rain_year_start))
+        print("Old rain season start is %d, new one is %d."
+              % (station.rain_year_start, rain_year_start))
 
         if station.rain_year_start == rain_year_start:
             print("Old and new rain season starts are the same. Nothing done.")
@@ -2772,54 +2823,55 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
         """Set the on-board offset for a temperature, humidity or wind direction variable."""
         (variable, offset_str) = offset_list.split(',')
         # These variables may be calibrated.
-        temp_variables = ['inTemp', 'outTemp' ] + \
-            ['extraTemp%d' % i for i in range(1, 8)] + \
-            ['soilTemp%d' % i for i in range(1, 5)] + \
-            ['leafTemp%d' % i for i in range(1, 5)]
+        temp_variables = ['inTemp', 'outTemp'] + \
+                         ['extraTemp%d' % i for i in range(1, 8)] + \
+                         ['soilTemp%d' % i for i in range(1, 5)] + \
+                         ['leafTemp%d' % i for i in range(1, 5)]
 
         humid_variables = ['inHumid', 'outHumid'] + \
-            ['extraHumid%d' % i for i in range(1, 8)]
+                          ['extraHumid%d' % i for i in range(1, 8)]
 
         # Wind direction can also be calibrated.
         if variable == "windDir":
-            windDir_offset = int(offset_str)
-            if not -359 <= windDir_offset <= 359:
-                print("Wind direction offset %d is out of range." % windDir_offset, file=sys.stderr)
+            offset = int(offset_str)
+            if not -359 <= offset <= 359:
+                print("Wind direction offset %d is out of range." % offset, file=sys.stderr)
             else:
-                ans = weeutil.weeutil.y_or_n("Proceeding will set offset for wind direction to %+d.\n" % windDir_offset +
-                                             "Are you sure you want to proceed (y/n)? ",
-                                             noprompt)
+                ans = weeutil.weeutil.y_or_n(
+                    "Proceeding will set offset for wind direction to %+d.\n" % offset +
+                    "Are you sure you want to proceed (y/n)? ",
+                    noprompt)
                 if ans == 'y':
-                    station.setCalibrationWindDir(windDir_offset)
-                    print("Wind direction offset now set to %+d." % windDir_offset)
+                    station.setCalibrationWindDir(offset)
+                    print("Wind direction offset now set to %+d." % offset)
                 else:
                     print("Nothing done.")
         elif variable in temp_variables:
-            temp_offset = float(offset_str)
-            if not -12.8 <= temp_offset <= 12.7:
-                print("Temperature offset %+.1f is out of range." % (temp_offset), file=sys.stderr)
+            offset = float(offset_str)
+            if not -12.8 <= offset <= 12.7:
+                print("Temperature offset %+.1f is out of range." % (offset), file=sys.stderr)
             else:
                 ans = weeutil.weeutil.y_or_n("Proceeding will set offset for "
-                                             "temperature %s to %+.1f.\n" % (variable, temp_offset) +
+                                             "temperature %s to %+.1f.\n" % (variable, offset) +
                                              "Are you sure you want to proceed (y/n)? ",
                                              noprompt)
                 if ans == 'y':
-                    station.setCalibrationTemp(variable, temp_offset)
-                    print("Temperature offset %s now set to %+.1f." % (variable, temp_offset))
+                    station.setCalibrationTemp(variable, offset)
+                    print("Temperature offset %s now set to %+.1f." % (variable, offset))
                 else:
                     print("Nothing done.")
         elif variable in humid_variables:
-            humidity_offset = int(offset_str)
-            if not 0 <= humidity_offset <= 100:
-                print("Humidity offset %+d is out of range." % (humidity_offset), file=sys.stderr)
+            offset = int(offset_str)
+            if not 0 <= offset <= 100:
+                print("Humidity offset %+d is out of range." % (offset), file=sys.stderr)
             else:
                 ans = weeutil.weeutil.y_or_n("Proceeding will set offset for "
-                                             "humidity %s to %+d.\n" % (variable, humidity_offset) +
+                                             "humidity %s to %+d.\n" % (variable, offset) +
                                              "Are you sure you want to proceed (y/n)? ",
                                              noprompt)
                 if ans == 'y':
-                    station.setCalibrationHumid(variable, humidity_offset)
-                    print("Humidity offset %s now set to %+d." % (variable, humidity_offset))
+                    station.setCalibrationHumid(variable, offset)
+                    print("Humidity offset %s now set to %+d." % (variable, offset))
                 else:
                     print("Nothing done.")
         else:
@@ -2829,85 +2881,82 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
     def set_transmitter_type(station, transmitter_str, noprompt):
         """Set the transmitter type for one of the eight channels."""
 
-        transmitter_list = [int(x) if x.isdigit() else x for x in transmitter_str.split(',')]
+        transmitter_list = transmitter_str.split(',')
 
-        channel = transmitter_list[0]
-        if not 1 <= channel <= 8:
-            print("Channel number must be between 1 and 8.")
-            return
+        channel = int(transmitter_list[0])
 
         # Check new channel against retransmit channel.
         # Warn and stop if new channel is used as retransmit channel.
         retransmit_channel = station._getEEPROM_value(0x18)[0]
         if retransmit_channel == channel:
-            print("This channel is used as retransmit channel. "
-                  "Please turn off retransmit function or choose another channel.")
+            print(f"Channel {channel} is used as a retransmit channel.")
+            print("Please turn off retransmit function or choose another channel.")
             return
 
-        # Init repeater to 'no repeater'
-        repeater = 0
-        # Check the last entry in transmitter_list to see if it is a repeater letter
+        transmitter_type = int(transmitter_list[1])
+        extra_temp = to_int(transmitter_list[2]) if len(transmitter_list) > 2 else None
+        extra_hum = to_int(transmitter_list[3]) if len(transmitter_list) > 3 else None
+        repeater_id = transmitter_list[4].upper() if len(transmitter_list) > 4 else None
         try:
-            if transmitter_list[len(transmitter_list)-1].isalpha():
-                repeater_id = transmitter_list[len(transmitter_list)-1].upper()
-                del transmitter_list[len(transmitter_list)-1]
-                # Check with repeater_dict and get the ID number
-                for key in list(station.repeater_dict.keys()):
-                    if station.repeater_dict[key] == repeater_id:
-                        repeater = key
-                        break
-                if repeater == 0:
-                    print("Repeater ID must be between 'A' and 'H'.")
-                    return
-        except AttributeError:
-            # No repeater letter
+            # Is it the digit zero?
+            if repeater_id is not None and int(repeater_id) == 0:
+                # Yes. Set to None
+                repeater_id = None
+        except ValueError:
+            # Cannot be converted to integer. Must be an ID.
             pass
-
-        transmitter_type = transmitter_list[1]
-        extra_temp = transmitter_list[2] if len(transmitter_list) > 2 else None
-        extra_hum = transmitter_list[3] if len(transmitter_list) > 3 else None
         usetx = 0 if transmitter_type == 10 else 1
 
         try:
-            transmitter_type_name = station.transmitter_type_dict[transmitter_type]
+            transmitter_type_name = VantageNext.transmitter_type_dict[transmitter_type]
         except KeyError:
-            print("Unknown transmitter type (%s)" % transmitter_type)
+            print(f'Unknown transmitter type ("{transmitter_type}")')
             return
 
-        if transmitter_type_name in ['temp', 'temp_hum'] and extra_temp not in list(range(1, 8)):
-            print("Transmitter type %s requires extra_temp in range 1-7'" % transmitter_type_name)
-            return
+        # Check the temperature station ID
+        if transmitter_type_name in ['temp', 'temp_hum']:
+            if extra_temp is None:
+                print(f'A transmitter of type "{transmitter_type_name}" requires a '
+                      f"TEMP station ID")
+                return
 
-        if transmitter_type_name in ['hum', 'temp_hum'] and extra_hum not in list(range(1, 8)):
-            print("Transmitter type %s requires extra_hum in range 1-7'" % transmitter_type_name)
-            return
+        # Check the humidity station ID
+        if transmitter_type_name in ['hum', 'temp_hum']:
+            if extra_hum is None:
+                print(f'A transmitter of type "{transmitter_type_name}" requires a '
+                      f"HUM station ID")
+                return
 
-        msg = "Proceeding will set channel %d to type %d (%s), repeater: %s, %s.\n" \
-              % (channel,
-                 transmitter_type,
-                 transmitter_type_name,
-                 station.repeater_dict[repeater],
-                 station.listen_dict[usetx])
-        ans = weeutil.weeutil.y_or_n(msg + "Are you sure you want to proceed (y/n)? ",
-                                     noprompt)
+        msg = f"Proceeding will set channel {channel} " \
+              f"to type {transmitter_type:d} " \
+              f"({transmitter_type_name}, {VantageNext.listen_dict[usetx]}), " \
+              f"repeater: {'OFF' if not repeater_id else repeater_id}\n"
+        ans = weeutil.weeutil.y_or_n(msg + "Are you sure you want to proceed (y/n)? ", noprompt)
         if ans == 'y':
-            station.setTransmitterType(channel, transmitter_type, extra_temp, extra_hum, repeater)
-            print("Transmitter type for channel %d set to %d (%s), repeater: %s, %s."
-                  % (channel,
-                     transmitter_type,
-                     transmitter_type_name,
-                     station.repeater_dict[repeater],
-                     station.listen_dict[usetx]))
+            station.setTransmitterType(channel, transmitter_type, extra_temp, extra_hum,
+                                       repeater_id)
+            msg = f"Set channel {channel} " \
+                  f"to type {transmitter_type:d} " \
+                  f"({transmitter_type_name}, {VantageNext.listen_dict[usetx]}), " \
+                  f"repeater: {'OFF' if not repeater_id else repeater_id}\n"
+            print(msg)
+            log.info(msg)
         else:
             print("Nothing done.")
 
     @staticmethod
     def set_retransmit(station, channel_on_off, noprompt):
-        """Set console retransmit channel."""
+        """Set console retransmit channel.
+        Args:
+            station(Vantage): An instance of class Vantage
+            channel_on_off (str): A comma separated string. First element is 'ON' or 'OFF'.
+                Second element is which channel
+            noprompt (bool): True to ask whether the user is sure. Otherwise, don't.
+        """
+
 
         channel = None
-        channel_on_off = channel_on_off.strip().upper()
-        channel_on_off_list = channel_on_off.split(',')
+        channel_on_off_list = channel_on_off.strip().upper().split(',')
         on_off = channel_on_off_list[0]
         if on_off == 'OFF':
             channel = 0
@@ -2919,13 +2968,13 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
                     print("Channel out of range 1..8.")
                     print("Nothing done.")
                     return
-                if transmitter_list[channel-1]["listen"] == "active":
+                if transmitter_list[channel - 1]["listen"] == "active":
                     print("Channel %d in use. Please select another channel." % channel)
                     print("Nothing done.")
                     return
             else:
                 # Pick one for the user
-                for i in range(0, 7):
+                for i in range(8):
                     if transmitter_list[i]["listen"] == "inactive":
                         channel = i + 1
                         break
@@ -2934,24 +2983,14 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
                 print("Nothing done.")
                 return
         else:
-            print("Unrecognized command. Must be 'ON' or 'OFF'.")
+            print(f"Unrecognized command '{on_off}'. Must be 'ON' or 'OFF'.")
             print("Nothing done.")
             return
 
-        old_channel = station._getEEPROM_value(0x18)[0]
-        if old_channel == channel:
-            if channel:
-                print("Old and new retransmit settings are the same.")
-                print("Nothing done.")
-            else:
-                print("Retransmit already OFF.")
-                print("Nothing done.")
-            return
-
         if channel:
-            msg = "Proceeding will set retransmit to 'ON' at channel: %d.\n" % channel
+            msg = "Proceeding will set retransmit to 'ON' on channel: %d.\n" % channel
         else:
-            msg = "Proceeding will set retransmit to 'OFF'\n."
+            msg = "Proceeding will set retransmit to 'OFF'.\n"
         ans = weeutil.weeutil.y_or_n(msg + "Are you sure you want to proceed (y/n)? ",
                                      noprompt)
         if ans == 'y':
@@ -3083,9 +3122,11 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
                 nrecs += 1
                 if nrecs % 10 == 0:
                     print("Records processed: %d; Timestamp: %s\r"
-                          % (nrecs, weeutil.weeutil.timestamp_to_string(time_ts)), end=' ', file=sys.stdout)
+                          % (nrecs, weeutil.weeutil.timestamp_to_string(time_ts)), end=' ',
+                          file=sys.stdout)
                     sys.stdout.flush()
-        print("\nFinished download of logger summary to file '%s'. %d records processed." % (dest_path, nrecs))
+        print("\nFinished download of logger summary to file '%s'. %d records processed." % (
+        dest_path, nrecs))
 
 
 # =============================================================================
@@ -3230,13 +3271,13 @@ if __name__ == '__main__':
     parser = optparse.OptionParser(usage=usage)
     parser.add_option('--version', action='store_true',
                       help='Display driver version')
+    parser.add_option('--port', default='/dev/vantage',
+                      help='Serial port to use. Default is "/dev/vantage"',
+                      metavar="PORT")
     parser.add_option('--test-in-time-change-window', dest='test_in_time_change_window', action='store_true',
                       help='Test inTimeChangeWindow function')
     parser.add_option('--test-dst-handling', dest='test_dst_handling', action='store_true',
                       help='Test DST handling')
-    parser.add_option('--port', default='/dev/vantage',
-                      help='Serial port to use. Default is "/dev/vantage"',
-                      metavar="PORT")
     (options, args) = parser.parse_args()
 
     if options.version:
