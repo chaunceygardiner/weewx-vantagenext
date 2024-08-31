@@ -29,13 +29,13 @@ from weewx.crc16 import crc16
 log = logging.getLogger(__name__)
 
 DRIVER_NAME = 'VantageNext'
-DRIVER_VERSION = '1.1'
+DRIVER_VERSION = '1.1.1'
 
 int2byte = struct.Struct(">B").pack
 
-if sys.version_info[0] < 3 or (sys.version_info[0] == 3 and sys.version_info[1] < 7):
+if sys.version_info[0] < 3 or (sys.version_info[0] == 3 and sys.version_info[1] < 9):
     raise weewx.UnsupportedFeature(
-        "weewx-loopdata requires Python 3.7 or later, found %s.%s" % (sys.version_info[0], sys.version_info[1]))
+        "weewx-loopdata requires Python 3.9 or later, found %s.%s" % (sys.version_info[0], sys.version_info[1]))
 
 if weewx.__version__ < "4":
     raise weewx.UnsupportedFeature(
@@ -479,7 +479,6 @@ class VantageNext(weewx.drivers.AbstractDevice):
     altitude_unit_dict    = {0:'foot', 1:'meter'}
     rain_unit_dict        = {0:'inch', 1:'mm'}
     wind_unit_dict        = {0:'mile_per_hour', 1:'meter_per_second', 2:'km_per_hour', 3:'knot'}
-    #wind_cup_dict         = {0:'small', 1:'large'}
     wind_cup_dict         = {1:'small', 2:'large', 3:'other'}
     rain_bucket_dict      = {0:'0.01 inches', 1:'0.2 mm', 2:'0.1 mm'}
     transmitter_type_dict = {0:'iss', 1:'temp', 2:'hum', 3:'temp_hum', 4:'wind',
@@ -544,20 +543,21 @@ class VantageNext(weewx.drivers.AbstractDevice):
             [Optional. Default is 2]
 
             loop_request: Requested packet type. 1=LOOP; 2=LOOP2; 3=both.
-            """
+        """
 
         log.info('Driver version is %s', DRIVER_VERSION)
 
         self.hardware_type = None
 
         # These come from the configuration dictionary:
-        self.max_tries        = to_int(vp_dict.get('max_tries', 4))
+        self.max_tries = to_int(vp_dict.get('max_tries', 4))
         self.set_time_padding = to_float(vp_dict.get('set_time_padding', 0.17))
         self.clock_drift_secs = to_float(vp_dict.get('clock_drift_secs', -3.1))
-        self.day_start_jump   = to_float(vp_dict.get('day_start_jump', 2.83))
-        self.time_set_goal    = to_float(vp_dict.get('time_set_goal', 1.85))
-        self.iss_id           = to_int(vp_dict.get('iss_id'))
-        self.model_type       = to_int(vp_dict.get('model_type', 2))
+        self.day_start_jump = to_float(vp_dict.get('day_start_jump', 2.83))
+        self.time_set_goal = to_float(vp_dict.get('time_set_goal', 1.85))
+        self.iss_id = to_int(vp_dict.get('iss_id'))
+        self.model_type = to_int(vp_dict.get('model_type', 2))
+
         log.info('max_tries          : %d', self.max_tries)
         log.info('set_time_padding   : %f', self.set_time_padding)
         log.info('clock_drift_secs   : %f', self.clock_drift_secs)
@@ -565,7 +565,8 @@ class VantageNext(weewx.drivers.AbstractDevice):
         log.info('time_set_goal      : %f', self.time_set_goal)
         log.info('iss_id             : %d', self.iss_id)
         log.info('model_type         : %d', self.model_type)
-        if self.model_type not in list(range(1, 3)):
+
+        if self.model_type not in (1, 2):
             raise weewx.UnsupportedFeature("Unknown model_type (%d)" % self.model_type)
         self.loop_request = to_int(vp_dict.get('loop_request', 1))
         log.info("Option loop_request: %d", self.loop_request)
@@ -640,10 +641,12 @@ class VantageNext(weewx.drivers.AbstractDevice):
     def genDavisLoopPackets(self, N=1):
         """Generator function to return N loop packets from a Vantage console
 
-        N: The number of packets to generate [default is 1]
+        Args:
+            N(int): The number of packets to generate. Default is 1.
 
-        yields: up to N loop packets (could be less in the event of a
-        read or CRC error).
+        Yields:
+             dict: up to N loop packets (could be less in the event of a
+                read or CRC error).
         """
 
         log.debug("Requesting %d LOOP packets.", N)
@@ -937,7 +940,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
                 # Caught an error. Keep retrying...
                 continue
         log.error("Max retries exceeded while getting time")
-        raise weewx.RetriesExceeded("While getting console time")
+        raise weewx.RetriesExceeded("Max retries exceeded while getting time")
 
     @staticmethod
     def inTimeChangeWindow(time_change_windows, t):
@@ -1079,6 +1082,9 @@ class VantageNext(weewx.drivers.AbstractDevice):
 
     def setWindCupType(self, new_wind_cup_code):
         """Set the wind cup type.
+
+        Args:
+            new_wind_cup_code(int): The new wind cup type. Must be one of 0, 1 or 2
 
         older firmware: windcup bit is at 0x2b: 0, 1 (small, large)
         later firmware: windcup bits are at 0xc3: 1,2, 3 (small, large, other)
@@ -1971,15 +1977,14 @@ extra_sensors = {
 }
 
 
-
 def _rxcheck(model_type, interval, iss_id, number_of_wind_samples):
     """Gives an estimate of the fraction of packets received.
 
     Ref: Vantage Serial Protocol doc, V2.1.0, released 25-Jan-05; p42"""
     # The formula for the expected # of packets varies with model number.
     if model_type == 1:
-        _expected_packets = float(interval * 60) / ( 2.5 + (iss_id-1) / 16.0) -\
-                            float(interval * 60) / (50.0 + (iss_id-1) * 1.25)
+        _expected_packets = float(interval * 60) / (2.5 + (iss_id - 1) / 16.0) - \
+                            float(interval * 60) / (50.0 + (iss_id - 1) * 1.25)
     elif model_type == 2:
         _expected_packets = 960.0 * interval / float(41 + iss_id - 1)
     else:

@@ -13,12 +13,12 @@ Copyright (C)2020-2024 by John A Kline (john@johnkline.com)
 
 # VantageNext Changes vis. a vis. WeeWX's Vantage Driver
 
-1. Support using weewx_device to pick the sonic anemometer.  The Vantage
+1. Support using weewx_device to pick the Davis Sonic anemometer.  The Vantage
    driver was offering two choices, small or big cups and was changing
    a single bit on the console.  In fact, there are two bits (in a different
-   place in memory) that is used to change anemometer types.  Note:  perhaps
-   there are very old versions of firmware that use the single bit that
-   the Vantage driver was setting.
+   place in memory) that is used to change anemometer types.  Note:  It is
+   unnkown if there are very old versions of firmware that won't work with
+   this change.
 
 1. If the driver receives a packet from the console that is short of the 99 bytes
    expected, vantagenext immediately exits genDavisLoopPackets() (allowing
@@ -33,8 +33,9 @@ Copyright (C)2020-2024 by John A Kline (john@johnkline.com)
    be a no-op during time change windows.  Furthermore, if an archive record's
    time is misinterpreted during this period (an hour ahead or an hour behind),
    the driver will fix the issue by subtracting or adding one hour,
-   respectively.  Also, if getTime is about to return a bad time to
-   weewx.engine, it is adjusted to return the correct time.
+   respectively.  Also, if getTime is about to return a bad time (off by
+   daylight savings change amount) to weewx.engine, it is adjusted to return
+   the correct time.
 
 1. set_time_padding can now be specified in the VantageNext section
    so that the padding can be tweaked (it is hardcoded at 0.75 seconds
@@ -63,7 +64,7 @@ Copyright (C)2020-2024 by John A Kline (john@johnkline.com)
 1. The day's cumulative rain is now calculated by calling
 -   weewx.wxformulas.calculate_delta.
 
-1. This driver only supports WeeWX 4/5 and Python 3.9 or greater.
+1. This driver only supports WeeWX 4 and 5 and Python 3.9 or greater.
 
 # Installation Instructions
 
