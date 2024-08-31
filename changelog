@@ -1,7 +1,7 @@
 1.1.1 2024.08-31
 ----------------
 Minor changes to make diffing to upstream easier.
-Enforce Ptyhon 3.9 requirement (was enforcing Python 3.7).
+Enforce Python 3.9 requirement (was enforcing Python 3.7).
 
 1.1 2024-08-31
 --------------
