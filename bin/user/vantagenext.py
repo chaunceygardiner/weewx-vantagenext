@@ -927,8 +927,6 @@ class VantageNext(weewx.drivers.AbstractDevice):
                 now = datetime.datetime.now()
                 adjusted_time = VantageNext.adjust_for_dst(
                     now, device_time, VantageNext.inTimeChangeWindow(self.time_change_windows, now))
-                if device_time != adjusted_time:
-                    log.info('getConsoleTime: adjusted by %d for DST' % int(adjusted_time - device_time))
                 log.debug('getConsoleTime: device_time(%s): %r, adjusted_time(%s): %r' % (type(device_time), device_time, type(adjusted_time), adjusted_time))
                 # Create DateTime from timestamp.
                 adjusted_date_time = datetime.datetime.fromtimestamp(adjusted_time)
