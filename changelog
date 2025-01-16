@@ -1,4 +1,9 @@
-1.1.1 2024.08-31
+1.2 2025-01-15
+--------------
+Add --iss-id option testing driver by printing loop packets.  --print-loop-packets [--port=PORT] [--iss-id=ISSID].
+
+
+1.1.1 2024-08-31
 ----------------
 Minor changes to make diffing to upstream easier.
 Enforce Python 3.9 requirement (was enforcing Python 3.7).

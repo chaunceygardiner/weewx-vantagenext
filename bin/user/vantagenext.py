@@ -29,7 +29,7 @@ from weewx.crc16 import crc16
 log = logging.getLogger(__name__)
 
 DRIVER_NAME = 'VantageNext'
-DRIVER_VERSION = '1.1.1'
+DRIVER_VERSION = '1.2'
 
 int2byte = struct.Struct(">B").pack
 
@@ -3269,14 +3269,21 @@ if __name__ == '__main__':
 
     usage = """Usage: python -m user.vantagenext --help
        python -m user.vantagenext --version
-       python -m user.vantagenext [--port=PORT]"""
+       python -m user.vantagenext --print-loop-packets [--port=PORT]  --iss-id=ISSID
+       python -m user.vantagenext --test-in-time-change-window
+       python -m user.vantagenext --test-dst-handling"""
 
     parser = optparse.OptionParser(usage=usage)
     parser.add_option('--version', action='store_true',
                       help='Display driver version')
+    parser.add_option('--print-loop-packets', dest='print_loop_packets', action='store_true',
+                      help='Read from vantage console and print loop packets.  WeeWX cannot be running.  Opt specify --port==PORT --iss-id=ISSID')
     parser.add_option('--port', default='/dev/vantage',
-                      help='Serial port to use. Default is "/dev/vantage"',
+                      help='Serial port to use in --print-loop-packets. Default is "/dev/vantage"',
                       metavar="PORT")
+    parser.add_option('--iss-id', dest='iss_id', default=1,
+                      help='The station number of the ISS. Default is 1"',
+                      metavar="ISSID")
     parser.add_option('--test-in-time-change-window', dest='test_in_time_change_window', action='store_true',
                       help='Test inTimeChangeWindow function')
     parser.add_option('--test-dst-handling', dest='test_dst_handling', action='store_true',
@@ -3427,7 +3434,8 @@ if __name__ == '__main__':
 
         exit(0)
 
-    vantagenext = VantageNext(connection_type = 'serial', port=options.port)
+    if options.print_loop_packets:
+        vantagenext = VantageNext(connection_type = 'serial', port=options.port, iss_id=options.iss_id)
 
-    for packet in vantagenext.genLoopPackets():
-        print(packet)
+        for packet in vantagenext.genLoopPackets():
+            print(packet)
