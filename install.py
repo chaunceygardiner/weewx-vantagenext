@@ -1,4 +1,4 @@
-# Copyright 2020-2024 by John A Kline <john@johnkline.com>
+# Copyright 2020-2026 by John A Kline <john@johnkline.com>
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -21,13 +21,13 @@ import configobj
 import sys
 import weewx
 
-if sys.version_info[0] < 3 or (sys.version_info[0] == 3 and sys.version_info[1] < 7):
+if sys.version_info[0] < 3 or (sys.version_info[0] == 3 and sys.version_info[1] < 9):
     raise weewx.UnsupportedFeature(
-        "weewx-loopdata requires Python 3.7 or later, found %s.%s" % (sys.version_info[0], sys.version_info[1]))
+        "weewx-vantagenext requires Python 3.9 or later, found %s.%s" % (sys.version_info[0], sys.version_info[1]))
 
-if weewx.__version__ < "4":
+if weewx.__version__ < "5":
     raise weewx.UnsupportedFeature(
-        "weewx-vantagenext requires WeeWX 4, found %s" % weewx.__version__)
+        "weewx-vantagenext requires WeeWX 5, found %s" % weewx.__version__)
 
 vantagenext_config = """
 [VantageNext]
@@ -94,27 +94,10 @@ vantagenext_config = """
     # The driver to use:
     driver = user.vantagenext
 
-    # DST periods (setTime will be ignored during time changes).
-    [[dst_periods]]
-        2022 = 2022-03-13 02:00:00, 2022-11-06 02:00:00
-        2023 = 2023-03-12 02:00:00, 2023-11-05 02:00:00
-        2024 = 2024-03-10 02:00:00, 2024-11-03 02:00:00
-        2025 = 2025-03-09 02:00:00, 2025-11-02 02:00:00
-        2026 = 2026-03-08 02:00:00, 2026-11-01 02:00:00
-        2027 = 2027-03-14 02:00:00, 2027-11-07 02:00:00
-        2028 = 2028-03-12 02:00:00, 2028-11-05 02:00:00
-        2029 = 2029-03-11 02:00:00, 2029-11-04 02:00:00
-        2030 = 2030-03-10 02:00:00, 2030-11-03 02:00:00
-        2031 = 2031-03-09 02:00:00, 2031-11-02 02:00:00
-        2032 = 2032-03-14 02:00:00, 2032-11-07 02:00:00
-        2033 = 2033-03-13 02:00:00, 2033-11-06 02:00:00
-        2034 = 2034-03-12 02:00:00, 2034-11-05 02:00:00
-        2035 = 2035-03-11 02:00:00, 2035-11-04 02:00:00
-        2036 = 2036-03-09 02:00:00, 2036-11-02 02:00:00
-        2037 = 2037-03-08 02:00:00, 2037-11-01 02:00:00
-        2038 = 2038-03-14 02:00:00, 2038-11-07 02:00:00
-        2039 = 2039-03-13 02:00:00, 2039-11-06 02:00:00
-        2040 = 2040-03-11 02:00:00, 2040-11-04 02:00:00
+    # DST time-change windows (setTime is skipped and console-time misreads
+    # are corrected inside them) are derived automatically from the operating
+    # system's timezone database.  A [[dst_periods]] section from earlier
+    # versions is obsolete and ignored; please delete it.
 """
 
 vantagenext_dict = configobj.ConfigObj(StringIO(vantagenext_config))
@@ -125,7 +108,7 @@ def loader():
 class VantageNextInstaller(ExtensionInstaller):
     def __init__(self):
         super(VantageNextInstaller, self).__init__(
-            version="1.2",
+            version="2.0",
             name='VantageNext',
             description='Capture weather observations from Vantage weather stations',
             author="John A Kline",

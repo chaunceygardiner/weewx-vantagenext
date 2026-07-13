@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 #
-#    VantageNext Copyright (c) 2020-2024 John A Kline <john@johnkline.com>
+#    VantageNext Copyright (c) 2020-2026 John A Kline <john@johnkline.com>
 #    Largely based on Vantage driver:
-#    Copyright (c) 2009-2024 Tom Keffer <tkeffer@gmail.com>
+#    Copyright (c) 2009-2026 Tom Keffer <tkeffer@gmail.com>
 #
 #    See the file LICENSE.txt for your full rights.
 #
@@ -29,17 +29,17 @@ from weewx.crc16 import crc16
 log = logging.getLogger(__name__)
 
 DRIVER_NAME = 'VantageNext'
-DRIVER_VERSION = '1.2'
+DRIVER_VERSION = '2.0'
 
 int2byte = struct.Struct(">B").pack
 
 if sys.version_info[0] < 3 or (sys.version_info[0] == 3 and sys.version_info[1] < 9):
     raise weewx.UnsupportedFeature(
-        "weewx-loopdata requires Python 3.9 or later, found %s.%s" % (sys.version_info[0], sys.version_info[1]))
+        "weewx-vantagenext requires Python 3.9 or later, found %s.%s" % (sys.version_info[0], sys.version_info[1]))
 
-if weewx.__version__ < "4":
+if weewx.__version__ < "5":
     raise weewx.UnsupportedFeature(
-        "weewx-vantagenext requires WeeWX 4, found %s" % weewx.__version__)
+        "weewx-vantagenext requires WeeWX 5, found %s" % weewx.__version__)
 
 
 def loader(config_dict, engine):
@@ -532,10 +532,10 @@ class VantageNext(weewx.drivers.AbstractDevice):
             behind actual time (negative) number to shoot for just after midnight
             when the clock jumps.  [Optional.  Default is 1.85]
 
-            dst_periods: The start and end times of daylight savings time periods.
-            [Optional. Default is no dst periods are defined.  If DST periods are
-            defined, setTime will be ignored from 5 minutes before to 5 minutes
-            after the time change.  This amounts to a 1 hour and ten minute period.
+            dst_periods: OBSOLETE and ignored (a warning is logged if present).
+            DST time change windows are derived automatically from the operating
+            system's timezone database; setTime is skipped from 5 minutes before
+            a time change until 5 minutes after the shifted clock catches up.
 
             iss_id: The station number of the ISS [Optional. Default is 1]
 
@@ -563,14 +563,22 @@ class VantageNext(weewx.drivers.AbstractDevice):
         log.info('clock_drift_secs   : %f', self.clock_drift_secs)
         log.info('day_start_jump     : %f', self.day_start_jump)
         log.info('time_set_goal      : %f', self.time_set_goal)
-        log.info('iss_id             : %d', self.iss_id)
+        # iss_id is None when not configured (it is guessed in _setup), so %s.
+        log.info('iss_id             : %s', self.iss_id)
         log.info('model_type         : %d', self.model_type)
 
         if self.model_type not in (1, 2):
             raise weewx.UnsupportedFeature("Unknown model_type (%d)" % self.model_type)
         self.loop_request = to_int(vp_dict.get('loop_request', 1))
         log.info("Option loop_request: %d", self.loop_request)
-        self.time_change_windows = VantageNext.compose_time_change_windows(vp_dict.get('dst_periods', []))
+        if 'dst_periods' in vp_dict:
+            log.warning('The [[dst_periods]] section in weewx.conf is obsolete and IGNORED: '
+                        'DST time change windows are derived from the OS timezone database. '
+                        'Please delete the section.')
+        now = time.time()
+        self.time_change_windows = VantageNext.derive_time_change_windows(
+            now - 86400, now + 10 * 366 * 86400)
+        log.info('time change windows derived from the OS timezone database')
         for key in self.time_change_windows:
             for window in self.time_change_windows[key]:
                 log.info('time_change_window : %s: %s-%s' % (key, window[0], window[1]))
@@ -592,6 +600,11 @@ class VantageNext(weewx.drivers.AbstractDevice):
 
     @staticmethod
     def compose_time_change_windows(dst_periods):
+        """Build time change windows from a dst_periods-style table.  No longer
+        wired to weewx.conf ([[dst_periods]] is obsolete and ignored); retained
+        as the reference that derive_time_change_windows is validated against
+        (the pytest suite asserts the derivation matches this for a known
+        table)."""
         fmt = '%Y-%m-%d %H:%M:%S'
         time_change_windows = {}
         for key in dst_periods:
@@ -606,14 +619,67 @@ class VantageNext(weewx.drivers.AbstractDevice):
                     fall_back  = datetime.datetime.strptime(transitions[1], fmt)
                 except:
                     log.info('dst period malformed (will be ignored): %s' % dst_periods[key])
+                    continue
+                # Windows from [[dst_periods]] config assume a 1-hour shift
+                # (the config format carries no shift information); automatic
+                # windows carry the zone's actual shift.
                 spring_fwd_tuple = (
                     spring_fwd - datetime.timedelta(0,  300),
-                    spring_fwd + datetime.timedelta(0, 3900))
+                    spring_fwd + datetime.timedelta(0, 3900),
+                    3600)
                 fall_back_tuple = (
                         fall_back - datetime.timedelta(0, 3900),
-                        fall_back + datetime.timedelta(0,  300))
+                        fall_back + datetime.timedelta(0,  300),
+                        3600)
                 time_change_windows[key] = [spring_fwd_tuple, fall_back_tuple]
         return time_change_windows
+
+    @staticmethod
+    def _local_utc_offset_secs(ts):
+        """Return the local UTC offset, in seconds, at epoch time ts."""
+        offset = datetime.datetime.fromtimestamp(ts, datetime.timezone.utc).astimezone().utcoffset()
+        if offset is None:
+            return 0.0
+        return offset.total_seconds()
+
+    @staticmethod
+    def derive_time_change_windows(start_ts, end_ts):
+        """Derive time change windows from the operating system's timezone
+        database: scan [start_ts, end_ts) for UTC-offset changes at day
+        granularity, bisect each to the exact second, and build the same
+        windows compose_time_change_windows builds from [[dst_periods]]:
+        transition wall time (in the PRE-change clock, e.g. 02:00:00 for the
+        US changes) minus 5 minutes, to transition wall time plus the shift
+        plus 5 minutes.  The width adapts to the zone's actual shift (e.g.
+        30 minutes on Lord Howe Island); a zone without DST yields no
+        windows."""
+        windows = {}
+        t = int(start_ts)
+        end_ts = int(end_ts)
+        prev_offset = VantageNext._local_utc_offset_secs(t)
+        while t < end_ts:
+            t_next = min(t + 86400, end_ts)
+            offset = VantageNext._local_utc_offset_secs(t_next)
+            if offset != prev_offset:
+                # Bisect (t, t_next] for the first second of the new offset.
+                lo, hi = t, t_next
+                while hi - lo > 1:
+                    mid = (lo + hi) // 2
+                    if VantageNext._local_utc_offset_secs(mid) == prev_offset:
+                        lo = mid
+                    else:
+                        hi = mid
+                shift = int(VantageNext._local_utc_offset_secs(hi) - prev_offset)
+                # The transition instant expressed in the pre-change wall
+                # clock, matching the dst_periods convention.
+                wall = datetime.datetime.fromtimestamp(hi - 1) + datetime.timedelta(seconds=1)
+                window = (wall - datetime.timedelta(seconds=300 - min(shift, 0)),
+                          wall + datetime.timedelta(seconds=300 + max(shift, 0)),
+                          abs(shift))
+                windows.setdefault(str(wall.year), []).append(window)
+            prev_offset = offset
+            t = t_next
+        return windows
 
     def openPort(self):
         """Open up the connection to the console"""
@@ -910,7 +976,8 @@ class VantageNext(weewx.drivers.AbstractDevice):
         return time_dt.timestamp()
 
     def getConsoleTime(self):
-        """Return the raw time on the console, uncorrected for DST or timezone."""
+        """Return the time on the console, corrected for a possible one-hour DST
+        misinterpretation when inside a time change window."""
 
         # Try up to max_tries times:
         for unused_count in range(self.max_tries):
@@ -942,13 +1009,14 @@ class VantageNext(weewx.drivers.AbstractDevice):
 
     @staticmethod
     def inTimeChangeWindow(time_change_windows, t):
-        """Return true if datetime value t is in a time change window."""
+        """If datetime value t is in a time change window, return that
+        window's shift magnitude in seconds (truthy); else return None."""
         for key in time_change_windows:
             for window in time_change_windows[key]:
                 if t > window[0] and t < window[1]:
                     log.info("In time change transition period.")
-                    return True
-        return False
+                    return window[2]
+        return None
 
     @staticmethod
     def hours_to_midnight():
@@ -1595,8 +1663,10 @@ class VantageNext(weewx.drivers.AbstractDevice):
             except weewx.WeeWxIOError as e:
                 log.error("_determine_hardware; retry #%d: '%s'", count, e)
 
-        log.error("Unable to read hardware type; raise WeeWxIOError")
-        raise weewx.WeeWxIOError("Unable to read hardware type")
+        msg = ("Unable to read hardware type. Check for 2nd instance of weewx. "
+               "Also, try power cycling. ")
+        log.error(msg)
+        raise weewx.WeeWxIOError(msg)
 
     def _setup(self):
         """Retrieve the EEPROM data block from a VP2 and use it to set various properties"""
@@ -1631,7 +1701,8 @@ class VantageNext(weewx.drivers.AbstractDevice):
         self.altitude_unit    = VantageNext.altitude_unit_dict[altitude_unit_code]
         self.rain_unit        = VantageNext.rain_unit_dict[rain_unit_code]
         self.wind_unit        = VantageNext.wind_unit_dict[wind_unit_code]
-        self.wind_cup_size    = VantageNext.wind_cup_dict[self.wind_cup_type]
+        # Old firmware keeps the wind cup at 0x2B, so 0xC3's low bits can be 0.
+        self.wind_cup_size    = VantageNext.wind_cup_dict.get(self.wind_cup_type, 'unknown')
         self.rain_bucket_size = VantageNext.rain_bucket_dict[self.rain_bucket_type]
 
         # Try to guess the ISS ID for gauging reception strength.
@@ -1773,27 +1844,37 @@ class VantageNext(weewx.drivers.AbstractDevice):
         # Because the Davis stations do not offer bucket tips in LOOP data, we
         # must calculate it by looking for changes in rain totals. This won't
         # work for the very first rain packet.
-        loop_packet['rain'] = weewx.wxformulas.calculate_delta(loop_packet['dayRain'], self.save_day_rain)
-        self.save_day_rain = loop_packet['dayRain']
+        # dayRain can be absent (dashed 0xFFFF decodes to None, which is skipped
+        # above); keep the old baseline so the next good packet picks up any rain
+        # that fell in the gap.
+        day_rain = loop_packet.get('dayRain')
+        loop_packet['rain'] = weewx.wxformulas.calculate_delta(day_rain, self.save_day_rain)
+        if day_rain is not None:
+            self.save_day_rain = day_rain
 
         return loop_packet
 
     @staticmethod
-    def adjust_for_dst(now, dateTime, in_time_change_window):
-        log.debug('adjust_for_dst: now: %r, now.timestamp(): %r, dateTime: %r, in_time_change_window: %r' % (now, now.timestamp(), dateTime, in_time_change_window))
-        if in_time_change_window:
+    def adjust_for_dst(now, dateTime, shift):
+        """Correct dateTime if it is off from now by the time change's shift
+        (as returned by inTimeChangeWindow: the shift magnitude in seconds
+        while inside a window, else None -- 3600 almost everywhere, 1800 on
+        Lord Howe Island)."""
+        log.debug('adjust_for_dst: now: %r, now.timestamp(): %r, dateTime: %r, shift: %r' % (now, now.timestamp(), dateTime, shift))
+        # dateTime is None for a corrupt archive record; the caller handles it.
+        if shift and dateTime is not None:
             curframe = inspect.currentframe()
             calframe = inspect.getouterframes(curframe, 2)
             caller = calframe[1][3]
             time_error = dateTime - now.timestamp()
-            # Check for ahead by one hour.
-            if time_error > 3580 and time_error < 3620:
-                log.info('DST adjustment: subtracted 1 hour; caller: %s' % caller)
-                return dateTime - 3600
-            # Check for behind by one hour.
-            elif time_error > -3620 and time_error < -3580:
-                log.info('DST adjustment: added 1 hour; caller: %s' % caller)
-                return dateTime + 3600
+            # Check for ahead by the shift.
+            if time_error > shift - 20 and time_error < shift + 20:
+                log.info('DST adjustment: subtracted %d seconds; caller: %s' % (shift, caller))
+                return dateTime - shift
+            # Check for behind by the shift.
+            elif time_error > -shift - 20 and time_error < -shift + 20:
+                log.info('DST adjustment: added %d seconds; caller: %s' % (shift, caller))
+                return dateTime + shift
         return dateTime
 
     def _unpackArchivePacket(self, raw_archive_buffer):
@@ -2413,7 +2494,7 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
     def do_options(self, options, parser, config_dict, prompt):  # @UnusedVariable
         if options.start and options.stop:
             parser.error("Cannot specify both --start and --stop")
-        if options.set_tz_code and options.set_tz_offset:
+        if options.set_tz_code is not None and options.set_tz_offset is not None:
             parser.error("Cannot specify both --set-tz-code and --set-tz-offset")
 
         station = VantageNext(**config_dict[DRIVER_NAME])
@@ -2451,9 +2532,9 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
             self.set_time(station)
         if options.set_dst:
             self.set_dst(station, options.set_dst)
-        if options.set_tz_code:
+        if options.set_tz_code is not None:
             self.set_tz_code(station, options.set_tz_code)
-        if options.set_tz_offset:
+        if options.set_tz_offset is not None:
             self.set_tz_offset(station, options.set_tz_offset)
         if options.set_lamp:
             self.set_lamp(station, options.set_lamp)
@@ -2760,6 +2841,11 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
             print("Unable to set new wind cup type.")
             print("Reason: command only valid with Vantage Pro or Vantage Pro2 station.",
                   file=sys.stderr)
+            return
+
+        if new_wind_cup_type not in VantageNext.wind_cup_dict:
+            print("Invalid wind cup code %d. Specify '1' for small size; '2' for large size; "
+                  "'3' for other (sonic)." % new_wind_cup_type, file=sys.stderr)
             return
 
         print("Old rain wind cup type is %d (%s), new one is %d (%s)."
@@ -3206,27 +3292,10 @@ class VantageNextConfEditor(weewx.drivers.AbstractConfEditor):
     # The driver to use:
     driver = user.vantagenext
 
-    # DST periods (setTime will be ignored during time changes).
-    [[dst_periods]]
-        2022 = 2022-03-13 02:00:00, 2022-11-06 02:00:00
-        2023 = 2023-03-12 02:00:00, 2023-11-05 02:00:00
-        2024 = 2024-03-10 02:00:00, 2024-11-03 02:00:00
-        2025 = 2025-03-09 02:00:00, 2025-11-02 02:00:00
-        2026 = 2026-03-08 02:00:00, 2026-11-01 02:00:00
-        2027 = 2027-03-14 02:00:00, 2027-11-07 02:00:00
-        2028 = 2028-03-12 02:00:00, 2028-11-05 02:00:00
-        2029 = 2029-03-11 02:00:00, 2029-11-04 02:00:00
-        2030 = 2030-03-10 02:00:00, 2030-11-03 02:00:00
-        2031 = 2031-03-09 02:00:00, 2031-11-02 02:00:00
-        2032 = 2032-03-14 02:00:00, 2032-11-07 02:00:00
-        2033 = 2033-03-13 02:00:00, 2033-11-06 02:00:00
-        2034 = 2034-03-12 02:00:00, 2034-11-05 02:00:00
-        2035 = 2035-03-11 02:00:00, 2035-11-04 02:00:00
-        2036 = 2036-03-09 02:00:00, 2036-11-02 02:00:00
-        2037 = 2037-03-08 02:00:00, 2037-11-01 02:00:00
-        2038 = 2038-03-14 02:00:00, 2038-11-07 02:00:00
-        2039 = 2039-03-13 02:00:00, 2039-11-06 02:00:00
-        2040 = 2040-03-11 02:00:00, 2040-11-04 02:00:00
+    # DST time-change windows (setTime is skipped and console-time misreads
+    # are corrected inside them) are derived automatically from the operating
+    # system's timezone database.  A [[dst_periods]] section from earlier
+    # versions is obsolete and ignored; please delete it.
 """
 
     def prompt_for_settings(self):
@@ -3269,169 +3338,23 @@ if __name__ == '__main__':
 
     usage = """Usage: python -m user.vantagenext --help
        python -m user.vantagenext --version
-       python -m user.vantagenext --print-loop-packets [--port=PORT]  --iss-id=ISSID
-       python -m user.vantagenext --test-in-time-change-window
-       python -m user.vantagenext --test-dst-handling"""
+       python -m user.vantagenext --print-loop-packets [--port=PORT] [--iss-id=ISSID]"""
 
     parser = optparse.OptionParser(usage=usage)
     parser.add_option('--version', action='store_true',
                       help='Display driver version')
     parser.add_option('--print-loop-packets', dest='print_loop_packets', action='store_true',
-                      help='Read from vantage console and print loop packets.  WeeWX cannot be running.  Opt specify --port==PORT --iss-id=ISSID')
+                      help='Read from the Vantage console and print loop packets.  WeeWX cannot be running.  Optionally specify --port=PORT --iss-id=ISSID')
     parser.add_option('--port', default='/dev/vantage',
                       help='Serial port to use in --print-loop-packets. Default is "/dev/vantage"',
                       metavar="PORT")
     parser.add_option('--iss-id', dest='iss_id', default=1,
-                      help='The station number of the ISS. Default is 1"',
+                      help='The station number of the ISS. Default is 1',
                       metavar="ISSID")
-    parser.add_option('--test-in-time-change-window', dest='test_in_time_change_window', action='store_true',
-                      help='Test inTimeChangeWindow function')
-    parser.add_option('--test-dst-handling', dest='test_dst_handling', action='store_true',
-                      help='Test DST handling')
     (options, args) = parser.parse_args()
 
     if options.version:
         print("VantageNext driver version %s" % DRIVER_VERSION)
-        exit(0)
-
-    if options.test_in_time_change_window:
-        dst_periods = {
-                '2022': ['2022-03-13 02:00:00', '2022-11-06 02:00:00'],
-                '2023': ['2023-03-12 02:00:00', '2023-11-05 02:00:00'],
-                '2024': ['2024-03-10 02:00:00', '2024-11-03 02:00:00'] }
-        time_change_windows = VantageNext.compose_time_change_windows(dst_periods)
-        for key in time_change_windows:
-            for window in time_change_windows[key]:
-                print('time_change_window : %s: %s-%s' % (key, window[0], window[1]))
-
-        print('now in time change window                     : %r' % VantageNext.inTimeChangeWindow(time_change_windows, datetime.datetime.now()))
-
-        now = datetime.datetime(2022, 3, 13, 1, 54, 0)
-        if not VantageNext.inTimeChangeWindow(time_change_windows, now):
-            print('6 minutes before spring 2022 time change test : PASS')
-        else:
-            print('6 minutes before spring 2022 time change test : FAIL')
-
-        now = datetime.datetime(2022, 3, 13, 1, 59, 0)
-        if VantageNext.inTimeChangeWindow(time_change_windows, now):
-            print('1 minute before spring 2022 time change test  : PASS')
-        else:
-            print('1 minute before spring 2022 time change test  : FAIL')
-
-        now = datetime.datetime(2022, 3, 13, 2, 10, 0)
-        if VantageNext.inTimeChangeWindow(time_change_windows, now):
-            print('10 minutes after spring 2022 time change test : PASS')
-        else:
-            print('10 minutes after spring 2022 time change test : FAIL')
-
-        now = datetime.datetime(2022, 3, 13, 3, 0, 0)
-        if VantageNext.inTimeChangeWindow(time_change_windows, now):
-            print('1 hour after spring 2022 time change test     : PASS')
-        else:
-            print('1 hour after spring 2022 time change test     : FAIL')
-
-        now = datetime.datetime(2022, 3, 13, 3, 4, 59)
-        if VantageNext.inTimeChangeWindow(time_change_windows, now):
-            print('1:04:59 after spring 2022 time change test    : PASS')
-        else:
-            print('1:04:59 after spring 2022 time change test    : FAIL')
-
-        now = datetime.datetime(2022, 3, 13, 3, 6, 0)
-        if not VantageNext.inTimeChangeWindow(time_change_windows, now):
-            print('1:05   after spring 2022 time change test     : PASS')
-        else:
-            print('1:05   after spring 2022 time change test     : FAIL')
-
-        now = datetime.datetime(2023, 11, 5, 0, 54, 0)
-        if not VantageNext.inTimeChangeWindow(time_change_windows, now):
-            print('1:06      before fall   2023 time change test : PASS')
-        else:
-            print('1:06      before fall   2023 time change test : FAIL')
-
-        now = datetime.datetime(2023, 11, 5, 0, 59, 0)
-        if VantageNext.inTimeChangeWindow(time_change_windows, now):
-            print('1:01     before fall   2023 time change test  : PASS')
-        else:
-            print('1:01     before fall   2023 time change test  : FAIL')
-
-        now = datetime.datetime(2023, 11, 5, 1, 10, 0)
-        if VantageNext.inTimeChangeWindow(time_change_windows, now):
-            print('10 minutes into  fall   2023 time change test : PASS')
-        else:
-            print('10 minutes into  fall   2023 time change test : FAIL')
-
-        now = datetime.datetime(2023, 11, 5, 2, 0, 0)
-        if VantageNext.inTimeChangeWindow(time_change_windows, now):
-            print('1 hour after fall   2023 time change test     : PASS')
-        else:
-            print('1 hour after fall   2023 time change test     : FAIL')
-
-        now = datetime.datetime(2023, 11, 5, 2, 4, 59)
-        if VantageNext.inTimeChangeWindow(time_change_windows, now):
-            print('1:04:59 after fall   2023 time change test    : PASS')
-        else:
-            print('1:04:59 after fall   2023 time change test    : FAIL')
-
-        now = datetime.datetime(2023, 11, 5, 2, 6, 0)
-        if not VantageNext.inTimeChangeWindow(time_change_windows, now):
-            print('1:05   after fall   2023 time change test     : PASS')
-        else:
-            print('1:05   after fall   2023 time change test     : FAIL')
-
-        exit(0)
-
-    if options.test_dst_handling:
-        print('Testing Daylight Savings Time handling.')
-        now = datetime.datetime.now()
-
-        archive_record = { 'dateTime': int(now.timestamp()) }
-        archive_record['dateTime'] = VantageNext.adjust_for_dst(
-                now, archive_record['dateTime'], False)
-        if archive_record['dateTime'] == int(now.timestamp()):
-            print('Identical time, not in DST window, test PASSED')
-        else:
-            print('Identical time, not in DST window, test FAILED')
-
-        archive_record['dateTime'] = int(now.timestamp())
-        archive_record['dateTime'] = VantageNext.adjust_for_dst(
-                now, archive_record['dateTime'], True)
-        if archive_record['dateTime'] == int(now.timestamp()):
-            print('Identical time, in DST window, test     PASSED')
-        else:
-            print('Identical time, in DST window, test     FAILED')
-
-        archive_record['dateTime'] = int(now.timestamp()) - 3602
-        archive_record['dateTime'] = VantageNext.adjust_for_dst(
-                now, archive_record['dateTime'], False)
-        if archive_record['dateTime'] == int(now.timestamp()) - 3602:
-            print('1 hour slow, not in DST window, test    PASSED')
-        else:
-            print('1 hour slow, not in DST window, test    FAILED')
-
-        archive_record['dateTime'] = int(now.timestamp()) - 3602
-        archive_record['dateTime'] = VantageNext.adjust_for_dst(
-                now, archive_record['dateTime'], True)
-        if archive_record['dateTime'] == int(now.timestamp()) - 2:
-            print('1 hour slow, in DST window, test        PASSED')
-        else:
-            print('1 hour slow, in DST window, test        FAILED')
-
-        archive_record['dateTime'] = int(now.timestamp()) + 3602
-        archive_record['dateTime'] = VantageNext.adjust_for_dst(
-                now, archive_record['dateTime'], False)
-        if archive_record['dateTime'] == int(now.timestamp()) + 3602:
-            print('1 hour fast, not in DST window, test    PASSED')
-        else:
-            print('1 hour fast, not in DST window, test    FAILED')
-
-        archive_record['dateTime'] = int(now.timestamp()) + 3602
-        archive_record['dateTime'] = VantageNext.adjust_for_dst(
-                now, archive_record['dateTime'], True)
-        if archive_record['dateTime'] == int(now.timestamp()) + 2:
-            print('1 hour fast, in DST window, test        PASSED')
-        else:
-            print('1 hour fast, in DST window, test        FAILED')
-
         exit(0)
 
     if options.print_loop_packets:

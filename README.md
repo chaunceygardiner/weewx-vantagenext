@@ -1,81 +1,99 @@
 # weewx-vantagenext
-*WeeWX driver for Vantage devices largely based on built-in driver Copyright (c) 2009-2024 Tom Keefer
+
+A WeeWX driver for Davis Vantage stations (VantagePro, VantagePro2, VantageVue),
+forked from WeeWX's built-in Vantage driver (Copyright (c) 2009-2026 Tom Keffer).
+
+Copyright (C) 2020-2026 by John A Kline (john@johnkline.com)
 
 ## Description
 
-This driver builds on WeeWX built-in Vantage driver.  This driver is not
-recommended for general use.  Stick with the vantage driver that ships
-with WeeWX.  The WeeWX vantage driver is well supported.  This driver
-is an experiment; but it is used in production for the author's site
-at [www.paloaltoweather.com](https://www.paloaltoweather.com/).
+VantageNext is an opinionated fork of the built-in Vantage driver, maintained
+for — and running around the clock at — the author's site,
+[www.paloaltoweather.com](https://www.paloaltoweather.com/).  Its focus is
+uptime and data integrity: sailing through daylight-saving time changes
+without losing or mangling data, recovering from serial-port hiccups in
+seconds rather than minutes, and keeping the console clock accurate enough
+that clock sets (which themselves disturb the data stream) are rare.  It also
+supports the Davis sonic anemometer, which the built-in driver cannot select.
 
-Copyright (C)2020-2024 by John A Kline (john@johnkline.com)
+The built-in Vantage driver is excellent and well supported; if it serves you
+well, there is no need to switch.  This driver is for stations that have hit
+one of the specific problems it solves.
 
-# VantageNext Changes vis. a vis. WeeWX's Vantage Driver
+## Requirements
 
-1. Support using weewx_device to pick the Davis Sonic anemometer.  The Vantage
-   driver was offering two choices, small or big cups and was changing
-   a single bit on the console.  In fact, there are two bits (in a different
-   place in memory) that is used to change anemometer types.  Note:  It is
-   unnkown if there are very old versions of firmware that won't work with
-   this change.
+- WeeWX 5
+- Python 3.9 or greater
+- A Davis VantagePro, VantagePro2, or VantageVue, connected by serial/USB
+  or by ethernet (WeatherLinkIP)
 
-1. If the driver receives a packet from the console that is short of the 99 bytes
-   expected, vantagenext immediately exits genDavisLoopPackets() (allowing
-   another call to genDavisLoopPackets() to be made.  Before this change,
-   subsequent get_packet() calls would also fail and WeeWX would sleep 60s
-   and then restart.
+## Differences from the built-in Vantage driver
 
-1. If set time happened to be called around a DST/ST time change,
-   the device would have no way of knowing if the time being set was
-   pre DST ending time (or post) during the one hour overlap.
-   DST periods can be specified in the VantageNext section, and setTime will
-   be a no-op during time change windows.  Furthermore, if an archive record's
-   time is misinterpreted during this period (an hour ahead or an hour behind),
-   the driver will fix the issue by subtracting or adding one hour,
-   respectively.  Also, if getTime is about to return a bad time (off by
-   daylight savings change amount) to weewx.engine, it is adjusted to return
-   the correct time.
+1. **Davis sonic anemometer support.**  The built-in driver offers only
+   small or large wind cups, controlled by a single bit in console memory.
+   Newer firmware actually uses two bits at a different location, with a
+   third choice for "other" anemometers such as the sonic.  Consequently,
+   `weectl device --set-wind-cup` takes different codes with this driver:
+   `1` (small), `2` (large), or `3` (other/sonic) — versus `0`/`1` with the
+   built-in driver.  Note: it is unknown whether very old console firmware
+   supports the new location.
 
-1. set_time_padding can now be specified in the VantageNext section
-   so that the padding can be tweaked (it is hardcoded at 0.75 seconds
-   in the Vantage driver).  Default is 0.2 seconds.
+1. **Fast recovery from truncated reads.**  If the console delivers fewer
+   bytes than expected in the middle of a batch of LOOP packets, this driver
+   abandons the batch and immediately starts a new one — a gap of a few
+   seconds.  The same condition in the built-in driver can escalate until
+   WeeWX restarts the driver, costing a 60-second outage.
 
-1. The actual padding used is also influenced by clock_drift_secs,
-   day_start_jump and time_set_goal (added in this version of the driver).
-   clock_drift_secs should be set to the number of seconds
-   your console loses in 24 hours (negative number); or, if you console
-   gains time, the number of seconds gained in 24 hours (positive number).
-   Note: only time loss has been observed over a 24 hour period.
-   clock_drift_secs defaults to -2.4 seconds.
-   day_start_jump is the number of seconds the console [inexplicably]
-   jumps just after midnight (positive number) or falls back (negative
-   number).  Note: only positive jumps have been observed just after
-   midnight.  day_start_jump defaults to 2.0 seconds.
-   time_set_goal is the delta (in seconds)from actual time to strive for
-   at just after midnight when the clock jumps.  Since most consoles lose
-   time, the default for time_set_goal is 1.85 seconds.
-   With careful setting of set_time_padding, clock_drift_secs day_start_jump
-   and time_set_goal; one might be able to set max_drift to 2 seconds (a tight
-   settig) and still manage to go days without having the clock set.
-   This is desirable as setting the clock often results in multiple
-   zero read errors when reading loop packets.
+1. **Safe behavior across daylight-saving time changes.**  Around a DST
+   transition, the console clock cannot express which side of the change it
+   is on, so times read from (or written to) the console can be off by the
+   DST shift — historically this could cost a full hour of data.  This driver
+   derives each year's time-change windows automatically from the operating
+   system's timezone database (no configuration, and no table of dates to
+   maintain).  Inside a window, which spans from 5 minutes before the
+   transition until 5 minutes after the shifted clock catches up:
 
-1. The day's cumulative rain is now calculated by calling
--   weewx.wxformulas.calculate_delta.
+   - setting the console clock is skipped (the result would be ambiguous);
+   - archive record times that were misread by the DST shift are corrected;
+   - the console time reported to WeeWX's clock check is corrected the same
+     way, so WeeWX does not "fix" a clock that is actually right.
 
-1. This driver only supports WeeWX 4 and 5 and Python 3.9 or greater.
+   The window width and the correction adapt to the timezone's actual shift:
+   one hour almost everywhere, but 30 minutes on, say, Lord Howe Island.
 
-# Installation Instructions
+   Upgrading from 1.x: the `[[dst_periods]]` section this driver used to
+   require is obsolete and ignored — delete it from weewx.conf (the driver
+   logs a warning at startup while it remains).
 
-1. Download the [lastest release](https://github.com/chaunceygardiner/weewx-vantagenext/releases/latest/download/weewx-vantagenext.zip).
+1. **Precise console clock setting.**  Vantage consoles drift, and many jump
+   forward a couple of seconds just after midnight.  Four options
+   (`set_time_padding`, `clock_drift_secs`, `day_start_jump`,
+   `time_set_goal`; see Configuration below) let this driver *aim* the clock
+   so that it stays within a tight `max_drift` (e.g. 2 seconds) for days at a
+   time without being set.  That matters because each clock set tends to
+   cause read errors on the LOOP stream.  The built-in driver uses a single
+   hardcoded 0.75-second padding.
 
-1. Run the following command.
+1. **Rain accounting hardening.**  The per-packet rain delta is computed with
+   `weewx.wxformulas.calculate_delta`, and a momentary "dashed" (invalid)
+   daily-rain value from the console neither crashes the driver nor loses
+   rain: the delta resumes from the last good reading.
 
-   `sudo /home/weewx/bin/wee_extension --install weewx-vantagenext.zip`
+1. **Boot resilience.**  If the serial port cannot be opened at startup
+   (e.g. a udev symlink like `/dev/vantage` that appears late during boot),
+   the driver waits 5 seconds and tries again before giving up.
 
-   Note: this command assumes weewx is installed in /home/weewx.  If it's installed
-   elsewhere, adjust the path of wee_extension accordingly.
+## Installation
+
+1. Download the [latest release](https://github.com/chaunceygardiner/weewx-vantagenext/releases/latest/download/weewx-vantagenext.zip).
+
+1. Install it:
+
+   `sudo weectl extension install weewx-vantagenext.zip`
+
+   Note: if WeeWX is installed in a virtual environment, activate it first so
+   that the weectl command is found (e.g.,
+   `sudo -- bash -c ". /home/weewx/weewx-venv/bin/activate; weectl extension install weewx-vantagenext.zip"`).
 
 1. Edit the `Station` section of weewx.conf.  Change the `station_type` value
    to `VantageNext`.
@@ -85,33 +103,88 @@ Copyright (C)2020-2024 by John A Kline (john@johnkline.com)
        station_type = VantageNext
    ```
 
-1. Edit the VantageNext section of weewx.conf to specify the connection type
-   and the port or host.  For example:
+1. Edit the `VantageNext` section of weewx.conf to specify the connection
+   type and the port or host.  For example:
+
    ```
-    type = serial
-    port = /dev/vantage
+   [VantageNext]
+       type = serial
+       port = /dev/ttyUSB0
    ```
 
-1. Edit the VantageNext section of weewx.conf to add DST periods for your
-   location.  Note: the year to the left of the equals sign is simply a
-   string and is ingored  Also note, the first date MUST be the start
-   of daylight savings time and the second must be the end.  As such, in
-   the southern hemisphere, the dst end date (date on the right) will be
-   in the following year of the starting date (date on the left).
-   ```
-    [[dst_periods]]
-        2021 = 2021-03-14 02:00:00, 2021-11-07 02:00:00
-        2022 = 2022-03-13 02:00:00, 2022-11-06 02:00:00
-        2023 = 2023-03-12 02:00:00, 2023-11-05 02:00:00
-        2024 = 2024-03-10 02:00:00, 2024-11-03 02:00:00
-        2025 = 2025-03-09 02:00:00, 2025-11-02 02:00:00
-        2026 = 2026-03-08 02:00:00, 2026-11-01 02:00:00
-        2027 = 2027-03-14 02:00:00, 2027-11-07 02:00:00
-        2028 = 2028-03-12 02:00:00, 2028-11-05 02:00:00
-        2029 = 2029-03-11 02:00:00, 2029-11-04 02:00:00
-   ```
+   About the port: a USB-attached console usually shows up as `/dev/ttyUSB0`
+   (the number can differ, and can even change across reboots if other USB
+   serial devices are attached).  For that reason many installations use a
+   udev rule that gives the console a stable name such as `/dev/vantage` —
+   if you are switching from the built-in Vantage driver and weewx.conf
+   already names a port that works, simply keep it.
 
-1. Restart WeeWX
+1. Upgrading from 1.x only: delete the `[[dst_periods]]` section from the
+   `VantageNext` section of weewx.conf.  It is obsolete and ignored — the
+   time-change windows are now derived automatically from the operating
+   system's timezone database — and the driver logs a warning at startup
+   while the section remains.
+
+1. Restart WeeWX.
+
+## Configuration
+
+All options live in the `[VantageNext]` section of weewx.conf.  The options
+shared with the built-in driver (`type`, `port`, `host`, `baudrate`,
+`tcp_port`, `tcp_send_delay`, `loop_request`, `iss_id`, `timeout`,
+`wait_before_retry`, `max_tries`, `model_type`) have the same meanings as
+documented in the [WeeWX hardware guide](https://weewx.com/docs/latest/hardware/vantage/).
+
+This driver adds four options for aiming the console clock:
+
+| Option             | Default | Meaning                                                              |
+| ------------------ | ------- | -------------------------------------------------------------------- |
+| `set_time_padding` | `0.17`  | Seconds added when setting the clock, to cover transmission lag.     |
+| `clock_drift_secs` | `-3.1`  | Seconds the console clock drifts per 24 hours (negative = loses).    |
+| `day_start_jump`   | `2.83`  | Seconds the console clock jumps forward just after midnight.         |
+| `time_set_goal`    | `1.85`  | Desired clock error (seconds fast) just after the midnight jump.     |
+
+To tune them, watch the `weewx.engine: Clock error is ...` lines in the log
+over a few days: `clock_drift_secs` is the error accumulated per day,
+`day_start_jump` is the discontinuity right after midnight, and
+`time_set_goal` positions the clock so that drift keeps it within
+`max_drift` for as long as possible.  The driver logs its arithmetic each
+time it sets the clock (`compute_clock_target_adj: ...`).
+
+## Running the tests
+
+The repository (not the release zip) carries a hermetic test suite — around
+170 tests covering the console protocol, packet decoding, DST handling, and a
+full WeeWX engine round trip into a temporary database.  **No weather station
+is needed**: console I/O is simulated, so the suite is safe to run anywhere.
+Run it from a checkout of this repository, using a Python that can import
+WeeWX 5 and has pytest installed.  Which Python that is depends on how WeeWX
+was installed:
+
+- WeeWX installed with pip in a virtual environment: use that environment's
+  Python, for example:
+
+  ```sh
+  ~/weewx-venv/bin/python -m pytest tests
+  ```
+
+- WeeWX installed from a Debian/Red Hat package: WeeWX is on the system
+  Python's path, so (after installing pytest, e.g.
+  `sudo apt install python3-pytest`):
+
+  ```sh
+  python3 -m pytest tests
+  ```
+
+To exercise real hardware, the driver can print live LOOP packets.  This
+opens the station's serial port, so **WeeWX must be stopped first**.  Using
+the same Python as above, run it from the directory that contains the
+installed `user` directory (`~/weewx-data/bin` for pip installs,
+`/etc/weewx/bin` for package installs):
+
+```sh
+python3 -m user.vantagenext --print-loop-packets --port=/dev/ttyUSB0 --iss-id=1
+```
 
 ## Licensing
 

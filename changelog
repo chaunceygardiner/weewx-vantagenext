@@ -1,3 +1,42 @@
+2.0 2026-07-12
+--------------
+WeeWX 5 is now required (WeeWX 4 is no longer supported).
+DST time-change windows are now derived automatically from the operating
+system's timezone database.  The [[dst_periods]] section in weewx.conf is
+obsolete and IGNORED (a stale table would silently lose the protection one
+day, so it is not honored); delete the section -- the driver logs a warning
+at startup while it remains.  The derived window width and the console
+misread correction adapt to the timezone's actual shift (e.g. 30 minutes on
+Lord Howe Island).
+Installation instructions updated for WeeWX 5 (weectl extension install).
+Fix crash (KeyError, causing a WeeWX driver restart) when the console sends a
+dashed dayRain value in a loop packet.  The rain delta is None for that packet
+and the previous day-rain baseline is kept, so no rain is lost.
+Fix driver startup failure (KeyError) when the wind cup bits at EEPROM 0xC3
+are 0 (e.g. older firmware, where the wind cup setting lives at 0x2B).  The
+wind cup size now reports as 'unknown'.
+Fix TypeError when an archive record with a corrupt (unparseable) timestamp is
+read during a DST time-change window.
+Fix install.py to enforce the Python 3.9 requirement (was still enforcing 3.7).
+Fix Python version-check messages to say weewx-vantagenext (said weewx-loopdata).
+Fix compose_time_change_windows to skip a malformed dst_periods entry (a bad
+entry raised NameError or reused the previous entry's dates).
+weectl device --set-wind-cup now rejects an invalid code with a clear message
+instead of a KeyError traceback.
+weectl device --set-tz-code=0 now works (zone code 0 was silently ignored).
+Fix a logging error on every startup when iss_id is not configured (the None
+value, later guessed from the transmitter table, was logged with %d).
+Remove the --test-in-time-change-window and --test-dst-handling options from
+the driver; the pytest suite (tests/) covers the same ground and more.
+Rewrite the README: differences from the built-in driver stated in user
+terms (including the changed --set-wind-cup codes), a Configuration section
+for the clock-aiming options, and instructions for running the tests.
+Take upstream's more helpful "Unable to read hardware type" error message.
+README: correct stale defaults for set_time_padding (0.17), clock_drift_secs
+(-3.1) and day_start_jump (2.83).
+Add a hermetic pytest test suite (tests/); no console hardware needed.  Run
+from the repo root: python -m pytest tests
+
 1.2 2025-01-15
 --------------
 Add --iss-id option testing driver by printing loop packets.  --print-loop-packets [--port=PORT] [--iss-id=ISSID].
