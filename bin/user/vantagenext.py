@@ -29,7 +29,7 @@ from weewx.crc16 import crc16
 log = logging.getLogger(__name__)
 
 DRIVER_NAME = 'VantageNext'
-DRIVER_VERSION = '2.0'
+DRIVER_VERSION = '2.1'
 
 int2byte = struct.Struct(">B").pack
 
@@ -346,7 +346,9 @@ class SerialWrapper(BaseWrapper):
         try:
             # This will cancel any pending loop:
             self.write(b'\n')
-        except:
+        except (weewx.WeeWxIOError, OSError):
+            # A bare except here would swallow weewxd's Terminate (raised by
+            # its SIGTERM handler on the main thread) and block shutdown.
             pass
         self.serial_port.close()
 
@@ -390,7 +392,9 @@ class EthernetWrapper(BaseWrapper):
         try:
             # This will cancel any pending loop:
             self.write(b'\n')
-        except:
+        except (weewx.WeeWxIOError, OSError):
+            # A bare except here would swallow weewxd's Terminate (raised by
+            # its SIGTERM handler on the main thread) and block shutdown.
             pass
         self.socket.shutdown(socket.SHUT_RDWR)
         self.socket.close()
@@ -617,7 +621,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
                     spring_fwd = datetime.datetime.strptime(transitions[0], fmt)
                     # Add fall back window
                     fall_back  = datetime.datetime.strptime(transitions[1], fmt)
-                except:
+                except (ValueError, TypeError):
                     log.info('dst period malformed (will be ignored): %s' % dst_periods[key])
                     continue
                 # Windows from [[dst_periods]] config assume a 1-hour shift

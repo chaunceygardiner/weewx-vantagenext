@@ -662,3 +662,57 @@ class TestPortFactory:
     def test_unknown_type_raises(self):
         with pytest.raises(weewx.UnsupportedFeature):
             VantageNext._port_factory({'type': 'carrier_pigeon'})
+
+
+class Terminate(Exception):
+    """Stand-in for weewxd's Terminate, which its SIGTERM handler raises on
+    the main thread.  weewxd runs as __main__, so the real class cannot be
+    imported; what matters is that it is not a WeeWxIOError or OSError."""
+
+
+class _ClosableStub:
+    """Stands in for the underlying serial_port/socket in closePort tests."""
+
+    def __init__(self):
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+    def shutdown(self, how):
+        pass
+
+
+class TestClosePortShutdown:
+    """closePort must swallow only I/O failures from the goodbye write --
+    never weewxd's Terminate (or KeyboardInterrupt/SystemExit), or weewx
+    could not shut down when SIGTERM lands during a close."""
+
+    @staticmethod
+    def _wrappers():
+        serial = VantageNext._port_factory({'type': 'serial', 'port': '/dev/vantage'})
+        serial.serial_port = _ClosableStub()
+        ethernet = VantageNext._port_factory({'type': 'ethernet', 'host': '1.2.3.4'})
+        ethernet.socket = _ClosableStub()
+        return serial, ethernet
+
+    @staticmethod
+    def _raiser(exc):
+        def write(data):
+            raise exc
+        return write
+
+    @pytest.mark.parametrize('exc', [weewx.WeeWxIOError('boom'), OSError('boom')])
+    def test_io_error_swallowed_and_port_closed(self, monkeypatch, exc):
+        for wrapper in self._wrappers():
+            monkeypatch.setattr(wrapper, 'write', self._raiser(exc))
+            wrapper.closePort()
+            underlying = getattr(wrapper, 'serial_port', None) or wrapper.socket
+            assert underlying.closed
+
+    @pytest.mark.parametrize('exc_class', [Terminate, KeyboardInterrupt, SystemExit])
+    def test_shutdown_exceptions_propagate(self, monkeypatch, exc_class):
+        for wrapper in self._wrappers():
+            monkeypatch.setattr(wrapper, 'write', self._raiser(exc_class('stop')))
+            with pytest.raises(exc_class):
+                wrapper.closePort()

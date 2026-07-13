@@ -1,3 +1,12 @@
+2.1 2026-07-12
+--------------
+Shutdown signals can no longer be swallowed by the port-close paths (serial
+and ethernet) or the retained [[dst_periods]] reference parser: the bare
+except clauses there have been narrowed to the specific exceptions those
+operations raise.  A bare except on a weewxd main-thread path catches the
+Terminate exception weewxd's SIGTERM handler raises to stop, and can block
+shutdown.
+
 2.0 2026-07-12
 --------------
 WeeWX 5 is now required (WeeWX 4 is no longer supported).
