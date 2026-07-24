@@ -1,3 +1,34 @@
+2.2 2026-07-24
+--------------
+Fix weectl device --set-retransmit: EEPROM 0x18 (RE_TRANSMIT_TX) takes the
+ID number to retransmit on (0=off, 1=ID1, ..., per the Davis serial protocol
+doc), but the driver wrote a bitmask, so --set-retransmit=on,3 programmed the
+console to retransmit on ID 4, and channels 5-8 wrote out-of-range values
+(only channels 1 and 2 worked, by numeric coincidence).  The retransmit
+column of weectl device --info decoded 0x18 the same wrong way and could
+show the wrong channel(s) as retransmitting.  The --set-transmitter-type
+collision check, which correctly compared ID numbers, is unchanged.
+Fix LOOP2 dewpoint, heatindex, windchill and THSW decoding to only treat the
+documented dash value (exactly 255) as missing; a legitimate reading of -1
+degree F was previously dropped.
+Fix LOOP2 windGust10 dash handling: the field dashes as 0xFFFF (like the
+LOOP2 average wind speeds), not 0xFF, so a dashed gust no longer decodes as a
+65535 mph gust.
+weectl device --set-offset now accepts negative humidity offsets: the console
+and setCalibrationHumid support -100..100, but the option rejected the entire
+negative half of the range (needed when a sensor reads high).
+weectl device --set-transmitter-type now rejects extra temperature/humidity
+IDs of 8; only extraTemp1-7/extraHumid1-7 exist, so an ID of 8 configured a
+channel whose data could never surface.
+Remove stray print statements from the console wake-up retry path (they wrote
+to stdout on every retry, duplicating the log under weewxd).
+Log "In time change transition period" once per time-change window instead of
+once per call (it previously repeated for every archive record unpacked
+inside a window).
+The connection_type keyword (used by the --print-loop-packets utility and
+documented in the driver docstring) is now honored by the port factory;
+weewx.conf's type key is unchanged.
+
 2.1 2026-07-12
 --------------
 Shutdown signals can no longer be swallowed by the port-close paths (serial

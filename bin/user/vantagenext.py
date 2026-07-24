@@ -29,7 +29,7 @@ from weewx.crc16 import crc16
 log = logging.getLogger(__name__)
 
 DRIVER_NAME = 'VantageNext'
-DRIVER_VERSION = '2.1'
+DRIVER_VERSION = '2.2'
 
 int2byte = struct.Struct(">B").pack
 
@@ -123,9 +123,7 @@ class BaseWrapper:
                 pass
 
             log.debug("Retry #%d unable to wake up console... sleeping", count)
-            print("Unable to wake up console... sleeping")
             time.sleep(self.wait_before_retry)
-            print("Unable to wake up console... retrying")
 
         log.error("Unable to wake up Vantage console")
         raise weewx.WakeupError("Unable to wake up Vantage console")
@@ -492,6 +490,10 @@ class VantageNext(weewx.drivers.AbstractDevice):
                              12:'E', 13:'F', 14:'G', 15:'H'}
     listen_dict           = {0:'inactive',  1:'active'}
 
+    # The last window inTimeChangeWindow logged, so a window is announced once
+    # rather than once per call (it is called for every archive record).
+    _logged_window = None
+
     def __init__(self, **vp_dict):
         """Initialize an object of type VantageNext.
 
@@ -706,7 +708,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
                         yield _loop_packet
                     break
                 except weewx.WeeWxIOError as e:
-                    log.info('genLoopPackets: Error: %s. (try %d)' % (e, i))
+                    log.info('genLoopPackets: Error: %s. (try %d)' % (e, i + 1))
 
     def genDavisLoopPackets(self, N=1):
         """Generator function to return N loop packets from a Vantage console
@@ -1018,7 +1020,9 @@ class VantageNext(weewx.drivers.AbstractDevice):
         for key in time_change_windows:
             for window in time_change_windows[key]:
                 if t > window[0] and t < window[1]:
-                    log.info("In time change transition period.")
+                    if VantageNext._logged_window != window:
+                        VantageNext._logged_window = window
+                        log.info("In time change transition period.")
                     return window[2]
         return None
 
@@ -1312,9 +1316,9 @@ class VantageNext(weewx.drivers.AbstractDevice):
             transmitter_type(int): The type of the new channel. 0=ISS, 1=temp, 2=humidity,
                 3=temp/humidity, ..., 10=no station. [0-10]
             extra_temp_id(int|None): The ID to be used if this is a temperature channel. This will
-                cause results to be emitted as extraTempN where N is the ID number. [1-8]
+                cause results to be emitted as extraTempN where N is the ID number. [1-7]
             extra_hum_id(int|None):  The ID to be used if this is a humidity channel. This will
-                cause results to be emitted as extraHumidN where N is the ID number. [1-8]
+                cause results to be emitted as extraHumidN where N is the ID number. [1-7]
             repeater_id(str|None): The repeater ID for this channel [A-H], or None for no repeater.
         """
 
@@ -1335,14 +1339,16 @@ class VantageNext(weewx.drivers.AbstractDevice):
 
         # Set the appropriate bit for the temperature sender number
         if VantageNext.transmitter_type_dict[transmitter_type] in ['temp', 'temp_hum']:
-            if not 1 <= extra_temp_id <= 8:
+            # Only extraTemp1-7 exist in the LOOP/archive decode maps.
+            if not 1 <= extra_temp_id <= 7:
                 raise weewx.ViolatedPrecondition("Invalid extra temperature number %d"
                                                  % extra_temp_id)
             # Extra temp is origin 0.
             extra_id_bits = extra_id_bits & 0xF0 | extra_temp_id - 1
         # Set the appropriate bit for the humidity sender number:
         if VantageNext.transmitter_type_dict[transmitter_type] in ['hum', 'temp_hum']:
-            if not 1 <= extra_hum_id <= 8:
+            # Only extraHumid1-7 exist in the LOOP/archive decode maps.
+            if not 1 <= extra_hum_id <= 7:
                 raise weewx.ViolatedPrecondition("Invalid extra humidity number %d"
                                                  % extra_hum_id)
             # Extra humidity is origin 1.
@@ -1387,18 +1393,14 @@ class VantageNext(weewx.drivers.AbstractDevice):
             channel (int): Zero to turn off all retransmitting. Otherwise, a channel number [1-8]
                 to turn on retransmitting.
         """
-        if channel:
-            # Get the old retransmit data
-            retransmit_data = self._getEEPROM_value(0x18)[0]
-            # Turn on the appropriate channel by ORing in the new channel
-            retransmit_data |= 1 << channel - 1
-        else:
-            # Turn off all channels
-            retransmit_data = 0
+        # EEPROM 0x18 (RE_TRANSMIT_TX) holds the ID number to retransmit on:
+        # 0 = don't retransmit, 1 = use ID 1, 2 = use ID 2, etc. (Davis
+        # serial protocol doc rev 2.6.1, sections XIII and XIV.4).  It is not
+        # a bitmask; the console retransmits on at most one channel.
         # Tell the console to put one byte in hex location 0x18
         self.port.send_data(b"EEBWR 18 01\n")
         # Follow it up with the data:
-        self.port.send_data_with_crc16(int2byte(retransmit_data), max_tries=1)
+        self.port.send_data_with_crc16(int2byte(channel), max_tries=1)
         # Then call NEWSETUP to get it to stick:
         self.port.send_data(b"NEWSETUP\n")
 
@@ -1416,7 +1418,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
             raise ValueError("Unknown console temperature logging setting '%s'"
                              % new_tempLogging.upper())
 
-        # Tell the console to put one byte in hex location 0x2B
+        # Tell the console to put one byte in hex location 0xFFC
         self.port.send_data(b"EEBWR FFC 01\n")
         # Follow it up with the data:
         self.port.send_data_with_crc16(int2byte(_setting), max_tries=1)
@@ -1549,7 +1551,9 @@ class VantageNext(weewx.drivers.AbstractDevice):
 
         transmitters = []
         use_tx = self._getEEPROM_value(0x17)[0]
-        retransmit_data = self._getEEPROM_value(0x18)[0]
+        # 0x18 (RE_TRANSMIT_TX) is the ID number the console retransmits on
+        # (0 = off), not a bitmask.
+        retransmit_id = self._getEEPROM_value(0x18)[0]
         transmitter_data = self._getEEPROM_value(0x19, "16B")
 
         # Iterate over channels 1, 2, ..., 8
@@ -1565,16 +1569,11 @@ class VantageNext(weewx.drivers.AbstractDevice):
             use_flag = use_tx & 0x01
             # Shift use_tx over by one bit to get it ready for the next channel.
             use_tx >>= 1
-            # The least significant bit of retransmit_data will be whether to retransmit
-            # the current channel.
-            retransmit = retransmit_data & 0x01
-            # Shift retransmit_data by one bit to get it ready for the next channel.
-            retransmit_data >>= 1
             transmitter_dict = {
                 'transmitter_type': VantageNext.transmitter_type_dict[transmitter_type],
                 'repeater': repeater_id,
                 'listen': VantageNext.listen_dict[use_flag],
-                'retransmit' : 'Y' if retransmit else 'N'
+                'retransmit' : 'Y' if retransmit_id == channel else 'N'
             }
             if transmitter_dict['transmitter_type'] in ['temp', 'temp_hum']:
                 # Extra temperature is origin 1.
@@ -1769,8 +1768,9 @@ class VantageNext(weewx.drivers.AbstractDevice):
         wait_before_retry = float(vp_dict.get('wait_before_retry', 1.2))
         command_delay = float(vp_dict.get('command_delay', 0.5))
 
-        # Get the connection type. If it is not specified, assume 'serial':
-        connection_type = vp_dict.get('type', 'serial').lower()
+        # Get the connection type ('type' in weewx.conf, 'connection_type' as
+        # a keyword argument). If it is not specified, assume 'serial':
+        connection_type = vp_dict.get('type', vp_dict.get('connection_type', 'serial')).lower()
 
         if connection_type == "serial":
             port = vp_dict['port']
@@ -1783,7 +1783,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
             tcp_send_delay = float(vp_dict.get('tcp_send_delay', 0.5))
             return EthernetWrapper(hostname, tcp_port, timeout, tcp_send_delay,
                                    wait_before_retry, command_delay)
-        raise weewx.UnsupportedFeature(vp_dict['type'])
+        raise weewx.UnsupportedFeature(connection_type)
 
     def _unpackLoopPacket(self, raw_loop_buffer):
         """Decode a raw Davis LOOP packet, returning the results as a dictionary in physical units.
@@ -2169,7 +2169,9 @@ _loop_map = {
     'consBatteryVoltage': lambda p, k: float((p[k] * 300) >> 9) / 100.0,
     'dayET'           : lambda p, k: float(p[k]) / 1000.0,
     'dayRain'         : _decode_rain,
-    'dewpoint'        : lambda p, k: float(p[k]) if p[k] & 0xff != 0xff else None,
+    # dewpoint/heatindex/windchill/THSW are signed whole degrees F; the LOOP2
+    # dash value is exactly 255 (per the Davis spec), so -1 F must decode.
+    'dewpoint'        : lambda p, k: float(p[k]) if p[k] != 255 else None,
     'extraAlarm1'     : lambda p, k: p[k],
     'extraAlarm2'     : lambda p, k: p[k],
     'extraAlarm3'     : lambda p, k: p[k],
@@ -2194,7 +2196,7 @@ _loop_map = {
     'extraTemp7'      : lambda p, k: float(p[k] - 90) if p[k] != 0xff else None,
     'forecastIcon'    : lambda p, k: p[k],
     'forecastRule'    : lambda p, k: p[k],
-    'heatindex'       : lambda p, k: float(p[k]) if p[k] & 0xff != 0xff else None,
+    'heatindex'       : lambda p, k: float(p[k]) if p[k] != 255 else None,
     'hourRain'        : _decode_rain,
     'inHumidity'      : lambda p, k: float(p[k]) if p[k] != 0xff else None,
     'insideAlarm'     : lambda p, k: p[k],
@@ -2236,13 +2238,15 @@ _loop_map = {
     'stormStart'      : _loop_date,
     'sunrise'         : lambda p, k: 3600 * (p[k] // 100) + 60 * (p[k] % 100),
     'sunset'          : lambda p, k: 3600 * (p[k] // 100) + 60 * (p[k] % 100),
-    'THSW'            : lambda p, k: float(p[k]) if p[k] & 0xff != 0xff else None,
+    'THSW'            : lambda p, k: float(p[k]) if p[k] != 255 else None,
     'trendIcon'       : lambda p, k: p[k],
     'txBatteryStatus' : lambda p, k: int(p[k]),
     'UV'              : lambda p, k: float(p[k]) / 10.0 if p[k] != 0xff else None,
-    'windchill'       : lambda p, k: float(p[k]) if p[k] & 0xff != 0xff else None,
+    'windchill'       : lambda p, k: float(p[k]) if p[k] != 255 else None,
     'windDir'         : lambda p, k: (float(p[k]) if p[k] != 360 else 0) if p[k] and p[k] != 0x7fff else None,
-    'windGust10'      : lambda p, k: float(p[k]) if p[k] != 0xff else None,
+    # windGust10 is a 16-bit field in whole mph (the Davis doc's 0.1 mph claim
+    # is wrong); it dashes as 0xFFFF like windSpeed10/windSpeed2.
+    'windGust10'      : lambda p, k: float(p[k]) if p[k] != 0xffff else None,
     'windGustDir10'   : lambda p, k: (float(p[k]) if p[k] != 360 else 0) if p[k] and p[k] != 0x7fff else None,
     'windSpeed'       : lambda p, k: float(p[k]) if p[k] != 0xff else None,
     'windSpeed10'     : _decode_windSpeed_H,
@@ -2955,7 +2959,7 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
                     print("Nothing done.")
         elif variable in humid_variables:
             offset = int(offset_str)
-            if not 0 <= offset <= 100:
+            if not -100 <= offset <= 100:
                 print("Humidity offset %+d is out of range." % (offset), file=sys.stderr)
             else:
                 ans = weeutil.weeutil.y_or_n("Proceeding will set offset for "
@@ -2978,7 +2982,9 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
 
         channel = int(transmitter_list[0])
 
-        # Check new channel against retransmit channel.
+        # Check new channel against the retransmit channel.  EEPROM 0x18
+        # (RE_TRANSMIT_TX) holds the ID number the console retransmits on
+        # (0 = off), per the Davis serial protocol doc.
         # Warn and stop if new channel is used as retransmit channel.
         retransmit_channel = station._getEEPROM_value(0x18)[0]
         if retransmit_channel == channel:

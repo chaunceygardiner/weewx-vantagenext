@@ -46,6 +46,7 @@ class RecordingStation:
 
     def _getEEPROM_value(self, offset, v_format='B'):
         assert offset == 0x18
+        # 0x18 (RE_TRANSMIT_TX) holds the retransmit ID number (0 = off).
         return (self.retransmit_channel,)
 
 
@@ -77,6 +78,20 @@ class TestSetOffset:
         station = RecordingStation()
         VantageNextConfigurator.set_offset(station, 'outHumid,5', True)
         assert station.calls == [('setCalibrationHumid', 'outHumid', 5)]
+
+    def test_negative_humidity(self):
+        # Regression: setCalibrationHumid accepts -100..100, but the old
+        # range check here rejected anything below 0 (needed when a sensor
+        # reads high).
+        station = RecordingStation()
+        VantageNextConfigurator.set_offset(station, 'outHumid,-5', True)
+        assert station.calls == [('setCalibrationHumid', 'outHumid', -5)]
+
+    def test_humidity_out_of_range(self, capsys):
+        station = RecordingStation()
+        VantageNextConfigurator.set_offset(station, 'outHumid,-101', True)
+        assert station.calls == []
+        assert 'out of range' in capsys.readouterr().err
 
     def test_unknown_variable(self, capsys):
         station = RecordingStation()
@@ -151,6 +166,20 @@ class TestSetTransmitterType:
         VantageNextConfigurator.set_transmitter_type(station, '4,0', True)
         assert station.calls == []
         assert 'retransmit channel' in capsys.readouterr().out
+
+    def test_retransmit_collision_channel_3(self, capsys):
+        # 0x18 holds the retransmit ID number, so retransmit on channel 3
+        # must protect channel 3 itself...
+        station = RecordingStation(retransmit_channel=3)
+        VantageNextConfigurator.set_transmitter_type(station, '3,0', True)
+        assert station.calls == []
+        assert 'retransmit channel' in capsys.readouterr().out
+
+    def test_no_false_retransmit_collision(self):
+        # ...and must not block any other channel.
+        station = RecordingStation(retransmit_channel=3)
+        VantageNextConfigurator.set_transmitter_type(station, '4,0', True)
+        assert station.calls == [('setTransmitterType', 4, 0, None, None, None)]
 
     def test_temp_requires_temp_id(self, capsys):
         station = RecordingStation()

@@ -539,10 +539,12 @@ class TestSetters:
 
     def test_set_retransmit_channel(self):
         station = bare_station()
-        reads = eeprom_reads(b'\x00') + [ACK, ACK, ACK] + setup_reads()
+        reads = [ACK, ACK, ACK] + setup_reads()
         station.port = ScriptedWrapper(reads)
         station.setRetransmit(3)
-        assert with_crc(b'\x04') in station.port.writes  # 1 << (3-1)
+        # 0x18 takes the ID number itself (Davis spec: 0=off, 1=ID1, ...),
+        # not a bitmask (which would be 0x04 here and would program ID 4).
+        assert with_crc(b'\x03') in station.port.writes
 
     def test_set_temp_logging(self):
         station = bare_station()
@@ -608,6 +610,20 @@ class TestInfoCommands:
                                    'temp': 2, 'hum': 4}
         assert transmitters[2]['transmitter_type'] == 'none'
         assert transmitters[2]['listen'] == 'inactive'
+
+    def test_get_stn_transmitters_retransmit_id_3(self):
+        # 0x18 holds the retransmit ID number, not a bitmask.  Value 3 means
+        # channel 3 retransmits; a bitmask decode would misreport channels 1
+        # and 2 as retransmitting.  (Value 2, above, cannot tell the two
+        # interpretations apart.)
+        transmitter_data = bytearray(16)
+        for channel in range(2, 9):
+            transmitter_data[(channel - 1) * 2] = 10  # none
+        station = bare_station()
+        station.port = ScriptedWrapper(eeprom_reads(b'\x01', b'\x03', bytes(transmitter_data)))
+        transmitters = station.getStnTransmitters()
+        assert [t['retransmit'] for t in transmitters] == [
+            'N', 'N', 'Y', 'N', 'N', 'N', 'N', 'N']
 
     def test_get_stn_calibration(self):
         values = [0] * 27

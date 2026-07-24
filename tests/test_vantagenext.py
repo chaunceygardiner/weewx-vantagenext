@@ -530,10 +530,21 @@ class TestUnpackLoop2Packet:
     def test_loop2_dashed_values(self):
         station = bare_station()
         pkt = station._unpackLoopPacket(make_loop2(
-            dewpoint=255, windSpeed2=0xFFFF, windGust10=0xFF, dayRain=100)[:95])
+            dewpoint=255, windSpeed2=0xFFFF, windGust10=0xFFFF, dayRain=100)[:95])
         assert 'dewpoint' not in pkt
         assert 'windSpeed2' not in pkt
         assert 'windGust10' not in pkt
+
+    def test_loop2_negative_one_degree_not_dashed(self):
+        # The dash value for these signed fields is exactly 255; the old
+        # `& 0xff` test also swallowed a legitimate -1 F reading.
+        station = bare_station()
+        pkt = station._unpackLoopPacket(make_loop2(
+            dewpoint=-1, heatindex=-1, windchill=-1, THSW=-1, dayRain=100)[:95])
+        assert pkt['dewpoint'] == -1.0
+        assert pkt['heatindex'] == -1.0
+        assert pkt['windchill'] == -1.0
+        assert pkt['THSW'] == -1.0
 
 
 # ===============================================================================
@@ -553,6 +564,13 @@ class TestLoopMapDetails:
 
     def test_cons_battery_voltage(self):
         assert self.decode('consBatteryVoltage', 512) == pytest.approx(3.0)
+
+    def test_wind_gust10(self):
+        # Whole mph in a 16-bit field; the dash value is 0xFFFF (255 is a
+        # valid, if extreme, gust -- the old code dashed on 0xFF and let a
+        # dashed 0xFFFF through as 65535 mph).
+        assert self.decode('windGust10', 255, packet_type=1) == 255.0
+        assert self.decode('windGust10', 0xFFFF, packet_type=1) is None
 
     def test_extra_temp_offset_and_dash(self):
         assert self.decode('extraTemp1', 90) == 0.0
@@ -657,6 +675,13 @@ class TestPortFactory:
 
     def test_default_is_serial(self):
         port = VantageNext._port_factory({'port': '/dev/vantage'})
+        assert isinstance(port, vantagenext.SerialWrapper)
+
+    def test_connection_type_keyword(self):
+        # The __main__ utility and the class docstring use connection_type;
+        # weewx.conf uses type.  Both must work.
+        port = VantageNext._port_factory({'connection_type': 'serial',
+                                          'port': '/dev/vantage'})
         assert isinstance(port, vantagenext.SerialWrapper)
 
     def test_unknown_type_raises(self):
