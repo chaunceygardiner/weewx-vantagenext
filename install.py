@@ -29,8 +29,24 @@ if weewx.__version__ < "5":
     raise weewx.UnsupportedFeature(
         "weewx-vantagenext requires WeeWX 5, found %s" % weewx.__version__)
 
+# The stanza a fresh install writes into weewx.conf, as text rather than a
+# dict so that ConfigObj carries its comments into the user's file.  An
+# option written LIVE is frozen on that station for ever: weecfg merges
+# with conditional_merge, which fills in absent keys and never rewrites.
+# So only options the driver cannot supply for itself are written live.
+#
+# ORDER MATTERS: ConfigObj attaches a comment block to the NEXT key, so a
+# commented-out option must be followed by a live key in the same section.
+# Last in the section it has no next key at all, becomes ConfigObj's
+# final_comment, and conditional_merge never copies that -- the block is
+# silently lost.  Hence "driver" stays last.
 vantagenext_config = """
 [VantageNext]
+    # An option shown commented out is one the driver supplies itself.
+    # Leave it commented and the driver's own value governs, including a
+    # better one a later release might bring.  Uncomment it to pin this
+    # station to the value written here.
+
     # Connection type: serial or ethernet
     #  serial (the classic VantagePro)
     #  ethernet (the WeatherLinkIP or Serial-Ethernet bridge)
@@ -48,56 +64,55 @@ vantagenext_config = """
     host = 1.2.3.4
 
     # Serial baud rate (usually 19200)
-    baudrate = 19200
+    #baudrate = 19200
 
     # TCP port (when using the WeatherLinkIP)
-    tcp_port = 22222
+    #tcp_port = 22222
 
     # TCP send delay (when using the WeatherLinkIP):
-    tcp_send_delay = 0.5
+    #tcp_send_delay = 0.5
 
     # The type of LOOP packet to request: 1 = LOOP1; 2 = LOOP2; 3 = both
-    loop_request = 1
+    #loop_request = 1
 
-    # The id of your ISS station (usually 1). If you use a wind meter connected
-    # to a anemometer transmitter kit, use its id
-    iss_id = 1
+    # The id of your ISS station.  Left commented out, the driver reads it
+    # from the console's transmitter table at startup and logs what it
+    # settled on ("ISS ID is ..."); check that line if rxCheckPercent looks
+    # wrong.  The value below is only an example of the form -- uncomment
+    # it to name the id yourself, e.g. if you use a wind meter connected to
+    # an anemometer transmitter kit, use its id.
+    #iss_id = 1
 
     # How long to wait for a response from the station before giving up (in
     # seconds; must be greater than 2)
-    timeout = 4
+    #timeout = 4
 
     # How long to wait before trying again (in seconds)
-    wait_before_retry = 1.2
+    #wait_before_retry = 1.2
 
     # How many times to try before giving up:
-    max_tries = 4
+    #max_tries = 4
 
     # The number of seconds to add to current time when setting the time.
     # (Due to delay in sending and executing the command on the console.)
-    set_time_padding = 0.17
+    #set_time_padding = 0.17
 
     # The amount of time, in seconds, that the console clock drifts.
     # A negative number means the console loses time.
-    clock_drift_secs = -3.1
+    #clock_drift_secs = -3.1
 
     # The number of seconds the console jumps just after midnight.
-    day_start_jump = 2.83
+    #day_start_jump = 2.83
 
     # When setting time, the delta in seconds from actual time to shoot for,
     # just after midnight when the clock jumps.
-    time_set_goal = 1.85
+    #time_set_goal = 1.85
 
     # Vantage model Type: 1 = Vantage Pro; 2 = Vantage Pro2
-    model_type = 2
+    #model_type = 2
 
     # The driver to use:
     driver = user.vantagenext
-
-    # DST time-change windows (setTime is skipped and console-time misreads
-    # are corrected inside them) are derived automatically from the operating
-    # system's timezone database.  A [[dst_periods]] section from earlier
-    # versions is obsolete and ignored; please delete it.
 """
 
 vantagenext_dict = configobj.ConfigObj(StringIO(vantagenext_config))
@@ -108,7 +123,7 @@ def loader():
 class VantageNextInstaller(ExtensionInstaller):
     def __init__(self):
         super(VantageNextInstaller, self).__init__(
-            version="2.2",
+            version="2.3",
             name='VantageNext',
             description='Capture weather observations from Vantage weather stations',
             author="John A Kline",

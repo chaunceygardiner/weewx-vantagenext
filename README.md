@@ -83,6 +83,15 @@ one of the specific problems it solves.
    (e.g. a udev symlink like `/dev/vantage` that appears late during boot),
    the driver waits 5 seconds and tries again before giving up.
 
+1. **Sounder ISS detection.**  When `iss_id` is not set in weewx.conf, both
+   drivers read the console's transmitter table to find the ISS — but the
+   built-in driver considers every channel, and an unconfigured channel's
+   transmitter type reads as `0`, which decodes as "iss".  A free channel
+   below the real ISS can therefore win, and `rxCheckPercent` is then
+   gauged against a transmitter that is not the ISS.  This driver considers
+   only channels the console is actually listening to, and logs the id it
+   settled on at startup (`ISS ID is ...`).
+
 ## Installation
 
 1. Download the [latest release](https://github.com/chaunceygardiner/weewx-vantagenext/releases/latest/download/weewx-vantagenext.zip).
@@ -135,6 +144,34 @@ shared with the built-in driver (`type`, `port`, `host`, `baudrate`,
 `wait_before_retry`, `max_tries`, `model_type`) have the same meanings as
 documented in the [WeeWX hardware guide](https://weewx.com/docs/latest/hardware/vantage/).
 
+Most options appear in weewx.conf **commented out**, with the driver's own
+default shown:
+
+```
+    # How many times to try before giving up:
+    #max_tries = 4
+```
+
+Where an option looks like that, leaving it alone lets the driver's value
+govern — including a better default that a later release may bring.
+Uncomment the line to pin this station to the value written there.  Where an
+option instead reads `max_tries = 4`, with no `#`, the value is already
+pinned and you edit it in place.  Both forms work; the difference is only
+whether a future release can improve the default on your behalf.
+
+Four options are written live.  `port` and `host` have no fallback at all —
+the driver cannot start without one of them — and `driver` is how WeeWX
+finds this extension.  `type` does have a default (`serial`), but it decides
+which of `port` and `host` is required, so it is spelled out rather than
+left implied.
+
+`iss_id` is a special case.  Left commented out, the driver reads the ISS
+from the console's transmitter table at startup and logs what it found
+(`ISS ID is ...`).  If weewx.conf on your station carries a live
+`iss_id = ...` line — every station set up before this was installed does —
+that value wins and no detection happens, so check that it names the right
+transmitter, or delete the line and let the driver work it out.
+
 This driver adds four options for aiming the console clock:
 
 | Option             | Default | Meaning                                                              |
@@ -151,12 +188,40 @@ over a few days: `clock_drift_secs` is the error accumulated per day,
 `max_drift` for as long as possible.  The driver logs its arithmetic each
 time it sets the clock (`compute_clock_target_adj: ...`).
 
+## Configuring the console
+
+The console itself is configured through the standard WeeWX device path,
+which dispatches to this driver:
+
+```sh
+weectl device --info
+weectl device --current
+```
+
+All of the options are the same as the built-in Vantage driver's, and are
+documented in the
+[WeeWX hardware guide](https://weewx.com/docs/latest/hardware/vantage/) —
+with one exception:
+
+> **`--set-wind-cup` takes different codes here.**  The WeeWX guide
+> documents `0` (small) and `1` (large), which are the built-in driver's
+> codes.  This driver uses `1` (small), `2` (large), and `3` (other,
+> including the Davis sonic anemometer).  Following the WeeWX guide against
+> this driver therefore sets the *wrong* cup size, silently — `1` means
+> small here, not large.
+
+The reason is in the console, not the driver: newer firmware keeps the wind
+cup type in two bits at EEPROM 0xC3 with three possible values, rather than
+the single bit at 0x2B that the built-in driver writes.  That third value is
+what makes the sonic anemometer selectable.
+
 ## Running the tests
 
 The repository (not the release zip) carries a hermetic test suite — around
-170 tests covering the console protocol, packet decoding, DST handling, and a
-full WeeWX engine round trip into a temporary database.  **No weather station
-is needed**: console I/O is simulated, so the suite is safe to run anywhere.
+190 tests covering the console protocol, packet decoding, DST handling, the
+installer's config stanza, and a full WeeWX engine round trip into a
+temporary database.  **No weather station is needed**: console I/O is
+simulated, so the suite is safe to run anywhere.
 Run it from a checkout of this repository, using a Python that can import
 WeeWX 5 and has pytest installed.  Which Python that is depends on how WeeWX
 was installed:

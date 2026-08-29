@@ -1,3 +1,17 @@
+2.3 2026-08-29
+--------------
+When iss_id is not set in weewx.conf, the ISS is now guessed only from
+channels the console is listening to.  An unconfigured channel's transmitter
+type reads as 0, which decodes as "iss", so a free channel below the real ISS
+could win the guess, gauging rxCheckPercent against the wrong transmitter.
+Stations that set iss_id explicitly are unaffected; the id the driver settles
+on is now logged at startup.
+The installer now writes the options it can supply defaults for as commented
+out lines showing the default, rather than as live settings.  A live value
+froze that station on the default of the day for ever, since an upgrade never
+rewrites weewx.conf.  Thirteen options, iss_id among them.  Fresh installs
+only -- on an existing station, delete its iss_id line to pick up the guess.
+
 2.2 2026-07-24
 --------------
 Fix weectl device --set-retransmit: EEPROM 0x18 (RE_TRANSMIT_TX) takes the

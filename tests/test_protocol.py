@@ -693,6 +693,43 @@ class TestInit:
         station = VantageNext(type='serial', port='/dev/vantage')
         assert station.iss_id == 3
 
+    @staticmethod
+    def _guessed_iss_id(monkeypatch, use_tx, station_list):
+        port = ScriptedWrapper(
+            [WAKE, ACK, b'\x10'] + setup_reads()[1:]
+            + eeprom_reads(bytes([use_tx]), b'\x00', bytes(station_list)))
+        monkeypatch.setattr(VantageNext, '_port_factory',
+                            staticmethod(lambda vp_dict: port))
+        return VantageNext(type='serial', port='/dev/vantage').iss_id
+
+    def test_guess_skips_channels_the_console_is_not_listening_to(self, monkeypatch):
+        # An unconfigured channel's type nibble can read 0, and
+        # transmitter_type_dict[0] is 'iss' -- so a free channel below the
+        # real ISS used to win the guess, gauging rxCheckPercent against a
+        # transmitter that is not the ISS.  Here channel 1 reads as an 'iss'
+        # but its USETX listen bit is clear, so channel 2 must win.
+        station_list = bytearray(16)
+        station_list[0] = 0     # channel 1, type 0 -> decodes as 'iss'
+        station_list[2] = 0     # channel 2, type 0 -> the real ISS
+        assert self._guessed_iss_id(monkeypatch, 0b010, station_list) == 2
+
+    def test_guess_matches_this_sites_console(self, monkeypatch):
+        # The transmitter table read off a real Envoy: channel 1 unused and
+        # not listened to, the ISS on channel 2, a temp/hum station on 3.
+        # Also the regression for indexing the guess by CHANNEL: filtering
+        # the station list down to the listening channels compacts it, which
+        # would return 1 here -- the very answer the listen check exists to
+        # avoid.
+        assert self._guessed_iss_id(
+            monkeypatch, 6,
+            [10, 255, 0, 255, 3, 16, 10, 255,
+             10, 255, 10, 255, 10, 255, 10, 255]) == 2
+
+    def test_guess_falls_back_to_one_when_nothing_is_listened_to(self, monkeypatch):
+        station_list = bytearray(16)
+        station_list[2] = 0     # channel 2 would be an ISS, but USETX is 0
+        assert self._guessed_iss_id(monkeypatch, 0, station_list) == 1
+
     def test_dst_periods_ignored_with_warning(self, monkeypatch, caplog):
         # A leftover [[dst_periods]] section is NOT honored (a stale table
         # would silently lose the protection one day); the driver derives the

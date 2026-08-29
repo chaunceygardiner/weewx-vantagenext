@@ -240,4 +240,3 @@ class TestConfEditor:
         stanza = VantageNextConfEditor().default_stanza
         assert '[VantageNext]' in stanza
         assert 'driver = user.vantagenext' in stanza
-        assert 'dst_periods' in stanza

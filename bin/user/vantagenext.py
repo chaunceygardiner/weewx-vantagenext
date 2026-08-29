@@ -29,7 +29,7 @@ from weewx.crc16 import crc16
 log = logging.getLogger(__name__)
 
 DRIVER_NAME = 'VantageNext'
-DRIVER_VERSION = '2.2'
+DRIVER_VERSION = '2.3'
 
 int2byte = struct.Struct(">B").pack
 
@@ -543,7 +543,8 @@ class VantageNext(weewx.drivers.AbstractDevice):
             system's timezone database; setTime is skipped from 5 minutes before
             a time change until 5 minutes after the shifted clock catches up.
 
-            iss_id: The station number of the ISS [Optional. Default is 1]
+            iss_id: The station number of the ISS [Optional. If omitted, it
+            is read from the console's transmitter table at startup.]
 
             model_type: Vantage Pro model type. 1=Vantage Pro; 2=Vantage Pro2
             [Optional. Default is 2]
@@ -1158,10 +1159,13 @@ class VantageNext(weewx.drivers.AbstractDevice):
         """Set the wind cup type.
 
         Args:
-            new_wind_cup_code(int): The new wind cup type. Must be one of 0, 1 or 2
+            new_wind_cup_code(int): The new wind cup type. Must be 1 (small),
+            2 (large) or 3 (other, including the Davis sonic anemometer).
+            These are NOT the built-in Vantage driver's codes, which are 0
+            (small) and 1 (large).
 
         older firmware: windcup bit is at 0x2b: 0, 1 (small, large)
-        later firmware: windcup bits are at 0xc3: 1,2, 3 (small, large, other)
+        later firmware: windcup bits are at 0xc3: 1, 2, 3 (small, large, other)
         """
         if new_wind_cup_code not in (1, 2, 3):
             raise weewx.ViolatedPrecondition("Invalid wind cup code %d" % new_wind_cup_code)
@@ -1708,30 +1712,34 @@ class VantageNext(weewx.drivers.AbstractDevice):
         self.wind_cup_size    = VantageNext.wind_cup_dict.get(self.wind_cup_type, 'unknown')
         self.rain_bucket_size = VantageNext.rain_bucket_dict[self.rain_bucket_type]
 
-        # Try to guess the ISS ID for gauging reception strength.
+        # Try to guess the ISS ID for gauging reception strength.  Only
+        # channels the console is actually listening to are considered: an
+        # unconfigured channel's type nibble can read 0, which decodes as
+        # 'iss' (transmitter_type_dict[0]), so a free channel below the real
+        # ISS would otherwise win and rxCheckPercent would be gauged against
+        # a transmitter that is not the ISS.  The listen bits come from
+        # USETX (EEPROM 0x17), which getStnTransmitters has already read.
         if self.iss_id is None:
             stations = self.getStnTransmitters()
-            # Wind retransmitter is the best candidate.
-            for station_id in range(0, 8):
-                if stations[station_id]['transmitter_type'] == 'wind':
-                    self.iss_id = station_id + 1  # Origin 1.
-                    break
-            else:
-                # ISS is next best candidate.
-                for station_id in range(0, 8):
-                    if stations[station_id]['transmitter_type'] == 'iss':
-                        self.iss_id = station_id + 1  # Origin 1.
-                        break
-                else:
-                    # On Vue, can use VP2 ISS, which reports as "rain"
-                    for station_id in range(0, 8):
-                        if stations[station_id]['transmitter_type'] == 'rain':
-                            self.iss_id = station_id + 1  # Origin 1.
-                            break
-                    else:
-                        self.iss_id = 1  # Pick a reasonable default.
 
-        log.debug("ISS ID is %s", self.iss_id)
+            def listening_for(wanted):
+                """The channel (origin 1) carrying `wanted`, or None.  The
+                list is indexed by channel, so it is never compacted: the
+                listen bit is tested in place."""
+                for station_id in range(0, 8):
+                    station = stations[station_id]
+                    if (station['listen'] == 'active'
+                            and station['transmitter_type'] == wanted):
+                        return station_id + 1  # Origin 1.
+                return None
+
+            # Wind retransmitter is the best candidate, then the ISS, and on
+            # a Vue a VP2 ISS, which reports as "rain".
+            self.iss_id = (listening_for('wind') or listening_for('iss')
+                           or listening_for('rain')
+                           or 1)  # Pick a reasonable default.
+
+        log.info("ISS ID is %s", self.iss_id)
 
     def _getEEPROM_value(self, offset, v_format="B"):
         """Return a list of values from the EEPROM starting at a specified offset, using a
@@ -3239,6 +3247,11 @@ class VantageNextConfEditor(weewx.drivers.AbstractConfEditor):
 [VantageNext]
     # This section is for the Davis Vantage series of weather stations.
 
+    # An option shown commented out is one the driver supplies itself.
+    # Leave it commented and the driver's own value governs, including a
+    # better one a later release might bring.  Uncomment it to pin this
+    # station to the value written here.
+
     # Connection type: serial or ethernet
     #  serial (the classic VantagePro)
     #  ethernet (the WeatherLinkIP or Serial-Ethernet bridge)
@@ -3256,56 +3269,55 @@ class VantageNextConfEditor(weewx.drivers.AbstractConfEditor):
     host = 1.2.3.4
 
     # Serial baud rate (usually 19200)
-    baudrate = 19200
+    #baudrate = 19200
 
     # TCP port (when using the WeatherLinkIP)
-    tcp_port = 22222
+    #tcp_port = 22222
 
     # TCP send delay (when using the WeatherLinkIP):
-    tcp_send_delay = 0.5
+    #tcp_send_delay = 0.5
 
     # The type of LOOP packet to request: 1 = LOOP1; 2 = LOOP2; 3 = both
-    loop_request = 1
+    #loop_request = 1
 
-    # The id of your ISS station (usually 1). If you use a wind meter connected
-    # to a anemometer transmitter kit, use its id
-    iss_id = 1
+    # The id of your ISS station.  Left commented out, the driver reads it
+    # from the console's transmitter table at startup and logs what it
+    # settled on ("ISS ID is ..."); check that line if rxCheckPercent looks
+    # wrong.  The value below is only an example of the form -- uncomment
+    # it to name the id yourself, e.g. if you use a wind meter connected to
+    # an anemometer transmitter kit, use its id.
+    #iss_id = 1
 
     # How long to wait for a response from the station before giving up (in
     # seconds; must be greater than 2)
-    timeout = 4
+    #timeout = 4
 
     # How long to wait before trying again (in seconds)
-    wait_before_retry = 1.2
+    #wait_before_retry = 1.2
 
     # How many times to try before giving up:
-    max_tries = 4
+    #max_tries = 4
 
     # The number of seconds to add to current time when setting the time.
     # (Due to delay in sending and executing the command on the console.)
-    set_time_padding = 0.17
+    #set_time_padding = 0.17
 
     # The amount of time, in seconds, that the console clock drifts.
     # A negative number means the console loses time.
-    clock_drift_secs = -3.1
+    #clock_drift_secs = -3.1
 
     # The number of seconds the console jumps just after midnight.
-    day_start_jump = 2.83
+    #day_start_jump = 2.83
 
     # When setting time, the delta in seconds from actual time to shoot for,
     # just after midnight when the clock jumps.
-    time_set_goal = 1.85
+    #time_set_goal = 1.85
 
     # Vantage model Type: 1 = Vantage Pro; 2 = Vantage Pro2
-    model_type = 2
+    #model_type = 2
 
     # The driver to use:
     driver = user.vantagenext
-
-    # DST time-change windows (setTime is skipped and console-time misreads
-    # are corrected inside them) are derived automatically from the operating
-    # system's timezone database.  A [[dst_periods]] section from earlier
-    # versions is obsolete and ignored; please delete it.
 """
 
     def prompt_for_settings(self):
