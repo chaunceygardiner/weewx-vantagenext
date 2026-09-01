@@ -96,13 +96,27 @@ one of the specific problems it solves.
 
 1. Download the [latest release](https://github.com/chaunceygardiner/weewx-vantagenext/releases/latest/download/weewx-vantagenext.zip).
 
-1. Install it:
+1. Install it.
 
-   `sudo weectl extension install weewx-vantagenext.zip`
+   On a pip install `weectl` lives in the virtual environment, so
+   activate it first (yours may sit elsewhere; `~/weewx-venv` is the usual
+   place):
 
-   Note: if WeeWX is installed in a virtual environment, activate it first so
-   that the weectl command is found (e.g.,
-   `sudo -- bash -c ". /home/weewx/weewx-venv/bin/activate; weectl extension install weewx-vantagenext.zip"`).
+   ```
+   source ~/weewx-venv/bin/activate
+   weectl extension install weewx-vantagenext.zip
+   ```
+
+   On a Debian or Red Hat package install there is no environment to
+   activate and `weectl` is already on the path:
+
+   ```
+   weectl extension install weewx-vantagenext.zip
+   ```
+
+   No `sudo`: that install put your account in the `weewx` group, which
+   owns the files.  If you installed WeeWX in this same login session, log
+   out and back in first so the group membership takes effect.
 
 1. Edit the `Station` section of weewx.conf.  Change the `station_type` value
    to `VantageNext`.
