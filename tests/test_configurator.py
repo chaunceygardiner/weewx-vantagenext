@@ -14,7 +14,10 @@ service's loop-gust bookkeeping.  The station is stubbed: these tests cover
 the option parsing, validation, and dispatch ABOVE the console protocol
 (which test_protocol.py covers)."""
 
+import datetime
 import types
+
+from common import ClockConsole, FakeClock, clock_station
 
 from vantagenext import (VantageNextConfEditor, VantageNextConfigurator,
                          VantageNextService)
@@ -240,3 +243,29 @@ class TestConfEditor:
         stanza = VantageNextConfEditor().default_stanza
         assert '[VantageNext]' in stanza
         assert 'driver = user.vantagenext' in stanza
+
+
+# ===============================================================================
+#                            --set-time
+# ===============================================================================
+
+class TestSetTime:
+    """weectl device --set-time prints what the driver did, which may be
+    nothing; the reason must reach the terminal, not just the log."""
+
+    def test_reports_the_step(self, capsys):
+        clock = FakeClock(datetime.datetime(2026, 9, 15, 14, 30, 0, 250000).timestamp())
+        console = ClockConsole(clock, 7.80)
+        VantageNextConfigurator.set_time(clock_station(clock, console))
+        out = capsys.readouterr().out
+        assert 'Clock stepped -8 s' in out
+        assert 'Current console time is' in out
+        # The getTime that prints the time did not move the clock again.
+        assert len(console.sets) == 1
+
+    def test_reports_why_nothing_was_done(self, capsys):
+        clock = FakeClock(datetime.datetime(2026, 9, 15, 0, 3, 0, 250000).timestamp())
+        console = ClockConsole(clock, 7.80)
+        VantageNextConfigurator.set_time(clock_station(clock, console, day_start_jump=3.6))
+        assert 'Not set: in the 600 seconds after midnight' in capsys.readouterr().out
+        assert console.sets == []

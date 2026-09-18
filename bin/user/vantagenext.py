@@ -13,6 +13,7 @@ or VantageVue weather station"""
 import datetime
 import inspect
 import logging
+import math
 import struct
 import sys
 import time
@@ -29,7 +30,7 @@ from weewx.crc16 import crc16
 log = logging.getLogger(__name__)
 
 DRIVER_NAME = 'VantageNext'
-DRIVER_VERSION = '2.3'
+DRIVER_VERSION = '2.4'
 
 int2byte = struct.Struct(">B").pack
 
@@ -525,18 +526,20 @@ class VantageNext(weewx.drivers.AbstractDevice):
             max_tries: How many times to try again before giving up. [Optional.
             Default is 4]
 
-            set_time_padding: The number of seconds to add to the current time when
-            calling setTime. [Optional. Default is 0.17]
-
             clock_drift_secs: The number of seconds the console clock drifts
             in a day. [Optional. Default is -3.1]
 
             day_start_jump: The number of seconds the clock jumps at the
             start of the day.  [Optional.  Default is 2.83]
 
-            time_set_goal: The time ahead of actual time (postive number) or
-            behind actual time (negative) number to shoot for just after midnight
-            when the clock jumps.  [Optional.  Default is 1.85]
+            clock_recenter_threshold: How far, in seconds, the console clock
+            may stand from the center of its daily sawtooth before the driver
+            steps it back.  Smaller is more accurate and sets the clock more
+            often.  [Optional.  Default is 1.2; the minimum is 0.7]
+
+            set_time_padding, time_set_goal: OBSOLETE and ignored (a warning is
+            logged if present).  The console keeps its own sub-second tick
+            across a clock set, so neither could do what it was for.
 
             dst_periods: OBSOLETE and ignored (a warning is logged if present).
             DST time change windows are derived automatically from the operating
@@ -558,18 +561,20 @@ class VantageNext(weewx.drivers.AbstractDevice):
 
         # These come from the configuration dictionary:
         self.max_tries = to_int(vp_dict.get('max_tries', 4))
-        self.set_time_padding = to_float(vp_dict.get('set_time_padding', 0.17))
         self.clock_drift_secs = to_float(vp_dict.get('clock_drift_secs', -3.1))
         self.day_start_jump = to_float(vp_dict.get('day_start_jump', 2.83))
-        self.time_set_goal = to_float(vp_dict.get('time_set_goal', 1.85))
+        self.clock_recenter_threshold = to_float(vp_dict.get('clock_recenter_threshold', 1.2))
         self.iss_id = to_int(vp_dict.get('iss_id'))
         self.model_type = to_int(vp_dict.get('model_type', 2))
 
         log.info('max_tries          : %d', self.max_tries)
-        log.info('set_time_padding   : %f', self.set_time_padding)
         log.info('clock_drift_secs   : %f', self.clock_drift_secs)
         log.info('day_start_jump     : %f', self.day_start_jump)
-        log.info('time_set_goal      : %f', self.time_set_goal)
+        if self.clock_recenter_threshold < VantageNext.CLOCK_MIN_THRESHOLD:
+            log.warning('clock_recenter_threshold of %f is too tight to hold a whole-second '
+                        'step; using %f.', self.clock_recenter_threshold, VantageNext.CLOCK_MIN_THRESHOLD)
+            self.clock_recenter_threshold = VantageNext.CLOCK_MIN_THRESHOLD
+        log.info('clock_recenter_threshold: %f', self.clock_recenter_threshold)
         # iss_id is None when not configured (it is guessed in _setup), so %s.
         log.info('iss_id             : %s', self.iss_id)
         log.info('model_type         : %d', self.model_type)
@@ -582,6 +587,12 @@ class VantageNext(weewx.drivers.AbstractDevice):
             log.warning('The [[dst_periods]] section in weewx.conf is obsolete and IGNORED: '
                         'DST time change windows are derived from the OS timezone database. '
                         'Please delete the section.')
+        for obsolete in ('set_time_padding', 'time_set_goal'):
+            if obsolete in vp_dict:
+                log.warning('The %s option in weewx.conf is obsolete and IGNORED: the console '
+                            'keeps its own sub-second tick across a clock set, so the clock is '
+                            'now stepped by whole seconds to the center of its daily drift '
+                            '(see clock_recenter_threshold).  Please delete the option.', obsolete)
         now = time.time()
         self.time_change_windows = VantageNext.derive_time_change_windows(
             now - 86400, now + 10 * 366 * 86400)
@@ -604,6 +615,9 @@ class VantageNext(weewx.drivers.AbstractDevice):
 
         self.pkt_count = 0
         self.on_bad_read = False
+
+        # See "Keeping the console clock": no unforced clock set just yet.
+        self._next_unforced_set_ts = self._now() + VantageNext.CLOCK_STARTUP_HOLDOFF
 
     @staticmethod
     def compose_time_change_windows(dst_periods):
@@ -976,11 +990,372 @@ class VantageNext(weewx.drivers.AbstractDevice):
                 yield (_ipage, _index, y, mo, d, h, mn, time_ts)
         log.debug("VantageNext: Finished logger summary.")
 
-    def getTime(self):
-        """Get the current time from the console, returning it as timestamp"""
+    # ===========================================================================
+    # Keeping the console clock
+    #
+    # What the console does, measured on seven Envoys over 33 days (2026-09):
+    #
+    #   1. It loses time at a steady rate all day: clock_drift_secs, in seconds
+    #      per day, negative for a clock that loses.  The rate does not vary
+    #      with the hour.
+    #   2. Just after local midnight (between 00:00:06 and 00:05) it jumps
+    #      forward by day_start_jump seconds.
+    #   3. SETTIME replaces the hour, minute and second and nothing finer.  The
+    #      console keeps its own sub-second tick, so a set moves the clock by a
+    #      WHOLE number of seconds (40 sets: each within 0.08 s of a whole
+    #      number).  No care about WHEN the command is sent can place the clock
+    #      to a fraction of a second.
+    #   4. GETTIME answers in whole seconds, truncated, so one reading is low
+    #      by the fraction it dropped: anywhere from 0 to 1 s, 0.5 on average.
+    #
+    # 1 and 2 make the error a sawtooth |clock_drift_secs| tall that no setting
+    # can flatten.  The best on offer is to CENTER it on zero, so the ideal
+    # error is -clock_drift_secs/2 just after the jump, sliding at the drift
+    # rate to +clock_drift_secs/2 just before the next one
+    # (ideal_clock_error).  How far the clock stands from that is its
+    # OFF-CENTER distance, which holds steady all day and grows by the net
+    # creep, clock_drift_secs + day_start_jump, at each jump.  Half a day's
+    # creep is added as look-ahead so the band is centered over the day to
+    # come (clock_off_center).
+    #
+    # The decision (clock_step) is a pure function of that distance:
+    #
+    #   within clock_recenter_threshold   do nothing.
+    #   beyond it                         step a whole number of seconds to the
+    #                                     side of the band the net creep comes
+    #                                     FROM, to go as long as possible
+    #                                     before the next set (a set tends to
+    #                                     cost zero reads on the LOOP stream),
+    #                                     but stop CLOCK_LANDING_GUARD short of
+    #                                     that trigger.  Without the guard a
+    #                                     threshold of exactly 1.0 lands ON the
+    #                                     trigger and noise bounces it back.
+    #                                     Which side the clock was FOUND on
+    #                                     does not come into it: it is usually
+    #                                     the side the creep pushes toward,
+    #                                     but after an upgrade, a forced set or
+    #                                     a change of options it may be the
+    #                                     other, and crossing the band from
+    #                                     there would land it next to the
+    #                                     trigger it is already heading for.
+    #                                     With a creep under CLOCK_MIN_CREEP
+    #                                     there is no such side: to the center.
+    #   forced (setTime)                  step to the center.
+    #
+    # Because of 4, a step to a side of the band is only safe on a PRECISE
+    # error.  That comes from polling GETTIME until the second changes: the
+    # console's second began between those two readings, so the error is
+    # known to half the gap between them (_measure_clock_error).  At 19200
+    # baud a poll is a few ms.  When the gap is too wide to be useful (a
+    # WeatherLinkIP spends tcp_send_delay on every write) the reading is
+    # COARSE, good to +-0.5 s, and the rule turns timid: act only when the
+    # distance is beyond the threshold whatever the dropped fraction was, and
+    # step to the center.  A coarse step can never leave the clock further
+    # out than it found it.
+    # The poll is made only when a precise reading could exceed the threshold.
+    #
+    # Nothing is decided inside a DST time change window, nor in the first
+    # CLOCK_JUMP_WINDOW seconds of the day, when the jump may be half done.
+    #
+    # The ONLY state is _next_unforced_set_ts, the earliest time an unforced
+    # step is allowed, and it has one rule: it is ARMED AT PROCESS START AND
+    # AT EVERY SET ATTEMPT.
+    #   - At an attempt, forced or not, and BEFORE it is made: for
+    #     CLOCK_MIN_SET_INTERVAL.  A console that does not follow 1 and 2 --
+    #     whose ideal curve is therefore wrong -- then costs one set a day at
+    #     worst rather than one an hour.  Before, not after, because a set
+    #     whose ACK or read-back is lost has still happened; and a console
+    #     that will not take a set at all should not be tried hourly either.
+    #   - At process start: for CLOCK_STARTUP_HOLDOFF.  The state does not
+    #     outlive the process, so without this every restart could set the
+    #     clock again -- just ahead of the archive catch-up, and on a console
+    #     whose sets cause the read errors that cause the restarts, around
+    #     and around.  The first unforced step comes at a later clock check.
+    # It is read in one place (_keep_clock) and written in two (__init__,
+    # and _keep_clock ahead of the attempt).  The forced form is never held
+    # back: a clock wrong by more than max_drift is set at startup as before.
+    #
+    # Two entry points.  getTime, which weewx.engine's StdTimeSynch calls every
+    # clock_check seconds, runs the unforced decision and reports the error
+    # that results; the engine offers the driver no other regular hook.
+    # (StdArchive also calls it, once, to prime its first archive period.
+    # That is one more unforced decision at startup, a moment after
+    # StdTimeSynch's, and it comes to the same answer.)  setTime, which
+    # StdTimeSynch calls when that error exceeds max_drift, is the forced
+    # form; weectl device --set-time calls it too.  With sane options
+    # max_drift is a backstop that never fires.
+    # ===========================================================================
 
-        time_dt = self.getConsoleTime()
-        return time_dt.timestamp()
+    # Stop this far short of the trigger when stepping to a side of the band.
+    CLOCK_LANDING_GUARD = 0.3
+    # A net creep (s/day) smaller than this has no dependable direction: the
+    # noise in the daily jump is as big.
+    CLOCK_MIN_CREEP = 0.1
+    # No decisions this long after local midnight: the jump may be in progress.
+    CLOCK_JUMP_WINDOW = 600
+    # The least time between an unforced set and the set attempt before it...
+    CLOCK_MIN_SET_INTERVAL = 20 * 3600
+    # ...and between an unforced set and the start of the process.
+    CLOCK_STARTUP_HOLDOFF = 1800
+    # Two readings this close together either side of a second boundary make
+    # a precise error; any wider and the reading is coarse.
+    CLOCK_MAX_EDGE_GAP = 0.25
+    # Give up looking for a second boundary after this long, or this many polls.
+    CLOCK_EDGE_POLL_SECS = 1.5
+    CLOCK_EDGE_MAX_POLLS = 200
+    # A threshold any tighter cannot hold a whole-second step and the guard:
+    # a 1 s step from just beyond it must land the guard short of the far
+    # trigger, so 2 * threshold >= 1 + CLOCK_LANDING_GUARD.
+    CLOCK_MIN_THRESHOLD = 0.7
+
+    _next_unforced_set_ts = 0.0
+
+    @staticmethod
+    def _now():
+        """The host's time.  A method so that tests can supply a clock."""
+        return time.time()
+
+    @staticmethod
+    def _sleep(secs):
+        time.sleep(secs)
+
+    @staticmethod
+    def ideal_clock_error(secs_into_day, clock_drift_secs):
+        """The error, in seconds, that a perfectly centered console clock shows
+        this far into the local day."""
+        return -clock_drift_secs / 2.0 + clock_drift_secs * secs_into_day / 86400.0
+
+    @staticmethod
+    def clock_off_center(error, secs_into_day, clock_drift_secs, day_start_jump):
+        """How far the clock stands from the centered sawtooth, looking half a
+        day's net creep ahead."""
+        return (error - VantageNext.ideal_clock_error(secs_into_day, clock_drift_secs)
+                + (clock_drift_secs + day_start_jump) / 2.0)
+
+    @staticmethod
+    def clock_step(off_center, threshold, precise, forced, creep):
+        """The whole number of seconds to move the console clock by; 0 to
+        leave it alone.  creep is the net movement of the clock in a day,
+        clock_drift_secs + day_start_jump.  See "Keeping the console clock"
+        above."""
+        if not forced:
+            # A coarse reading may be out by 0.5 s either way.
+            trigger = threshold if precise else threshold + 0.5
+            if abs(off_center) <= trigger:
+                return 0
+        if forced or not precise or abs(creep) < VantageNext.CLOCK_MIN_CREEP:
+            # To the center.
+            return -math.floor(off_center + 0.5)
+        # To the side of the band the creep comes from, short of its edge:
+        # the clock lands within a second of `reach` from the center, on that
+        # side.  Beyond the threshold this is never a step of 0.
+        reach = threshold - VantageNext.CLOCK_LANDING_GUARD
+        if creep > 0:
+            return -math.floor(off_center + reach)
+        return math.floor(reach - off_center)
+
+    def getTime(self):
+        """Get the current time from the console, returning it as timestamp.
+
+        This is also where the console clock is kept: see "Keeping the console
+        clock" above.  The time returned is the driver's best estimate of the
+        console's time AFTER any step, fraction included, so the clock error
+        weewx.engine logs is neither 0.5 s low nor stale."""
+
+        # The error FIRST: measuring it can take a second, and the time
+        # returned must be the console's time now, not when the call began.
+        error, unused_outcome = self._keep_clock(forced=False)
+        return self._now() + error
+
+    def setTime(self):
+        """Set the clock on the Davis Vantage console: step it, by a whole
+        number of seconds, to the center of its daily sawtooth.  Returns a
+        sentence saying what was done, which may be nothing (weewx.engine
+        ignores it; weectl device --set-time prints it)."""
+
+        unused_error, outcome = self._keep_clock(forced=True)
+        return outcome
+
+    def _poll_console(self):
+        """One GETTIME.  Returns the console's time (whole seconds) and the
+        host's time on reading it."""
+        console_ts = self.getConsoleTime().timestamp()
+        return console_ts, self._now()
+
+    def _measure_clock_error(self):
+        """Poll GETTIME until the console's second changes.  Returns
+        (error, gap): gap is the time between the two readings either side of
+        the second boundary, or None if the error is coarse."""
+
+        console_ts, now = self._poll_console()
+        start = now
+        for unused_count in range(VantageNext.CLOCK_EDGE_MAX_POLLS):
+            if now - start >= VantageNext.CLOCK_EDGE_POLL_SECS:
+                break
+            prev_ts, prev_now = console_ts, now
+            console_ts, now = self._poll_console()
+            if console_ts != prev_ts:
+                gap = now - prev_now
+                if console_ts - prev_ts == 1 and gap <= VantageNext.CLOCK_MAX_EDGE_GAP:
+                    # The console's second began between the two readings, so
+                    # its time now is console_ts plus somewhere from 0 to gap.
+                    return console_ts + gap / 2.0 - now, gap
+                break
+        # No usable boundary: assume the dropped fraction was the average one.
+        return console_ts + 0.5 - now, None
+
+    def _keep_clock(self, forced):
+        """Decide whether the console clock needs a step and, if so, make it.
+        Returns the clock error (console minus host, in seconds) afterwards,
+        and a sentence saying what was done."""
+
+        console_ts, now = self._poll_console()
+        error = console_ts + 0.5 - now
+
+        # Under no circumstances, set the time from 1:55 to 3:05 AM on the morning
+        # of daylight savings time going into effect.
+        # Ditto for 12:55 to to 2:05 AM on the morning of standard time going into
+        # effect.  The reason: the VantageNext driver will report a time off by an hour,
+        # and WeeWX will "correct" the time (wreaking havoc).  Below is what happened
+        # when moving to standard time.  The clock was set to 1 AM.  This was interpreted
+        # as 1 AM PDT (back to 1 hour before ST sets in).  Of course, that resulted in
+        # unique key constraints (and continued 1 hour clock sets), such that one hour
+        # of data was lost.
+        # Nov  1 01:00:04 ella weewx[7206] INFO weewx.engine: Clock error is -3599.62 seconds (positive is fast)
+        # Nov  1 01:00:04 ella weewx[7206] INFO user.vantagenext: Clock set to 2020-11-01 01:00:05 PST (1604221205) (225027)
+        if VantageNext.inTimeChangeWindow(self.time_change_windows, datetime.datetime.fromtimestamp(now)):
+            if forced:
+                log.info("setTime ignored during time change transition period.")
+            return error, "Not set: inside a time change transition period."
+
+        secs_into_day = now - startOfDay(now)
+        # The forced form is refused here too, HOWEVER wrong the clock is, and
+        # that is deliberate.  Inside this window there is no telling whether
+        # the jump has happened, so a set now is a guess that may leave the
+        # clock a whole day_start_jump off center -- and, having armed
+        # _next_unforced_set_ts, would lock the driver's own correction out
+        # for CLOCK_MIN_SET_INTERVAL.  Refusing costs a grossly wrong clock one
+        # clock_check of waiting, after which it is set properly.  It takes a
+        # badly wrong console AND a first check in these ten minutes; the same
+        # trade is made inside a time change window, above.
+        if self.day_start_jump and secs_into_day < VantageNext.CLOCK_JUMP_WINDOW:
+            if forced:
+                log.info("setTime ignored in the %d seconds after midnight, while the console's "
+                         "daily jump may be in progress.", VantageNext.CLOCK_JUMP_WINDOW)
+            return error, ("Not set: in the %d seconds after midnight the console's daily jump "
+                           "may be in progress." % VantageNext.CLOCK_JUMP_WINDOW)
+
+        off_center = VantageNext.clock_off_center(
+            error, secs_into_day, self.clock_drift_secs, self.day_start_jump)
+        if not forced:
+            # This reading is good to +-0.5 s.  Poll for a precise error only
+            # if one could exceed the threshold -- and, while no unforced set
+            # is allowed anyway, not at all.  A step to a side LANDS the clock
+            # most of a threshold off center, by design, so while held the
+            # complaint below is for a clock that is beyond its threshold
+            # whatever the dropped fraction was, never for one that may be
+            # exactly where the last step put it.
+            held_for = self._next_unforced_set_ts - now
+            slack = 0.5 if held_for > 0 else -0.5
+            if abs(off_center) <= self.clock_recenter_threshold + slack:
+                log.info("Clock is about %+.2f s off center (threshold %.2f).",
+                         off_center, self.clock_recenter_threshold)
+                return error, "Not set: the clock is within its threshold."
+            if held_for > 0:
+                log.info("Clock is about %+.2f s off center (threshold %.2f), but it may not be "
+                         "set for another %.1f hours (weewx started, or the clock was set, too "
+                         "recently); leaving it alone.%s",
+                         off_center, self.clock_recenter_threshold, held_for / 3600.0,
+                         "  If this repeats, clock_drift_secs and day_start_jump do not describe "
+                         "this console." if held_for > VantageNext.CLOCK_STARTUP_HOLDOFF else "")
+                return error, "Not set: the clock may not be set again yet."
+
+        error, gap = self._measure_clock_error()
+        off_center = VantageNext.clock_off_center(
+            error, self._now() - startOfDay(now), self.clock_drift_secs, self.day_start_jump)
+        step = VantageNext.clock_step(off_center, self.clock_recenter_threshold, gap is not None, forced,
+                                      self.clock_drift_secs + self.day_start_jump)
+        reading = "coarse" if gap is None else "measured to %.0f ms" % (gap * 500.0)
+        if step == 0:
+            log.info("Clock is %+.2f s off center (threshold %.2f, %s); not set.",
+                     off_center, self.clock_recenter_threshold, reading)
+            return error, ("Not set: the clock is %+.2f s from the center of its daily drift, "
+                           "and it moves only by whole seconds." % off_center)
+
+        # Armed BEFORE the attempt: see "Keeping the console clock".
+        self._next_unforced_set_ts = self._now() + VantageNext.CLOCK_MIN_SET_INTERVAL
+        self._step_console_clock(step, error, gap)
+        log.info("Clock stepped %+d s: error %+.2f -> %+.2f s, off center %+.2f -> %+.2f s "
+                 "(threshold %.2f, %s) (%d)",
+                 step, error, error + step, off_center, off_center + step,
+                 self.clock_recenter_threshold, reading, self.pkt_count)
+        return error + step, "Clock stepped %+d s: error %+.2f -> %+.2f s." % (step, error, error + step)
+
+    def _step_console_clock(self, step, error, gap):
+        """Move the console clock by step whole seconds.  error is the clock
+        error before the step; gap is from _measure_clock_error."""
+
+        for unused_count in range(self.max_tries):
+            try:
+                # Wake the console and begin the setTime command
+                self.port.wakeup_console(max_tries=self.max_tries)
+                self.port.send_data(b'SETTIME\n')
+
+                # The console's whole second must not change between working
+                # it out and the console acting on it.
+                self._avoid_second_boundary(error, gap)
+
+                # The console's clock reads host time + error.  Its whole
+                # second, moved by step, is the time to set; sending the same
+                # time twice is harmless, so a lost ACK may simply be retried.
+                newtime_ts = math.floor(self._now() + error) + step
+                newtime_tt = time.localtime(newtime_ts)
+
+                # The Davis expects the time in reverse order, and the year is since 1900.
+                # The year byte is UNSIGNED: 2028 - 1900 does not fit a signed one.
+                _buffer = struct.pack("<bbbbbB", newtime_tt[5], newtime_tt[4], newtime_tt[3], newtime_tt[2],
+                                                 newtime_tt[1], newtime_tt[0] - 1900)
+
+                # Complete the setTime command
+                self.port.send_data_with_crc16(_buffer, max_tries=1)
+                break
+            except weewx.WeeWxIOError:
+                # Caught an error. Keep retrying...
+                continue
+        else:
+            log.error("Max retries exceeded while setting time")
+            raise weewx.RetriesExceeded("Max retries exceeded while setting time")
+
+        if gap is not None:
+            # Did the set take?  Read the clock back, again clear of a boundary.
+            # The set has been made whatever becomes of this; a console is at
+            # its most likely to fumble a read just after one.
+            self._avoid_second_boundary(error, gap)
+            try:
+                console_ts, now = self._poll_console()
+            except weewx.WeeWxIOError as e:
+                log.warning("The clock was set, but could not be read back to check it: %s", e)
+                return
+            expected_ts = math.floor(now + error) + step
+            if console_ts != expected_ts:
+                log.warning("After the clock set the console reads %s; expected %s.",
+                            weeutil.weeutil.timestamp_to_string(console_ts),
+                            weeutil.weeutil.timestamp_to_string(expected_ts))
+
+    def _avoid_second_boundary(self, error, gap):
+        """Wait, if need be, until the console is in a part of its second
+        where a command sent now is acted on before the second changes.  The
+        console's fraction is known to +-margin, and gap -- the time between
+        two polls -- is an upper bound on how long a command takes to reach
+        it.  With a coarse error there is nothing to go on."""
+        if gap is None:
+            return
+        margin = gap / 2.0 + 0.02
+        fraction = (self._now() + error) % 1.0
+        if fraction > 1.0 - margin - gap:
+            self._sleep(1.0 - fraction + margin)
+        elif fraction < margin:
+            self._sleep(margin - fraction)
 
     def getConsoleTime(self):
         """Return the time on the console, corrected for a possible one-hour DST
@@ -995,10 +1370,11 @@ class VantageNext(weewx.drivers.AbstractDevice):
                 self.port.send_data(b'GETTIME\n')
                 # ... get the binary data. No prompt, only one try:
                 _buffer = self.port.get_data_with_crc16(8, max_tries=1)
-                (sec, minute, hr, day, mon, yr, unused_crc) = struct.unpack("<bbbbbbH", _buffer)
+                # The year byte is unsigned (see _step_console_clock).
+                (sec, minute, hr, day, mon, yr, unused_crc) = struct.unpack("<bbbbbBH", _buffer)
 
                 device_time = time.mktime(datetime.datetime(yr + 1900, mon, day, hr, minute, sec).timetuple())
-                now = datetime.datetime.now()
+                now = datetime.datetime.fromtimestamp(self._now())
                 adjusted_time = VantageNext.adjust_for_dst(
                     now, device_time, VantageNext.inTimeChangeWindow(self.time_change_windows, now))
                 log.debug('getConsoleTime: device_time(%s): %r, adjusted_time(%s): %r' % (type(device_time), device_time, type(adjusted_time), adjusted_time))
@@ -1026,88 +1402,6 @@ class VantageNext(weewx.drivers.AbstractDevice):
                         log.info("In time change transition period.")
                     return window[2]
         return None
-
-    @staticmethod
-    def hours_to_midnight():
-        now = time.time()
-        start_of_day = startOfDay(now)
-        return (start_of_day + (3600 * 24) - now) / 3600.0
-
-    @staticmethod
-    def compute_clock_target_adj(time_set_goal, clock_drift_secs, day_start_jump):
-        # It has been observed that the console loses time throught the day;
-        # only to jump ahead at midnight.  As such, clock_drift_secs
-        # should be set to the average number of seconds lost (negative number) in
-        # 24 hours or gained (positive number) in 24 hours if your console gains time.
-        # day_start_jump is the average number of seconds jumped (positive number) just
-        # after midnight.
-        # Target is time_set_goal just after midnight.
-        target_adj = time_set_goal
-        log.debug("Target time just after midnight is %f" % target_adj)
-        # Adjust for the time we'll lose (gain) from now until midnight.
-        delta_to_midnight = VantageNext.hours_to_midnight() / 24.0 * clock_drift_secs
-        log.debug("Delta to midnight is %f" % delta_to_midnight)
-        target_adj -= delta_to_midnight
-        # Adjust for the jump after midnight
-        target_adj -= day_start_jump
-        log.debug("After adjusting for jump after midnight of %f, target adj is %f" % (day_start_jump, target_adj))
-        # compute_clock_target_adj: goal: 1.850000, drift: -2.700000, delta: -0.009272, day_jump: 2.090000, target_adj: -0.230728
-        log.info("compute_clock_target_adj: %f, %f, %f, %f, %f" % (time_set_goal, clock_drift_secs, delta_to_midnight, day_start_jump, target_adj))
-        return target_adj
-
-    def setTime(self):
-        """Set the clock on the Davis Vantage console"""
-
-        # Under no circumstances, set the time from 1:55 to 3:05 AM on the morning
-        # of daylight savings time going into effect.
-        # Ditto for 12:55 to to 2:05 AM on the morning of standard time going into
-        # effect.  The reason: the VantageNext driver will report a time off by an hour,
-        # and WeeWX will "correct" the time (wreaking havoc).  Below is what happened
-        # when moving to standard time.  The clock was set to 1 AM.  This was interpreted
-        # as 1 AM PDT (back to 1 hour before ST sets in).  Of course, that resulted in
-        # unique key constraints (and continued 1 hour clock sets), such that one hour
-        # of data was lost.
-        # Nov  1 01:00:04 ella weewx[7206] INFO weewx.engine: Clock error is -3599.62 seconds (positive is fast)
-        # Nov  1 01:00:04 ella weewx[7206] INFO user.vantagenext: Clock set to 2020-11-01 01:00:05 PST (1604221205) (225027)
-        if VantageNext.inTimeChangeWindow(self.time_change_windows, datetime.datetime.now()):
-            log.info("setTime ignored during time change transition period.")
-            return
-
-        for unused_count in range(self.max_tries):
-            try:
-                # Wake the console and begin the setTime command
-                self.port.wakeup_console(max_tries=self.max_tries)
-                self.port.send_data(b'SETTIME\n')
-
-                # Adjust for clock drift and clock jump after midnight.
-                target_adj = VantageNext.compute_clock_target_adj(self.time_set_goal, self.clock_drift_secs, self.day_start_jump)
-
-                # The time can only be set to a full second.  As such, the actual
-                # time can vary wildly.  Let's sleep until the top of the second
-                # to get a better time set.
-                sleep_secs = 1.0 - (time.time() % 1)
-                # There is some lag,set time a little early.
-                sleep_secs -= self.set_time_padding
-                if sleep_secs > 0.0:
-                    time.sleep(sleep_secs)
-
-                now = time.time()
-                newtime_tt = time.localtime(int(now + self.set_time_padding + target_adj))
-
-                # The Davis expects the time in reverse order, and the year is since 1900
-                _buffer = struct.pack("<bbbbbb", newtime_tt[5], newtime_tt[4], newtime_tt[3], newtime_tt[2],
-                                                 newtime_tt[1], newtime_tt[0] - 1900)
-
-                # Complete the setTime command
-                self.port.send_data_with_crc16(_buffer, max_tries=1)
-                log.info("Clock set to %s (%d, %f, %f, %f)" % (
-                    weeutil.weeutil.timestamp_to_string(time.mktime(newtime_tt)), self.pkt_count, now, self.set_time_padding, self.set_time_padding + target_adj))
-                return
-            except weewx.WeeWxIOError:
-                # Caught an error. Keep retrying...
-                continue
-        log.error("Max retries exceeded while setting time")
-        raise weewx.RetriesExceeded("Max retries exceeded while setting time")
 
     def setDST(self, dst='auto'):
         """Turn DST on or off, or set it to auto.
@@ -3125,7 +3419,7 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
     @staticmethod
     def set_time(station):
         print("Setting time on console...")
-        station.setTime()
+        print(station.setTime())
         newtime_ts = station.getTime()
         print("Current console time is %s" % weeutil.weeutil.timestamp_to_string(newtime_ts))
 
@@ -3298,20 +3592,17 @@ class VantageNextConfEditor(weewx.drivers.AbstractConfEditor):
     # How many times to try before giving up:
     #max_tries = 4
 
-    # The number of seconds to add to current time when setting the time.
-    # (Due to delay in sending and executing the command on the console.)
-    #set_time_padding = 0.17
-
-    # The amount of time, in seconds, that the console clock drifts.
+    # The amount of time, in seconds, that the console clock drifts in a day.
     # A negative number means the console loses time.
     #clock_drift_secs = -3.1
 
     # The number of seconds the console jumps just after midnight.
     #day_start_jump = 2.83
 
-    # When setting time, the delta in seconds from actual time to shoot for,
-    # just after midnight when the clock jumps.
-    #time_set_goal = 1.85
+    # How far, in seconds, the console clock may stand from the center of its
+    # daily drift before the driver steps it back (by whole seconds).  Smaller
+    # is more accurate and sets the clock more often.  The minimum is 0.7.
+    #clock_recenter_threshold = 1.2
 
     # Vantage model Type: 1 = Vantage Pro; 2 = Vantage Pro2
     #model_type = 2

@@ -117,9 +117,9 @@ class TestStanzaShape:
         green."""
         found = commented_options(install_module().vantagenext_config)
         assert sorted(found) == [
-            'baudrate', 'clock_drift_secs', 'day_start_jump', 'iss_id',
-            'loop_request', 'max_tries', 'model_type', 'set_time_padding',
-            'tcp_port', 'tcp_send_delay', 'time_set_goal', 'timeout',
+            'baudrate', 'clock_drift_secs', 'clock_recenter_threshold',
+            'day_start_jump', 'iss_id', 'loop_request', 'max_tries',
+            'model_type', 'tcp_port', 'tcp_send_delay', 'timeout',
             'wait_before_retry']
         # Prose comments must not be mistaken for assignments.
         assert 'Connection type: serial or ethernet' not in found
@@ -193,14 +193,12 @@ class TestCommentedValuesMatchTheCode:
         assert int(commented.pop('max_tries')) == station.max_tries
         assert int(commented.pop('model_type')) == station.model_type
         assert int(commented.pop('loop_request')) == station.loop_request
-        assert float(commented.pop('set_time_padding')) == \
-            pytest.approx(station.set_time_padding)
         assert float(commented.pop('clock_drift_secs')) == \
             pytest.approx(station.clock_drift_secs)
         assert float(commented.pop('day_start_jump')) == \
             pytest.approx(station.day_start_jump)
-        assert float(commented.pop('time_set_goal')) == \
-            pytest.approx(station.time_set_goal)
+        assert float(commented.pop('clock_recenter_threshold')) == \
+            pytest.approx(station.clock_recenter_threshold)
         # Whatever is left belongs to the port wrappers, below.
         assert sorted(commented) == ['baudrate', 'tcp_port', 'tcp_send_delay',
                                      'timeout', 'wait_before_retry']
@@ -271,6 +269,6 @@ class TestMergedStanza:
                     'wrong indentation, so it merged outside its section: %r'
                     % line)
         # An indentation check cannot see a DROPPED block -- there is no line
-        # left to measure -- so count them.  All thirteen, or the ones that
+        # left to measure -- so count them.  All twelve, or the ones that
         # vanished did so silently.
-        assert seen == 13
+        assert seen == 12

@@ -65,14 +65,21 @@ one of the specific problems it solves.
    require is obsolete and ignored — delete it from weewx.conf (the driver
    logs a warning at startup while it remains).
 
-1. **Precise console clock setting.**  Vantage consoles drift, and many jump
-   forward a couple of seconds just after midnight.  Four options
-   (`set_time_padding`, `clock_drift_secs`, `day_start_jump`,
-   `time_set_goal`; see Configuration below) let this driver *aim* the clock
-   so that it stays within a tight `max_drift` (e.g. 2 seconds) for days at a
-   time without being set.  That matters because each clock set tends to
-   cause read errors on the LOOP stream.  The built-in driver uses a single
-   hardcoded 0.75-second padding.
+1. **Console clock keeping.**  Vantage consoles lose time steadily through
+   the day, and many jump forward a few seconds just after midnight, so the
+   clock error is a daily sawtooth that no setting can flatten.  This driver
+   keeps that sawtooth *centered on zero*.  Three options
+   (`clock_drift_secs`, `day_start_jump`, `clock_recenter_threshold`; see
+   Configuration below) describe the console and say how far off center the
+   clock may wander; past that, the driver steps it back by a whole number
+   of seconds -- the only kind of change a console accepts, since it keeps
+   its own sub-second tick across a clock set -- chosen to go as long as
+   possible before the next one.  That matters because each clock set tends
+   to cause read errors on the LOOP stream.  The clock error WeeWX logs is
+   also corrected: the console reports whole seconds, truncated, which reads
+   half a second slow on average.  The built-in driver sets the clock to the
+   host's time plus a hardcoded 0.75-second padding whenever WeeWX's
+   `max_drift` is exceeded.
 
 1. **Rain accounting hardening.**  The per-packet rain delta is computed with
    `weewx.wxformulas.calculate_delta`, and a momentary "dashed" (invalid)
@@ -186,21 +193,34 @@ from the console's transmitter table at startup and logs what it found
 that value wins and no detection happens, so check that it names the right
 transmitter, or delete the line and let the driver work it out.
 
-This driver adds four options for aiming the console clock:
+This driver adds three options for keeping the console clock:
 
-| Option             | Default | Meaning                                                              |
-| ------------------ | ------- | -------------------------------------------------------------------- |
-| `set_time_padding` | `0.17`  | Seconds added when setting the clock, to cover transmission lag.     |
-| `clock_drift_secs` | `-3.1`  | Seconds the console clock drifts per 24 hours (negative = loses).    |
-| `day_start_jump`   | `2.83`  | Seconds the console clock jumps forward just after midnight.         |
-| `time_set_goal`    | `1.85`  | Desired clock error (seconds fast) just after the midnight jump.     |
+| Option                     | Default | Meaning                                                                        |
+| -------------------------- | ------- | ------------------------------------------------------------------------------ |
+| `clock_drift_secs`         | `-3.1`  | Seconds the console clock drifts per 24 hours (negative = loses).              |
+| `day_start_jump`           | `2.83`  | Seconds the console clock jumps forward just after midnight.                   |
+| `clock_recenter_threshold` | `1.2`   | Seconds the clock may stand off center before it is stepped back (min. 0.7).   |
 
-To tune them, watch the `weewx.engine: Clock error is ...` lines in the log
-over a few days: `clock_drift_secs` is the error accumulated per day,
-`day_start_jump` is the discontinuity right after midnight, and
-`time_set_goal` positions the clock so that drift keeps it within
-`max_drift` for as long as possible.  The driver logs its arithmetic each
-time it sets the clock (`compute_clock_target_adj: ...`).
+To tune the first two, watch the `weewx.engine: Clock error is ...` lines in
+the log over a few days in which the clock is not set: `clock_drift_secs` is
+the error accumulated from just after midnight to just before the next, and
+`day_start_jump` is the discontinuity right after midnight.  With those right,
+the error runs from about `-clock_drift_secs / 2` just after midnight to
+`+clock_drift_secs / 2` just before it, give or take the threshold.  A smaller
+`clock_recenter_threshold` holds the clock closer to that and sets it more
+often; the driver logs how far off center the clock is at every check, and its
+arithmetic each time it steps the clock (`Clock stepped ...`).
+
+The clock is checked as often as `clock_check` in `[StdTimeSynch]` says.
+`max_drift` there is now only a backstop -- past it WeeWX asks the driver to
+center the clock at once, which undoes the driver's own choice of step and
+costs extra clock sets -- so it no longer decides how accurate the clock is,
+and a small value does harm.  Make it a whole number (WeeWX accepts nothing
+else) of at least `|clock_drift_secs| / 2 + clock_recenter_threshold + 1.5`:
+WeeWX's default of 5 suits the defaults above.
+`set_time_padding` and `time_set_goal`, from earlier versions, are obsolete
+and ignored: delete them from weewx.conf (the driver logs a warning at startup
+while they remain).
 
 ## Configuring the console
 

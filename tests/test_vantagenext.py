@@ -220,13 +220,120 @@ class TestAdjustForDst:
         assert VantageNext.adjust_for_dst(self.NOW, None, None) is None
 
 
-class TestComputeClockTargetAdj:
+class TestClockCentering:
+    """The arithmetic of "Keeping the console clock"."""
 
-    def test_math(self, monkeypatch):
-        monkeypatch.setattr(VantageNext, 'hours_to_midnight', staticmethod(lambda: 12.0))
-        # target = goal - (12/24 * drift) - jump
-        assert VantageNext.compute_clock_target_adj(2.0, -2.4, 1.0) == pytest.approx(2.2)
-        assert VantageNext.compute_clock_target_adj(1.85, 0.0, 0.0) == pytest.approx(1.85)
+    def test_ideal_error_is_a_centered_sawtooth(self):
+        # Losing 3.6 s a day: 1.8 fast just after the jump, right at noon,
+        # 1.8 slow just before the next one.
+        assert VantageNext.ideal_clock_error(0, -3.6) == pytest.approx(1.8)
+        assert VantageNext.ideal_clock_error(43200, -3.6) == pytest.approx(0.0)
+        assert VantageNext.ideal_clock_error(86400, -3.6) == pytest.approx(-1.8)
+        # A console that GAINS time is held the other way up.
+        assert VantageNext.ideal_clock_error(0, 3.6) == pytest.approx(-1.8)
+        # A console that neither drifts nor jumps should simply be right.
+        assert VantageNext.ideal_clock_error(30000, 0.0) == 0.0
+
+    def test_off_center_looks_half_a_days_creep_ahead(self):
+        # On the ideal curve, but gaining a net 0.6 s a day.
+        assert VantageNext.clock_off_center(0.0, 43200, -3.6, 4.2) == pytest.approx(0.3)
+        assert VantageNext.clock_off_center(1.0, 43200, -3.6, 3.6) == pytest.approx(1.0)
+
+    @pytest.mark.parametrize('off_center, threshold, precise, forced, creep, step', [
+        # Inside the threshold: nothing.
+        (1.19, 1.2, True, False, 0.6, 0), (-1.19, 1.2, True, False, -0.6, 0),
+        # Beyond it on the side the creep pushes toward, the usual case: across
+        # the band, 0.3 short of the trigger on the side the creep comes from.
+        (1.25, 1.2, True, False, 0.6, -2), (-1.25, 1.2, True, False, -0.6, 2),
+        (1.95, 1.2, True, False, 0.6, -2), (2.15, 1.2, True, False, 0.6, -3),
+        # Beyond it on the OTHER side: crossing the band would land the clock
+        # next to the trigger it is already heading for.  One second, not two.
+        (1.25, 1.2, True, False, -0.27, -1), (-1.25, 1.2, True, False, 0.6, 1),
+        (2.15, 1.2, True, False, -0.27, -2),
+        # No creep to speak of, so no such side: to the center.  (Each of
+        # these would step differently if its creep's sign were honored: -3,
+        # -1 and +3.)
+        (2.15, 1.2, True, False, 0.05, -2), (1.75, 1.2, True, False, -0.05, -2),
+        (-2.15, 1.2, True, False, -0.01, 2),
+        # A threshold of exactly 1.0: 1.05 - 2 would land ON the far trigger.
+        (1.05, 1.0, True, False, 0.6, -1), (1.35, 1.0, True, False, 0.6, -2),
+        # The tightest threshold still steps a whole second, from either side.
+        (0.75, 0.7, True, False, 0.6, -1), (-0.75, 0.7, True, False, 0.6, 1),
+        # Coarse: only when beyond the threshold for certain, then to the center.
+        (1.65, 1.2, False, False, 0.6, 0), (1.75, 1.2, False, False, 0.6, -2),
+        (-2.6, 1.2, False, False, 0.6, 3),
+        # Forced: to the center, from anywhere.
+        (0.4, 1.2, True, True, 0.6, 0), (0.6, 1.2, True, True, 0.6, -1),
+        (-0.6, 1.2, False, True, 0.6, 1), (3599.7, 1.2, True, True, 0.6, -3600),
+    ])
+    def test_clock_step(self, off_center, threshold, precise, forced, creep, step):
+        assert VantageNext.clock_step(off_center, threshold, precise, forced, creep) == step
+
+    @pytest.mark.parametrize('threshold', [0.7, 0.8, 1.0, 1.2, 2.0])
+    @pytest.mark.parametrize('creep', [0.6, -0.27])
+    def test_every_step_lands_on_the_side_the_creep_comes_from(self, threshold, creep):
+        # From anywhere beyond the threshold, on either side: a real step,
+        # landing inside the band within a second of `reach` from the center,
+        # on the side that gives the creep the whole band to cross.
+        reach = threshold - VantageNext.CLOCK_LANDING_GUARD
+        for hundredths in range(int(threshold * 100) + 1, 600):
+            for off_center in (hundredths / 100.0, -hundredths / 100.0):
+                step = VantageNext.clock_step(off_center, threshold, True, False, creep)
+                landed = off_center + step
+                assert step != 0, off_center
+                if creep > 0:
+                    assert -reach - 1e-9 <= landed < -reach + 1 + 1e-9, (off_center, step)
+                else:
+                    assert reach - 1 - 1e-9 <= landed <= reach + 1e-9, (off_center, step)
+                assert abs(landed) < threshold, (off_center, step)
+
+    # Drift and jump (s/day) as measured on seven consoles, 2026-09.
+    FLEET = [(-2.00, 1.99), (-3.31, 4.00), (-3.26, 3.03), (-3.13, 3.26),
+             (-3.55, 4.00), (-3.39, 4.01), (-3.70, 4.26)]
+
+    @staticmethod
+    def simulate(drift, jump, threshold, days=120):
+        """Hourly checks of a console that drifts and jumps as configured,
+        with a little noise on the jump and on the reading.  Returns the
+        worst error seen and the (day, step) of every set."""
+        import random
+        rnd = random.Random(1)
+        error = -drift / 2.0 - jump
+        worst, sets = 0.0, []
+        for day in range(days):
+            error += jump + rnd.gauss(0, 0.08)
+            for hour in range(24):
+                secs = hour * 3600 + 1800
+                now_error = error + drift * secs / 86400.0
+                if day >= 10:
+                    worst = max(worst, abs(now_error))
+                off_center = VantageNext.clock_off_center(
+                    now_error + rnd.gauss(0, 0.02), secs, drift, jump)
+                step = VantageNext.clock_step(off_center, threshold, True, False, drift + jump)
+                if step:
+                    error += step
+                    sets.append((day, step))
+            error += drift
+        return worst, sets
+
+    @pytest.mark.parametrize('threshold', [0.7, 0.8, 1.0, 1.2])
+    def test_fleet_never_bounces(self, threshold):
+        # A step must not land where noise can trip the far trigger.  No set
+        # is undone by one the other way within a week; a console with a
+        # creep worth the name only ever steps against it; none sets twice
+        # in a day; and there are no more sets than the creep accounts for.
+        # Without CLOCK_LANDING_GUARD a threshold of exactly 1.0 fails this.
+        for drift, jump in self.FLEET:
+            worst, sets = self.simulate(drift, jump, threshold)
+            days = [day for day, unused_step in sets]
+            assert len(days) == len(set(days)), (drift, jump, sets)
+            assert not any(b[0] - a[0] <= 7 and (a[1] < 0) != (b[1] < 0)
+                           for a, b in zip(sets, sets[1:])), (drift, jump, sets)
+            if abs(drift + jump) > 0.1:
+                assert all((step < 0) == (drift + jump > 0) for unused_day, step in sets), (drift, jump, sets)
+            assert len(sets) <= 120 * abs(drift + jump) + 3, (drift, jump, len(sets))
+            # Half the sawtooth, the threshold, and half a day's creep either side.
+            assert worst <= -drift / 2.0 + threshold + abs(drift + jump) + 0.3, (drift, jump, worst)
 
 
 # ===============================================================================

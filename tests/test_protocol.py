@@ -20,8 +20,8 @@ import time
 
 import pytest
 
-from common import (ACK, BASE_DT, WAKE, ScriptedWrapper, archive_page,
-                    archive_record_at, bare_station, dmpaft_reads,
+from common import (ACK, BASE_DT, WAKE, ClockConsole, FakeClock, ScriptedWrapper, archive_page,
+                    archive_record_at, bare_station, clock_station, dmpaft_reads,
                     eeprom_reads, setup_reads, with_crc)
 
 from vantagenext import VantageNext
@@ -275,17 +275,20 @@ class TestGenLoggerSummary:
 # ===============================================================================
 
 def gettime_response(dt):
-    return with_crc(struct.pack('<bbbbbb', dt.second, dt.minute, dt.hour,
+    return with_crc(struct.pack('<bbbbbB', dt.second, dt.minute, dt.hour,
                                 dt.day, dt.month, dt.year - 1900))
 
 
 class TestGetTime:
 
     def test_get_time(self):
-        device_dt = datetime.datetime(2026, 7, 15, 12, 0, 0)
+        # A console within a second of the host: one GETTIME, and the time
+        # handed to weewx.engine is the whole second read plus the average
+        # dropped fraction.
+        device_dt = datetime.datetime.fromtimestamp(int(time.time()))
         station = bare_station()
         station.port = ScriptedWrapper([WAKE, ACK, gettime_response(device_dt)])
-        assert station.getTime() == device_dt.timestamp()
+        assert station.getTime() == pytest.approx(device_dt.timestamp() + 0.5, abs=0.2)
         assert station.port.writes[1] == b'GETTIME\n'
 
     def test_get_time_adjusts_in_dst_window(self):
@@ -309,34 +312,335 @@ class TestGetTime:
             station.getConsoleTime()
 
 
-class TestSetTime:
+# 14:30 local on an ordinary day: clear of the jump window and of any DST change.
+AFTERNOON = datetime.datetime(2026, 9, 15, 14, 30, 0).timestamp()
+# Host clocks started at each twentieth of a second, so every case is tried at
+# every phase of the console's tick.
+PHASES = [i / 20.0 for i in range(20)]
+# A console with a net creep, which is what gives a step a side of the band to
+# make for: one that gains 0.2 s a day, and one that loses it.  (Half of it is
+# look-ahead, so such a clock is 0.1 s further off center than its error.)
+GAINING = {'day_start_jump': 0.2}
+LOSING = {'day_start_jump': -0.2}
 
-    def test_set_time(self):
-        # padding 1.0 makes the top-of-second sleep a no-op, so the test does
-        # not stall; drift/jump/goal of zero make target_adj exactly zero.
-        station = bare_station(set_time_padding=1.0, clock_drift_secs=0.0,
-                               day_start_jump=0.0, time_set_goal=0.0)
-        station.port = ScriptedWrapper([WAKE, ACK, ACK])
-        before = time.time()
-        station.setTime()
-        after = time.time()
-        assert station.port.writes[1] == b'SETTIME\n'
-        # The written buffer is the six time bytes plus CRC; the time set is
-        # now + padding.
-        sec, minute, hr, day, mon, yr = struct.unpack('<bbbbbb', station.port.writes[2][:6])
-        set_ts = time.mktime((yr + 1900, mon, day, hr, minute, sec, 0, 0, -1))
-        assert int(before + 1.0) <= set_ts <= int(after + 1.0)
 
-    def test_set_time_noop_in_dst_window(self):
-        now = datetime.datetime.now()
-        station = bare_station(set_time_padding=1.0, clock_drift_secs=0.0,
-                               day_start_jump=0.0, time_set_goal=0.0)
+class TestKeepClock:
+    """The driver against ClockConsole, which keeps time as the Envoys were
+    measured to.  clock_drift_secs and day_start_jump default to 0 here, so
+    the ideal error is 0 and "off center" is simply the error."""
+
+    def test_reported_error_is_unbiased(self):
+        # GETTIME drops the fraction; the error reported to weewx.engine must
+        # not read low by it.
+        reported = []
+        for phase in PHASES:
+            clock = FakeClock(AFTERNOON + phase)
+            # A threshold this wide keeps every reading a single GETTIME.
+            station = clock_station(clock, ClockConsole(clock, 0.30), clock_recenter_threshold=5.0)
+            reported.append(station.getTime() - clock.now())
+            assert station.port.gettimes == 1
+        assert sum(reported) / len(reported) == pytest.approx(0.30, abs=0.03)
+
+    def test_centered_clock_costs_one_gettime(self):
+        clock = FakeClock(AFTERNOON)
+        station = clock_station(clock, ClockConsole(clock, 0.30))
+        station.getTime()
+        assert station.port.gettimes == 1
+
+    def test_far_side_step_is_exact_at_every_phase(self):
+        # 1.45 s fast, on a console that gains, against a threshold of 1.2: two
+        # whole seconds back, across the band.  The console keeps its tick, so the error
+        # afterwards is 1.45 - 2 exactly -- unless the driver let the
+        # console's second change between choosing the time and sending it.
+        for phase in PHASES:
+            clock = FakeClock(AFTERNOON + phase)
+            console = ClockConsole(clock, 1.45)
+            station = clock_station(clock, console, **GAINING)
+            reported = station.getTime() - clock.now()
+            assert len(console.sets) == 1, phase
+            assert console.error == pytest.approx(-0.55, abs=1e-6), phase
+            assert reported == pytest.approx(-0.55, abs=0.01), phase
+
+    def test_the_options_decide_which_side(self):
+        # 2.05 s fast.  A console that gains is sent right across the band,
+        # three seconds back (to the center would be two).  One that LOSES is
+        # already heading back across it: one second, to stay on this side
+        # (to the center would again be two).
+        for phase in PHASES:
+            clock = FakeClock(AFTERNOON + phase)
+            console = ClockConsole(clock, 2.05)
+            clock_station(clock, console, **GAINING).getTime()
+            assert console.error == pytest.approx(-0.95, abs=1e-6), phase
+            clock = FakeClock(AFTERNOON + phase)
+            console = ClockConsole(clock, 1.85)
+            clock_station(clock, console, **LOSING).getTime()
+            assert console.error == pytest.approx(0.85, abs=1e-6), phase
+
+    def test_slow_clock_steps_forward(self):
+        for phase in PHASES:
+            clock = FakeClock(AFTERNOON + phase)
+            console = ClockConsole(clock, -1.45)
+            clock_station(clock, console, **LOSING).getTime()
+            assert console.error == pytest.approx(0.55, abs=1e-6), phase
+
+    def test_inside_threshold_is_left_alone(self):
+        # Close enough to the threshold to be worth measuring, but inside it.
+        # Measuring takes up to a second: the time reported must be the
+        # console's time when getTime returns, not when it was called.
+        measured = 0
+        for phase in PHASES:
+            clock = FakeClock(AFTERNOON + phase)
+            console = ClockConsole(clock, 1.10)
+            station = clock_station(clock, console)
+            reported = station.getTime() - clock.now()
+            assert console.sets == [], phase
+            if console.gettimes > 1:
+                measured += 1
+                assert reported == pytest.approx(1.10, abs=0.01), phase
+        # A few phases read low enough on the first GETTIME to need no more.
+        assert measured >= 15
+
+    def test_lost_ack_is_retried_without_a_second_step(self):
+        # The console acted on the set but its ACK was lost, twice, on a line
+        # slow enough that the retries run into the end of the second.
+        for phase in PHASES:
+            clock = FakeClock(AFTERNOON + phase)
+            console = ClockConsole(clock, 1.45, io_secs=0.08, lose_set_acks=2)
+            clock_station(clock, console, **GAINING).getTime()
+            assert len(console.sets) == 3, phase
+            assert console.error == pytest.approx(-0.55, abs=1e-6), phase
+
+    def test_a_set_never_straddles_the_consoles_second(self, caplog):
+        # Line speeds and lost ACKs chosen so that, somewhere in the sweep, a
+        # retry comes due in the last moments of the console's second.  The
+        # time sent must still be right when the console acts on it: the
+        # error afterwards is exact, and the check after the set agrees.
+        with caplog.at_level('WARNING'):
+            for io_ms in range(40, 125, 5):
+                for lost in (1, 2, 3):
+                    for phase in PHASES:
+                        clock = FakeClock(AFTERNOON + phase)
+                        console = ClockConsole(clock, 1.45, io_secs=io_ms / 1000.0,
+                                               lose_set_acks=lost)
+                        clock_station(clock, console, **GAINING).getTime()
+                        assert console.error == pytest.approx(-0.55, abs=1e-6), (io_ms, lost, phase)
+        assert 'After the clock set' not in caplog.text
+
+    def test_the_year_byte_is_unsigned(self):
+        # 2028 - 1900 = 128, one more than a signed byte holds.  Read the
+        # clock and set it, in 2028.
+        clock = FakeClock(datetime.datetime(2028, 3, 1, 14, 30, 0, 250000).timestamp())
+        console = ClockConsole(clock, 1.45)
+        station = clock_station(clock, console, **GAINING)
+        assert station.getTime() - clock.now() == pytest.approx(-0.55, abs=0.01)
+        assert console.error == pytest.approx(-0.55, abs=1e-6)
+        assert datetime.datetime.fromtimestamp(console.sets[0]).year == 2028
+
+    def test_a_failed_read_back_does_not_undo_the_set(self, caplog):
+        # The set was made; the console then goes quiet.  getTime still
+        # reports, the step is still logged, and the clock is not set again
+        # an hour later on the strength of a set that "failed".
+        clock = FakeClock(AFTERNOON)
+        console = ClockConsole(clock, 1.45, mute_after_set=True)
+        station = clock_station(clock, console, max_tries=2, **GAINING)
+        with caplog.at_level('INFO'):
+            assert station.getTime() - clock.now() == pytest.approx(-0.55, abs=0.01)
+        assert 'could not be read back' in caplog.text
+        assert 'Clock stepped -2 s' in caplog.text
+        console.mute_after_set = False
+        console.error = 2.45
+        clock.sleep(3600)
+        station.getTime()
+        assert len(console.sets) == 1
+
+    def test_the_guard_is_armed_by_the_attempt(self):
+        # A set that ran out of retries may well have been made -- here the
+        # console acted on every try and only the ACKs were lost.
+        clock = FakeClock(AFTERNOON)
+        console = ClockConsole(clock, 1.45, lose_set_acks=2)
+        station = clock_station(clock, console, max_tries=2)
+        with pytest.raises(weewx.RetriesExceeded):
+            station.getTime()
+        tries = len(console.sets)
+        console.error = 2.45
+        clock.sleep(3600)
+        station.getTime()
+        assert len(console.sets) == tries
+
+    def test_dst_correction_reaches_get_time(self):
+        # Inside a time change window the console reads an hour out, and
+        # every reading getTime takes must be corrected, on the clock getTime
+        # itself runs on.
+        clock = FakeClock(AFTERNOON)
+        console = ClockConsole(clock, 3600.30)
+        station = clock_station(clock, console)
+        now = datetime.datetime.fromtimestamp(AFTERNOON)
         station.time_change_windows = {
             'test': [(now - datetime.timedelta(minutes=5),
                       now + datetime.timedelta(minutes=5), 3600)]}
-        station.port = ScriptedWrapper([])
+        assert station.getTime() - clock.now() == pytest.approx(0.30, abs=0.5)
+        assert console.sets == []
+
+    def test_set_time_says_what_it_did(self):
+        clock = FakeClock(AFTERNOON)
+        station = clock_station(clock, ClockConsole(clock, 0.80))
+        assert station.setTime() == 'Clock stepped -1 s: error +0.80 -> -0.20 s.'
+        assert station.setTime().startswith('Not set: the clock is -0.20 s from the center')
+        midnight = datetime.datetime(2026, 9, 15, 0, 0, 0).timestamp()
+        clock = FakeClock(midnight + 180.25)
+        station = clock_station(clock, ClockConsole(clock, 5.0), day_start_jump=3.6)
+        assert station.setTime().startswith('Not set: in the 600 seconds after midnight')
+
+    def test_set_retries_exceeded(self):
+        clock = FakeClock(AFTERNOON)
+        console = ClockConsole(clock, 1.45, lose_set_acks=9)
+        station = clock_station(clock, console, max_tries=2)
+        with pytest.raises(weewx.RetriesExceeded):
+            station.getTime()
+
+    def test_coarse_reading_is_timid(self):
+        # Writes as slow as a WeatherLinkIP's: no second boundary can be
+        # pinned down, so the error is good to +-0.5 s.  At 1.60 s off, some
+        # phases read as low as 1.1: inside the threshold for all the driver
+        # knows.  It acts only on a reading that is beyond it for certain,
+        # and then a step to the center never leaves the clock further out.
+        acted = 0
+        for phase in PHASES:
+            clock = FakeClock(AFTERNOON + phase)
+            console = ClockConsole(clock, 1.60, io_secs=0.5)
+            clock_station(clock, console).getTime()
+            acted += len(console.sets)
+            assert abs(console.error) <= 1.60 + 1e-6, (phase, console.error)
+        assert 0 < acted < len(PHASES)
+
+    def test_coarse_reading_inside_threshold_is_left_alone(self):
+        for phase in PHASES:
+            clock = FakeClock(AFTERNOON + phase)
+            console = ClockConsole(clock, 1.15, io_secs=0.5)
+            clock_station(clock, console).getTime()
+            assert console.sets == [], phase
+
+    def test_coarse_step_goes_to_the_center(self):
+        for phase in PHASES:
+            clock = FakeClock(AFTERNOON + phase)
+            console = ClockConsole(clock, 2.40, io_secs=0.5)
+            clock_station(clock, console).getTime()
+            assert len(console.sets) == 1, phase
+            assert abs(console.error) <= 1.0, (phase, console.error)
+
+    def test_unforced_sets_are_rate_limited(self):
+        clock = FakeClock(AFTERNOON)
+        console = ClockConsole(clock, 1.45)
+        station = clock_station(clock, console)
+        station.getTime()
+        assert len(console.sets) == 1
+        # An hour on the console is somehow far out again: no set, no polling.
+        clock.sleep(3600)
+        console.error = 2.45
+        polls = console.gettimes
+        station.getTime()
+        assert len(console.sets) == 1
+        assert console.gettimes == polls + 1
+        # The engine's backstop is not held back...
         station.setTime()
-        assert station.port.writes == []
+        assert len(console.sets) == 2
+        # ...and nor is the driver once the interval has passed.
+        console.error = 2.45
+        clock.sleep(VantageNext.CLOCK_MIN_SET_INTERVAL + 60)
+        station.getTime()
+        assert len(console.sets) == 3
+
+    def test_the_hours_after_a_step_are_quiet(self, caplog):
+        # A far-side step leaves the clock most of a threshold off center, on
+        # purpose.  For the 20 hours in which it may not be set again, that
+        # is not grounds for saying so every hour, still less for blaming
+        # clock_drift_secs and day_start_jump.
+        for phase in PHASES:
+            clock = FakeClock(AFTERNOON + phase)
+            console = ClockConsole(clock, -1.25)
+            station = clock_station(clock, console, **LOSING)
+            station.getTime()
+            assert console.error == pytest.approx(0.75, abs=1e-6), phase
+            caplog.clear()
+            with caplog.at_level('INFO'):
+                for unused_hour in range(3):
+                    clock.sleep(3600)
+                    polls = console.gettimes
+                    station.getTime()
+                    assert console.gettimes == polls + 1, phase
+            assert caplog.text.count('Clock is about') == 3, phase
+            assert 'leaving it alone' not in caplog.text, phase
+            assert 'do not describe' not in caplog.text, phase
+
+    def test_a_clock_far_out_again_after_a_set_is_reported(self, caplog):
+        # Beyond the threshold for certain an hour after being set: that IS
+        # worth saying, and it points at the options.
+        clock = FakeClock(AFTERNOON)
+        console = ClockConsole(clock, 1.45)
+        station = clock_station(clock, console)
+        station.getTime()
+        clock.sleep(3600)
+        console.error = 2.45
+        with caplog.at_level('INFO'):
+            station.getTime()
+        assert 'leaving it alone' in caplog.text
+        assert 'do not describe this console' in caplog.text
+
+    def test_set_time_centers(self):
+        # Forced: to the center, however little it is off.
+        for phase in PHASES:
+            clock = FakeClock(AFTERNOON + phase)
+            console = ClockConsole(clock, 0.80)
+            clock_station(clock, console).setTime()
+            assert console.error == pytest.approx(-0.20, abs=1e-6), phase
+
+    def test_set_time_leaves_a_centered_clock_alone(self):
+        clock = FakeClock(AFTERNOON)
+        console = ClockConsole(clock, 0.30)
+        clock_station(clock, console).setTime()
+        assert console.sets == []
+
+    def test_centers_on_the_sawtooth(self):
+        # Drift -3.6 s/day, jump +3.6: at 14:30 the ideal error is
+        # 1.8 - 3.6 * 14.5/24 = -0.375.  A clock showing +1.2 is 1.575 off
+        # center: two seconds back.
+        for phase in PHASES:
+            clock = FakeClock(AFTERNOON + phase)
+            console = ClockConsole(clock, 1.20)
+            station = clock_station(clock, console, clock_drift_secs=-3.6, day_start_jump=3.6)
+            station.getTime()
+            assert console.error == pytest.approx(-0.80, abs=1e-6), phase
+
+    def test_nothing_is_decided_while_the_jump_may_be_in_progress(self):
+        midnight = datetime.datetime(2026, 9, 15, 0, 0, 0).timestamp()
+        clock = FakeClock(midnight + 180.25)
+        console = ClockConsole(clock, 5.0)
+        station = clock_station(clock, console, clock_drift_secs=-3.6, day_start_jump=3.6)
+        station.getTime()
+        station.setTime()
+        assert console.sets == []
+        clock.sleep(VantageNext.CLOCK_JUMP_WINDOW)
+        station.getTime()
+        assert len(console.sets) == 1
+
+    def test_noop_in_dst_window(self):
+        clock = FakeClock(AFTERNOON)
+        console = ClockConsole(clock, 5.0)
+        station = clock_station(clock, console)
+        now = datetime.datetime.fromtimestamp(AFTERNOON)
+        station.time_change_windows = {
+            'test': [(now - datetime.timedelta(minutes=5),
+                      now + datetime.timedelta(minutes=5), 3600)]}
+        station.getTime()
+        station.setTime()
+        assert console.sets == []
+
+    def test_a_set_that_did_not_take_is_reported(self, caplog):
+        clock = FakeClock(AFTERNOON)
+        console = ClockConsole(clock, 1.45, ignore_sets=True)
+        with caplog.at_level('WARNING'):
+            clock_station(clock, console).getTime()
+        assert 'After the clock set the console reads' in caplog.text
 
 
 # ===============================================================================
@@ -660,15 +964,39 @@ class TestInit:
         monkeypatch.setattr(VantageNext, '_port_factory', staticmethod(lambda vp_dict: port))
         station = VantageNext(
             type='serial', port='/dev/vantage', max_tries='5', iss_id='2',
-            model_type='2', loop_request='1', set_time_padding='0.25',
-            clock_drift_secs='-3.84', day_start_jump='4.21', time_set_goal='2.0')
+            model_type='2', loop_request='1', clock_recenter_threshold='0.9',
+            clock_drift_secs='-3.84', day_start_jump='4.21')
         assert station.max_tries == 5
         assert station.iss_id == 2
-        assert station.set_time_padding == pytest.approx(0.25)
+        assert station.clock_recenter_threshold == pytest.approx(0.9)
         assert station.clock_drift_secs == pytest.approx(-3.84)
         assert station.hardware_name == 'Vantage Pro2'
         assert station.pkt_count == 0
         assert station.on_bad_read is False
+        # No unforced clock set in the first half hour of a process.
+        assert station._next_unforced_set_ts == pytest.approx(
+            time.time() + VantageNext.CLOCK_STARTUP_HOLDOFF, abs=5)
+
+    def test_clock_threshold_floor(self, monkeypatch, caplog):
+        port = ScriptedWrapper([WAKE, ACK, b'\x10'] + setup_reads()[1:])
+        monkeypatch.setattr(VantageNext, '_port_factory', staticmethod(lambda vp_dict: port))
+        with caplog.at_level('WARNING'):
+            station = VantageNext(type='serial', port='/dev/vantage', iss_id='2',
+                                  clock_recenter_threshold='0.2')
+        assert station.clock_recenter_threshold == pytest.approx(VantageNext.CLOCK_MIN_THRESHOLD)
+        assert 'too tight' in caplog.text
+
+    def test_obsolete_clock_options_warn_and_are_ignored(self, monkeypatch, caplog):
+        port = ScriptedWrapper([WAKE, ACK, b'\x10'] + setup_reads()[1:])
+        monkeypatch.setattr(VantageNext, '_port_factory', staticmethod(lambda vp_dict: port))
+        with caplog.at_level('WARNING'):
+            station = VantageNext(type='serial', port='/dev/vantage', iss_id='2',
+                                  set_time_padding='0.17', time_set_goal='2.0')
+        assert 'set_time_padding option in weewx.conf is obsolete' in caplog.text
+        assert 'time_set_goal option in weewx.conf is obsolete' in caplog.text
+        assert not hasattr(station, 'set_time_padding')
+        assert not hasattr(station, 'time_set_goal')
+        assert station.clock_recenter_threshold == pytest.approx(1.2)
 
     def test_auto_dst_windows(self, monkeypatch):
         port = ScriptedWrapper([WAKE, ACK, b'\x10'] + setup_reads()[1:])

@@ -1,5 +1,53 @@
-2.3 2026-08-29
+2.4 UNRELEASED
 --------------
+ACTION: delete set_time_padding and time_set_goal from the [VantageNext]
+section of weewx.conf.  Both are obsolete and ignored; the driver logs a
+warning at startup while they remain.  Check clock_drift_secs and
+day_start_jump against your console's logged clock error while you are there
+(see the README): they now decide where the clock is held, not just where a
+set is aimed.
+ACTION: raise max_drift in [StdTimeSynch] if you had tightened it.  It no
+longer decides how accurate the clock is -- clock_recenter_threshold does --
+and is now only a backstop; too small, it forces clock sets the driver would
+not have made.  Use a whole number of at least
+|clock_drift_secs| / 2 + clock_recenter_threshold + 1.5.  WeeWX's default of 5
+suits this driver's defaults.
+The console clock is now kept centered.  A console's clock error is a daily
+sawtooth -- it loses time all day and jumps forward just after midnight -- and
+measurements of seven consoles showed two things the old clock setting did not
+know.  A clock set moves the console by a whole number of seconds: the console
+keeps its own sub-second tick, so timing the command to the top of the second
+(set_time_padding) bought nothing, and the clock landed up to a second either
+side of where time_set_goal aimed it.  And the console reports its time in
+whole seconds, truncated, so the clock error WeeWX logged read half a second
+slow.  The driver now measures the error to a few hundredths of a second, by
+polling the console until its second changes, and when the clock is more than
+clock_recenter_threshold (new; default 1.2 seconds, minimum 0.7) from the
+center of the sawtooth it steps it by the whole number of seconds that will
+go longest before the next set.  This happens when WeeWX checks the clock
+(every clock_check seconds); max_drift is now only a backstop.  On the
+consoles measured the worst clock error falls from over 4 seconds to about 3
+for the same number of clock sets, and the average error from most of a second
+fast to about zero.
+The clock error WeeWX logs is now the true error, no longer half a second
+slow, and is reported as it stands after any step.
+Unforced clock sets are limited to one in 20 hours, and none is made in the
+first half hour after weewx starts, so a console that does not drift and jump
+as configured cannot be set over and over, nor on every restart.  A clock
+wrong by more than max_drift is still set at startup, as before.
+weectl device --set-time now says what it did, which may be nothing: the clock
+is not set inside a time change window, in the ten minutes after midnight, or
+when it is already within half a second of center.
+Fix reading and setting the console clock from 2028-01-01.  The console's year
+byte (years since 1900) was packed and unpacked as a signed byte, which holds
+no more than 127: every clock set would have raised an error WeeWX does not
+catch, and the console's year would have read as 1772.
+Nothing is decided in the ten minutes after midnight, while the console's
+jump may be in progress.
+On a connection too slow to find the console's second boundary (a
+WeatherLinkIP), the driver acts only on an error that is beyond the threshold
+for certain and steps to the center.
+
 When iss_id is not set in weewx.conf, the ISS is now guessed only from
 channels the console is listening to.  An unconfigured channel's transmitter
 type reads as 0, which decodes as "iss", so a free channel below the real ISS

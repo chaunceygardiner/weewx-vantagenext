@@ -17,11 +17,14 @@ conftest.py pins the timezone and puts bin/user on sys.path before this
 module is imported."""
 
 import datetime
+import math
 import struct
+import time
 
 import vantagenext
 from vantagenext import VantageNext
 
+import weewx
 from weewx.crc16 import crc16
 
 
@@ -164,6 +167,110 @@ class ScriptedWrapper(vantagenext.BaseWrapper):
         return len(self.reads[0]) if self.reads and isinstance(self.reads[0], bytes) else 0
 
 
+class FakeClock:
+    """A host clock that moves only when told to, so clock-keeping tests
+    neither wait nor depend on how fast the machine is."""
+
+    def __init__(self, start):
+        self.t = start
+
+    def now(self):
+        return self.t
+
+    def sleep(self, secs):
+        assert secs >= 0
+        self.t += secs
+
+
+class ClockConsole(vantagenext.BaseWrapper):
+    """A console that keeps time the way the Envoys were measured to: GETTIME
+    answers in whole seconds, truncated; SETTIME replaces the whole second and
+    the sub-second tick carries on regardless.  `error` is console minus host.
+    Every write costs io_secs of the FakeClock, which is what makes a serial
+    line (ms) differ from a WeatherLinkIP (tcp_send_delay on every write).
+
+    The driver's real wakeup / ACK / CRC logic runs against it."""
+
+    def __init__(self, clock, error, io_secs=0.003, lose_set_acks=0, ignore_sets=False,
+                 mute_after_set=False):
+        super().__init__(wait_before_retry=0.0, command_delay=0.0)
+        self.clock = clock
+        self.error = error
+        self.io_secs = io_secs
+        self.lose_set_acks = lose_set_acks
+        self.ignore_sets = ignore_sets
+        # Once set, answer no more GETTIMEs: the read-back fails.
+        self.mute_after_set = mute_after_set
+        self.pending = []
+        self.awaiting_time = False
+        self.gettimes = 0
+        self.sets = []
+
+    def openPort(self):
+        pass
+
+    def closePort(self):
+        pass
+
+    def console_time(self):
+        return self.clock.t + self.error
+
+    def write(self, data):
+        self.clock.t += self.io_secs
+        if self.awaiting_time:
+            self.awaiting_time = False
+            assert crc16(data) == 0 and len(data) == 8
+            sec, minute, hr, day, mon, yr = struct.unpack('<bbbbbB', data[:6])
+            set_ts = time.mktime((yr + 1900, mon, day, hr, minute, sec, 0, 0, -1))
+            self.sets.append(set_ts)
+            if not self.ignore_sets:
+                self.error = set_ts + self.console_time() % 1.0 - self.clock.t
+            if self.lose_set_acks:
+                self.lose_set_acks -= 1
+                self.pending = [weewx.WeeWxIOError('ACK lost')]
+            else:
+                self.pending = [ACK]
+        elif data == b'\n':
+            self.pending = [WAKE]
+        elif data == b'GETTIME\n':
+            self.gettimes += 1
+            if self.mute_after_set and self.sets:
+                self.pending = [weewx.WeeWxIOError('no answer')]
+                return
+            dt = datetime.datetime.fromtimestamp(math.floor(self.console_time()))
+            self.pending = [ACK, with_crc(struct.pack(
+                '<bbbbbB', dt.second, dt.minute, dt.hour, dt.day, dt.month, dt.year - 1900))]
+        elif data == b'SETTIME\n':
+            self.awaiting_time = True
+            self.pending = [ACK]
+        else:
+            raise AssertionError('unexpected write %r' % data)
+
+    def read(self, chars=1):
+        assert self.pending, 'read(%d) with nothing pending' % chars
+        item = self.pending.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        assert len(item) == chars, 'pending %r does not match read(%d)' % (item, chars)
+        return item
+
+    def flush_input(self):
+        self.pending = []
+
+    def flush_output(self):
+        pass
+
+    def queued_bytes(self):
+        return len(self.pending[0]) if self.pending else 0
+
+
+def clock_station(clock, console, **attrs):
+    """A bare station wired to a FakeClock and a ClockConsole."""
+    station = bare_station(_now=clock.now, _sleep=clock.sleep, **attrs)
+    station.port = console
+    return station
+
+
 def eeprom_reads(*values):
     """Script one _getEEPROM_value exchange per value: the ACK for the EEBRD
     command, then the value bytes with a valid CRC."""
@@ -197,6 +304,9 @@ def bare_station(**attrs):
     station.time_change_windows = {}
     station.pkt_count = 0
     station.on_bad_read = False
+    station.clock_drift_secs = 0.0
+    station.day_start_jump = 0.0
+    station.clock_recenter_threshold = 1.2
     for key, value in attrs.items():
         setattr(station, key, value)
     return station
