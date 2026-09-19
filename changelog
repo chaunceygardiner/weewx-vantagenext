@@ -47,7 +47,27 @@ jump may be in progress.
 On a connection too slow to find the console's second boundary (a
 WeatherLinkIP), the driver acts only on an error that is beyond the threshold
 for certain and steps to the center.
+The installer no longer writes seven rarely changed options to weewx.conf at
+all, where 2.3 wrote them commented out: baudrate, tcp_port, tcp_send_delay,
+timeout, wait_before_retry, max_tries and model_type (which only an original
+Vantage Pro sets; a Vue is detected).
+The driver's defaults govern, and the manual's Configuration page lists every
+option; add the line to set one.  Fresh installs only -- an existing
+weewx.conf is never rewritten, and its lines go on working.
+A manual, at https://chaunceygardiner.github.io/weewx-vantagenext/ (and in
+docs/): installation and switching from the built-in driver, every option with
+its default, how the console clock is kept and how to measure your own
+console's drift and jump from the log, daylight-saving time changes, read
+errors and recovery, configuring the console, every difference from the
+built-in driver, troubleshooting with every log message explained, and
+upgrading.  The README is rewritten as its front page.  New tests hold the
+manual to the code: the options and defaults it lists, the log lines it
+quotes, the numbers it cites, its figure and its links.
+weectl device --set-wind-cup no longer calls the setting the "rain wind cup
+type" when it asks for confirmation.
 
+2.3 2026-08-29
+--------------
 When iss_id is not set in weewx.conf, the ISS is now guessed only from
 channels the console is listening to.  An unconfigured channel's transmitter
 type reads as 0, which decodes as "iss", so a free channel below the real ISS

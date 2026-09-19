@@ -1,0 +1,49 @@
+# GitHub Pages configuration for https://chaunceygardiner.github.io/weewx-vantagenext/
+title: weewx-vantagenext
+description: >-
+  A WeeWX driver for Davis Vantage stations, built for uptime and data
+  integrity -- safe through daylight-saving time changes, quick to recover
+  from serial read errors, a console clock held centered on its daily drift,
+  and support for the Davis sonic anemometer.
+url: "https://chaunceygardiner.github.io"
+baseurl: "/weewx-vantagenext"
+
+# Pinned to the same version the sibling manuals render from, so they cannot
+# drift apart when upstream releases.
+remote_theme: just-the-docs/just-the-docs@v0.12.0
+plugins:
+  - jekyll-remote-theme
+  - jekyll-sitemap
+  # Turns the .md links between pages into real URLs.  GitHub Pages enables
+  # this by default; naming it here keeps a local jekyll build identical.
+  - jekyll-relative-links
+
+search_enabled: true
+heading_anchors: true
+
+aux_links:
+  "weewx-vantagenext on GitHub":
+    - "https://github.com/chaunceygardiner/weewx-vantagenext"
+aux_links_new_tab: true
+
+# External links shown at the bottom of the left sidebar nav, on every page.
+nav_external_links:
+  - title: weewx-vantagenext on GitHub
+    url: https://github.com/chaunceygardiner/weewx-vantagenext
+  - title: Download weewx-vantagenext.zip
+    url: https://github.com/chaunceygardiner/weewx-vantagenext/releases/latest/download/weewx-vantagenext.zip
+
+callouts:
+  note:
+    title: Note
+    color: blue
+  important:
+    title: Important
+    color: red
+  tip:
+    title: Tip
+    color: green
+
+footer_content: >-
+  weewx-vantagenext is Copyright &copy; 2020&ndash;2026 John A Kline and is
+  licensed under the GNU Public License v3.

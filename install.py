@@ -34,6 +34,10 @@ if weewx.__version__ < "5":
 # option written LIVE is frozen on that station for ever: weecfg merges
 # with conditional_merge, which fills in absent keys and never rewrites.
 # So only options the driver cannot supply for itself are written live.
+# Options that are rarely changed (baudrate, tcp_port, tcp_send_delay,
+# timeout, wait_before_retry, max_tries, command_delay, and model_type, which
+# only a Vantage Pro 1 sets -- a Vue is detected) are not written at all: the manual's Configuration page lists them, and a station that needs
+# one adds the line.
 #
 # ORDER MATTERS: ConfigObj attaches a comment block to the NEXT key, so a
 # commented-out option must be followed by a live key in the same section.
@@ -63,15 +67,6 @@ vantagenext_config = """
     # If the connection type is ethernet, an IP Address/hostname is required:
     host = 1.2.3.4
 
-    # Serial baud rate (usually 19200)
-    #baudrate = 19200
-
-    # TCP port (when using the WeatherLinkIP)
-    #tcp_port = 22222
-
-    # TCP send delay (when using the WeatherLinkIP):
-    #tcp_send_delay = 0.5
-
     # The type of LOOP packet to request: 1 = LOOP1; 2 = LOOP2; 3 = both
     #loop_request = 1
 
@@ -82,16 +77,6 @@ vantagenext_config = """
     # it to name the id yourself, e.g. if you use a wind meter connected to
     # an anemometer transmitter kit, use its id.
     #iss_id = 1
-
-    # How long to wait for a response from the station before giving up (in
-    # seconds; must be greater than 2)
-    #timeout = 4
-
-    # How long to wait before trying again (in seconds)
-    #wait_before_retry = 1.2
-
-    # How many times to try before giving up:
-    #max_tries = 4
 
     # The amount of time, in seconds, that the console clock drifts in a day.
     # A negative number means the console loses time.
@@ -104,9 +89,6 @@ vantagenext_config = """
     # daily drift before the driver steps it back (by whole seconds).  Smaller
     # is more accurate and sets the clock more often.  The minimum is 0.7.
     #clock_recenter_threshold = 1.2
-
-    # Vantage model Type: 1 = Vantage Pro; 2 = Vantage Pro2
-    #model_type = 2
 
     # The driver to use:
     driver = user.vantagenext

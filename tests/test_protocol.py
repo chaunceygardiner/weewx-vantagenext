@@ -569,6 +569,9 @@ class TestKeepClock:
                     station.getTime()
                     assert console.gettimes == polls + 1, phase
             assert caplog.text.count('Clock is about') == 3, phase
+            # One GETTIME is whole seconds: the line says how far to trust it,
+            # or two of them 50 ms apart reading a second apart look like a fault.
+            assert caplog.text.count('one reading, good to +-0.5 s; threshold') == 3, phase
             assert 'leaving it alone' not in caplog.text, phase
             assert 'do not describe' not in caplog.text, phase
 
@@ -584,6 +587,7 @@ class TestKeepClock:
         with caplog.at_level('INFO'):
             station.getTime()
         assert 'leaving it alone' in caplog.text
+        assert 'one reading, good to +-0.5 s; threshold' in caplog.text
         assert 'do not describe this console' in caplog.text
 
     def test_set_time_centers(self):

@@ -117,10 +117,8 @@ class TestStanzaShape:
         green."""
         found = commented_options(install_module().vantagenext_config)
         assert sorted(found) == [
-            'baudrate', 'clock_drift_secs', 'clock_recenter_threshold',
-            'day_start_jump', 'iss_id', 'loop_request', 'max_tries',
-            'model_type', 'tcp_port', 'tcp_send_delay', 'timeout',
-            'wait_before_retry']
+            'clock_drift_secs', 'clock_recenter_threshold', 'day_start_jump',
+            'iss_id', 'loop_request']
         # Prose comments must not be mistaken for assignments.
         assert 'Connection type: serial or ethernet' not in found
 
@@ -154,7 +152,7 @@ class TestCommentedValuesMatchTheCode:
     absent -- once the installer stops writing the option live, nothing else
     governs it.
 
-    WHICH SIDE MOVES WHEN THIS FAILS IS A JUDGEMENT, NOT A FORMALITY.  Do
+    WHICH SIDE MOVES WHEN THIS FAILS IS A JUDGMENT, NOT A FORMALITY.  Do
     not make it pass by editing the commented-out assignment to match the
     code.  While the option was written live, the installer's value is what
     every fresh install has actually been running and the code's fallback
@@ -190,8 +188,6 @@ class TestCommentedValuesMatchTheCode:
         station = self.station_with_no_options(monkeypatch)
         for name in EXAMPLE_OPTIONS:
             commented.pop(name)
-        assert int(commented.pop('max_tries')) == station.max_tries
-        assert int(commented.pop('model_type')) == station.model_type
         assert int(commented.pop('loop_request')) == station.loop_request
         assert float(commented.pop('clock_drift_secs')) == \
             pytest.approx(station.clock_drift_secs)
@@ -199,29 +195,21 @@ class TestCommentedValuesMatchTheCode:
             pytest.approx(station.day_start_jump)
         assert float(commented.pop('clock_recenter_threshold')) == \
             pytest.approx(station.clock_recenter_threshold)
-        # Whatever is left belongs to the port wrappers, below.
-        assert sorted(commented) == ['baudrate', 'tcp_port', 'tcp_send_delay',
-                                     'timeout', 'wait_before_retry']
+        # Every commented option has now been held to the driver's value.
+        assert commented == {}
 
-    def test_serial_port_options(self):
-        commented = commented_options(install_module().vantagenext_config)
-        wrapper = VantageNext._port_factory({'type': 'serial',
-                                             'port': '/dev/vantage'})
-        assert int(commented['baudrate']) == wrapper.baudrate
-        assert float(commented['timeout']) == pytest.approx(wrapper.timeout)
-        assert float(commented['wait_before_retry']) == \
-            pytest.approx(wrapper.wait_before_retry)
-
-    def test_ethernet_port_options(self):
-        commented = commented_options(install_module().vantagenext_config)
-        wrapper = VantageNext._port_factory({'type': 'ethernet',
-                                             'host': '1.2.3.4'})
-        assert int(commented['tcp_port']) == wrapper.port
-        assert float(commented['tcp_send_delay']) == \
-            pytest.approx(wrapper.tcp_send_delay)
-        assert float(commented['timeout']) == pytest.approx(wrapper.timeout)
-        assert float(commented['wait_before_retry']) == \
-            pytest.approx(wrapper.wait_before_retry)
+    def test_the_rarely_changed_options_are_not_written_at_all(self):
+        """Eight options the driver reads are almost never overridden, and a
+        stanza is easier to read without them; the manual's Configuration
+        page is where they are listed, and tests/test_docs.py holds that
+        table to the code's defaults.  Written here in either form, one
+        would drift from nothing: no test above compares it with anything."""
+        for text in (install_module().vantagenext_config,
+                     VantageNextConfEditor().default_stanza):
+            for name in ('baudrate', 'tcp_port', 'tcp_send_delay', 'timeout',
+                         'wait_before_retry', 'max_tries', 'command_delay',
+                         'model_type'):
+                assert not re.search(r'^\s*#?\s*%s\s*=' % name, text, re.M), name
 
 
 class TestMergedStanza:
@@ -269,6 +257,6 @@ class TestMergedStanza:
                     'wrong indentation, so it merged outside its section: %r'
                     % line)
         # An indentation check cannot see a DROPPED block -- there is no line
-        # left to measure -- so count them.  All twelve, or the ones that
+        # left to measure -- so count them.  All five, or the ones that
         # vanished did so silently.
-        assert seen == 12
+        assert seen == 5

@@ -402,7 +402,7 @@ class EthernetWrapper(BaseWrapper):
         """Flush the input buffer from WeatherLinkIP"""
         import socket
         try:
-            # This is a bit of a hack, but there is no analogue to pyserial's flushInput()
+            # This is a bit of a hack, but there is no analog to pyserial's flushInput()
             # Set socket timeout to 0 to get immediate result
             self.socket.settimeout(0)
             self.socket.recv(4096)
@@ -998,8 +998,11 @@ class VantageNext(weewx.drivers.AbstractDevice):
     #   1. It loses time at a steady rate all day: clock_drift_secs, in seconds
     #      per day, negative for a clock that loses.  The rate does not vary
     #      with the hour.
-    #   2. Just after local midnight (between 00:00:06 and 00:05) it jumps
-    #      forward by day_start_jump seconds.
+    #   2. Just after local midnight it jumps forward by day_start_jump
+    #      seconds.  It starts at midnight and is not instantaneous: four to
+    #      six seconds into the day, readings show 15 to 40 percent of it.  By
+    #      00:05 it is complete; nothing was measured in between, so how long
+    #      it takes is not known.
     #   3. SETTIME replaces the hour, minute and second and nothing finer.  The
     #      console keeps its own sub-second tick, so a set moves the clock by a
     #      WHOLE number of seconds (40 sets: each within 0.08 s of a whole
@@ -1258,13 +1261,13 @@ class VantageNext(weewx.drivers.AbstractDevice):
             held_for = self._next_unforced_set_ts - now
             slack = 0.5 if held_for > 0 else -0.5
             if abs(off_center) <= self.clock_recenter_threshold + slack:
-                log.info("Clock is about %+.2f s off center (threshold %.2f).",
-                         off_center, self.clock_recenter_threshold)
+                log.info("Clock is about %+.2f s off center (one reading, good to +-0.5 s; "
+                         "threshold %.2f).", off_center, self.clock_recenter_threshold)
                 return error, "Not set: the clock is within its threshold."
             if held_for > 0:
-                log.info("Clock is about %+.2f s off center (threshold %.2f), but it may not be "
-                         "set for another %.1f hours (weewx started, or the clock was set, too "
-                         "recently); leaving it alone.%s",
+                log.info("Clock is about %+.2f s off center (one reading, good to +-0.5 s; "
+                         "threshold %.2f), but it may not be set for another %.1f hours (weewx "
+                         "started, or the clock was set, too recently); leaving it alone.%s",
                          off_center, self.clock_recenter_threshold, held_for / 3600.0,
                          "  If this repeats, clock_drift_secs and day_start_jump do not describe "
                          "this console." if held_for > VantageNext.CLOCK_STARTUP_HOLDOFF else "")
@@ -3158,7 +3161,7 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
                   "'3' for other (sonic)." % new_wind_cup_type, file=sys.stderr)
             return
 
-        print("Old rain wind cup type is %d (%s), new one is %d (%s)."
+        print("Old wind cup type is %d (%s), new one is %d (%s)."
               % (station.wind_cup_type,
                  station.wind_cup_size,
                  new_wind_cup_type,
@@ -3562,15 +3565,6 @@ class VantageNextConfEditor(weewx.drivers.AbstractConfEditor):
     # If the connection type is ethernet, an IP Address/hostname is required:
     host = 1.2.3.4
 
-    # Serial baud rate (usually 19200)
-    #baudrate = 19200
-
-    # TCP port (when using the WeatherLinkIP)
-    #tcp_port = 22222
-
-    # TCP send delay (when using the WeatherLinkIP):
-    #tcp_send_delay = 0.5
-
     # The type of LOOP packet to request: 1 = LOOP1; 2 = LOOP2; 3 = both
     #loop_request = 1
 
@@ -3581,16 +3575,6 @@ class VantageNextConfEditor(weewx.drivers.AbstractConfEditor):
     # it to name the id yourself, e.g. if you use a wind meter connected to
     # an anemometer transmitter kit, use its id.
     #iss_id = 1
-
-    # How long to wait for a response from the station before giving up (in
-    # seconds; must be greater than 2)
-    #timeout = 4
-
-    # How long to wait before trying again (in seconds)
-    #wait_before_retry = 1.2
-
-    # How many times to try before giving up:
-    #max_tries = 4
 
     # The amount of time, in seconds, that the console clock drifts in a day.
     # A negative number means the console loses time.
@@ -3603,9 +3587,6 @@ class VantageNextConfEditor(weewx.drivers.AbstractConfEditor):
     # daily drift before the driver steps it back (by whole seconds).  Smaller
     # is more accurate and sets the clock more often.  The minimum is 0.7.
     #clock_recenter_threshold = 1.2
-
-    # Vantage model Type: 1 = Vantage Pro; 2 = Vantage Pro2
-    #model_type = 2
 
     # The driver to use:
     driver = user.vantagenext
