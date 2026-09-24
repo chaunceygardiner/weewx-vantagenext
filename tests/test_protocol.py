@@ -590,6 +590,124 @@ class TestKeepClock:
         assert 'one reading, good to +-0.5 s; threshold' in caplog.text
         assert 'do not describe this console' in caplog.text
 
+    def test_a_measurement_holds_for_the_rest_of_the_day(self):
+        # Just inside the threshold, and near enough to it that one reading
+        # cannot tell: worth measuring once.  The distance does not move until
+        # the midnight jump, so for the rest of the day each check is a single
+        # GETTIME -- and after midnight the question is worth asking again.
+        measured = set()
+        for phase in PHASES:
+            clock = FakeClock(AFTERNOON + phase)
+            console = ClockConsole(clock, 1.15)
+            station = clock_station(clock, console)
+            station.getTime()
+            if console.gettimes > 1:
+                measured.add(phase)
+            # On the hour exactly: each GETTIME moves the fake host clock a
+            # few ms, and a phase must not creep across a second boundary.
+            for hour in range(1, 10):                       # to 23:30
+                clock.t = AFTERNOON + phase + hour * 3600
+                polls = console.gettimes
+                station.getTime()
+                assert console.gettimes == polls + 1, phase
+            clock.t = AFTERNOON + phase + 10 * 3600         # 00:30 tomorrow
+            polls = console.gettimes
+            station.getTime()
+            assert (console.gettimes > polls + 1) == (phase in measured), phase
+            assert console.sets == [], phase
+        assert len(measured) >= 15
+
+    @pytest.mark.parametrize('day', [(2026, 11, 1), (2027, 3, 14)])
+    def test_the_hold_ends_at_the_next_midnight_on_a_dst_day(self, day):
+        # A 25-hour day and a 23-hour one: "tomorrow" is the next midnight,
+        # not 24 hours on.
+        measured = 0
+        for phase in PHASES:
+            clock = FakeClock(datetime.datetime(*day, 14, 30).timestamp() + phase)
+            console = ClockConsole(clock, 1.15)
+            station = clock_station(clock, console)
+            station.getTime()
+            if console.gettimes == 1:
+                continue
+            measured += 1
+            clock.t = datetime.datetime(*day, 23, 30).timestamp() + phase
+            polls = console.gettimes
+            station.getTime()
+            assert console.gettimes == polls + 1, phase
+            tomorrow = datetime.date(*day) + datetime.timedelta(days=1)
+            clock.t = datetime.datetime.combine(tomorrow, datetime.time(0, 30)).timestamp() + phase
+            polls = console.gettimes
+            station.getTime()
+            assert console.gettimes > polls + 1, phase
+        assert measured >= 15
+
+    def test_the_evening_after_a_step_is_quiet(self):
+        # A step at 00:15 lands the clock on the far side of the band, where
+        # one reading often looks beyond the 0.7 that calls for a
+        # measurement.  The step was measured: nothing more is to be learned
+        # before midnight, so the evening after the 20-hour hold ends is as
+        # quiet as the day before it.
+        start = datetime.datetime(2026, 9, 15, 0, 15).timestamp()
+        remeasured = 0
+        for phase in PHASES:
+            clock = FakeClock(start + phase)
+            console = ClockConsole(clock, 1.20)
+            station = clock_station(clock, console, **GAINING)
+            station.getTime()
+            assert console.error == pytest.approx(-0.80, abs=1e-6), phase
+            for hour in range(1, 24):                       # to 23:15
+                clock.t = start + phase + hour * 3600
+                polls = console.gettimes
+                station.getTime()
+                assert console.gettimes == polls + 1, phase
+            clock.t = start + phase + 24 * 3600             # 00:15 tomorrow
+            polls = console.gettimes
+            station.getTime()
+            remeasured += console.gettimes > polls + 1
+            assert len(console.sets) == 1, phase
+        # Where one reading looks beyond 0.7, tomorrow measures again.
+        assert remeasured >= 5
+
+    @pytest.mark.parametrize('failure', ['retries exceeded', 'read back wrong'])
+    def test_a_step_that_failed_is_measured_again_before_midnight(self, failure):
+        # A step at 00:15 that did not happen, or did not land where it was
+        # sent: where the clock stands is not known, so the evening after the
+        # 20-hour hold ends measures it again rather than waiting for
+        # tomorrow -- even where one reading would call it within reach.
+        start = datetime.datetime(2026, 9, 15, 0, 15).timestamp()
+        for phase in PHASES:
+            clock = FakeClock(start + phase)
+            if failure == 'retries exceeded':
+                console = ClockConsole(clock, 1.45, ignore_sets=True, lose_set_acks=9)
+                station = clock_station(clock, console, max_tries=2, **GAINING)
+                with pytest.raises(weewx.RetriesExceeded):
+                    station.getTime()
+            else:
+                console = ClockConsole(clock, 1.45, ignore_sets=True)
+                station = clock_station(clock, console, **GAINING)
+                station.getTime()
+            assert console.error == 1.45, phase
+            console.ignore_sets = False
+            console.lose_set_acks = 0
+            clock.t = start + phase + 20 * 3600 + 900           # 20:30
+            station.getTime()
+            assert console.error == pytest.approx(-0.55, abs=1e-6), phase
+
+    def test_a_clock_beyond_its_threshold_for_certain_is_measured_anyway(self):
+        # Measured inside its threshold, then an hour later out by more than
+        # one reading can explain: the console is not doing what its options
+        # say, and it is stepped now rather than tomorrow.
+        for phase in PHASES:
+            clock = FakeClock(AFTERNOON + phase)
+            console = ClockConsole(clock, 1.15)
+            station = clock_station(clock, console)
+            station.getTime()
+            clock.sleep(3600)
+            console.error = 2.45
+            station.getTime()
+            assert len(console.sets) == 1, phase
+            assert abs(console.error) <= 0.5, phase
+
     def test_set_time_centers(self):
         # Forced: to the center, however little it is off.
         for phase in PHASES:

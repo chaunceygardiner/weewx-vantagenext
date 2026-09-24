@@ -78,8 +78,12 @@ Because one reading of the console is only good to ±0.5 seconds, a step is deci
 *measured* error.  The driver polls the console's time until the second changes: the
 console's second began between those two readings, so its error is known to within half
 the gap between them — a few milliseconds on a serial connection.  The polling takes up to
-a second and a half, and it happens only when a precise reading could call for a step, which
-for a well-described console is once every few days.
+a second and a half, and it happens only when a precise reading could call for a step.  Once
+made, a measurement stands until after the next midnight, because for a console whose options
+describe it the distance from center changes only at the jump; the one exception is a single
+reading that puts the clock beyond its threshold whatever fraction was dropped, which is
+measured at once.  So a console on a serial connection is measured at most about once a day,
+and once more after WeeWX restarts.
 
 Some guards, each of which shows up in the log:
 

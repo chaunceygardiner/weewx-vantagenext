@@ -1055,14 +1055,16 @@ class VantageNext(weewx.drivers.AbstractDevice):
     # distance is beyond the threshold whatever the dropped fraction was, and
     # step to the center.  A coarse step can never leave the clock further
     # out than it found it.
-    # The poll is made only when a precise reading could exceed the threshold.
+    # The poll is made only when a precise reading could exceed the threshold,
+    # and not again the same day once one has been made: see the state below.
     #
     # Nothing is decided inside a DST time change window, nor in the first
     # CLOCK_JUMP_WINDOW seconds of the day, when the jump may be half done.
     #
-    # The ONLY state is _next_unforced_set_ts, the earliest time an unforced
-    # step is allowed, and it has one rule: it is ARMED AT PROCESS START AND
-    # AT EVERY SET ATTEMPT.
+    # The state is two timestamps, each an earliest time for something.
+    #
+    # _next_unforced_set_ts, the earliest time an unforced step is allowed,
+    # has one rule: it is ARMED AT PROCESS START AND AT EVERY SET ATTEMPT.
     #   - At an attempt, forced or not, and BEFORE it is made: for
     #     CLOCK_MIN_SET_INTERVAL.  A console that does not follow 1 and 2 --
     #     whose ideal curve is therefore wrong -- then costs one set a day at
@@ -1075,8 +1077,47 @@ class VantageNext(weewx.drivers.AbstractDevice):
     #     whose sets cause the read errors that cause the restarts, around
     #     and around.  The first unforced step comes at a later clock check.
     # It is read in one place (_keep_clock) and written in two (__init__,
-    # and _keep_clock ahead of the attempt).  The forced form is never held
-    # back: a clock wrong by more than max_drift is set at startup as before.
+    # and _keep_clock ahead of the attempt).
+    #
+    # _next_poll_ts, the earliest time a reading that is merely NEAR the
+    # threshold is polled for a precise one, is ARMED WHENEVER A PRECISE
+    # READING LEAVES THE DAY'S DISTANCE KNOWN, until CLOCK_JUMP_WINDOW into
+    # the next day: when it calls for no step, and when the step it calls
+    # for is made.  For a console whose options describe it, the off-center
+    # distance moves only at the jump, so until then a second measurement can
+    # only repeat the first; without this a clock that sits just inside its
+    # threshold is polled at every check for days, and one that a step has
+    # left on the far side is polled every hour from the end of
+    # CLOCK_MIN_SET_INTERVAL to midnight.  (Options that do not describe the
+    # console let the distance wander during the day; the clock can then
+    # stand up to threshold + 1.0 off center before a single reading is
+    # beyond threshold + 0.5 for certain and it is measured.)  A COARSE
+    # measurement arms nothing -- it leaves the distance no better known --
+    # so a connection too slow to measure precisely goes on measuring near
+    # the threshold at every check, as it always has.  It is NOT
+    # armed when an attempt runs out of retries or the console reads back
+    # other than what was sent: where the clock stands is then unknown, and
+    # measuring again is exactly what is wanted.  (A read-back that cannot
+    # be made at all leaves it known: the set was acknowledged.)  It starts
+    # at 0: a process knows nothing of the day it starts in.  Read and
+    # written in _keep_clock only.
+    #
+    # How the two combine in an unforced decision, on one GETTIME that says
+    # the clock is about c off center:
+    #
+    #   |c| within threshold - 0.5         nothing: it cannot be beyond.
+    #   |c| within threshold + 0.5, and    nothing: it may be beyond, but a
+    #       either timestamp is to come      step is barred, or a measurement
+    #                                        would repeat today's.
+    #   |c| beyond threshold + 0.5, and    nothing, and say so.
+    #       a step is barred
+    #   otherwise                          measure, then decide (clock_step).
+    #
+    # So a clock beyond its threshold for certain is measured whatever
+    # _next_poll_ts says: its console is not doing what its options say, and
+    # it is stepped now rather than tomorrow.  The forced form is never held
+    # back by either: a clock wrong by more than max_drift is set at startup
+    # as before.
     #
     # Two entry points.  getTime, which weewx.engine's StdTimeSynch calls every
     # clock_check seconds, runs the unforced decision and reports the error
@@ -1112,6 +1153,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
     CLOCK_MIN_THRESHOLD = 0.7
 
     _next_unforced_set_ts = 0.0
+    _next_poll_ts = 0.0
 
     @staticmethod
     def _now():
@@ -1253,13 +1295,14 @@ class VantageNext(weewx.drivers.AbstractDevice):
         if not forced:
             # This reading is good to +-0.5 s.  Poll for a precise error only
             # if one could exceed the threshold -- and, while no unforced set
-            # is allowed anyway, not at all.  A step to a side LANDS the clock
+            # is allowed anyway or today's has already been measured, only if
+            # it exceeds it for certain.  A step to a side LANDS the clock
             # most of a threshold off center, by design, so while held the
             # complaint below is for a clock that is beyond its threshold
             # whatever the dropped fraction was, never for one that may be
             # exactly where the last step put it.
             held_for = self._next_unforced_set_ts - now
-            slack = 0.5 if held_for > 0 else -0.5
+            slack = 0.5 if held_for > 0 or now < self._next_poll_ts else -0.5
             if abs(off_center) <= self.clock_recenter_threshold + slack:
                 log.info("Clock is about %+.2f s off center (one reading, good to +-0.5 s; "
                          "threshold %.2f).", off_center, self.clock_recenter_threshold)
@@ -1274,12 +1317,19 @@ class VantageNext(weewx.drivers.AbstractDevice):
                 return error, "Not set: the clock may not be set again yet."
 
         error, gap = self._measure_clock_error()
+        # When today's distance turns out to be known, it stands until the
+        # jump (for a console whose options describe it).  The start of the
+        # next day is found from well inside it, so that a 23- or 25-hour day
+        # is no matter.
+        tomorrow = startOfDay(startOfDay(now) + 36 * 3600) + VantageNext.CLOCK_JUMP_WINDOW
         off_center = VantageNext.clock_off_center(
             error, self._now() - startOfDay(now), self.clock_drift_secs, self.day_start_jump)
         step = VantageNext.clock_step(off_center, self.clock_recenter_threshold, gap is not None, forced,
                                       self.clock_drift_secs + self.day_start_jump)
         reading = "coarse" if gap is None else "measured to %.0f ms" % (gap * 500.0)
         if step == 0:
+            if gap is not None:
+                self._next_poll_ts = tomorrow
             log.info("Clock is %+.2f s off center (threshold %.2f, %s); not set.",
                      off_center, self.clock_recenter_threshold, reading)
             return error, ("Not set: the clock is %+.2f s from the center of its daily drift, "
@@ -1287,7 +1337,8 @@ class VantageNext(weewx.drivers.AbstractDevice):
 
         # Armed BEFORE the attempt: see "Keeping the console clock".
         self._next_unforced_set_ts = self._now() + VantageNext.CLOCK_MIN_SET_INTERVAL
-        self._step_console_clock(step, error, gap)
+        if self._step_console_clock(step, error, gap) and gap is not None:
+            self._next_poll_ts = tomorrow
         log.info("Clock stepped %+d s: error %+.2f -> %+.2f s, off center %+.2f -> %+.2f s "
                  "(threshold %.2f, %s) (%d)",
                  step, error, error + step, off_center, off_center + step,
@@ -1296,7 +1347,9 @@ class VantageNext(weewx.drivers.AbstractDevice):
 
     def _step_console_clock(self, step, error, gap):
         """Move the console clock by step whole seconds.  error is the clock
-        error before the step; gap is from _measure_clock_error."""
+        error before the step; gap is from _measure_clock_error.  Returns
+        False if the console reads back other than what was sent, else True;
+        raises RetriesExceeded if the set could not be made."""
 
         for unused_count in range(self.max_tries):
             try:
@@ -1338,12 +1391,14 @@ class VantageNext(weewx.drivers.AbstractDevice):
                 console_ts, now = self._poll_console()
             except weewx.WeeWxIOError as e:
                 log.warning("The clock was set, but could not be read back to check it: %s", e)
-                return
+                return True
             expected_ts = math.floor(now + error) + step
             if console_ts != expected_ts:
                 log.warning("After the clock set the console reads %s; expected %s.",
                             weeutil.weeutil.timestamp_to_string(console_ts),
                             weeutil.weeutil.timestamp_to_string(expected_ts))
+                return False
+        return True
 
     def _avoid_second_boundary(self, error, gap):
         """Wait, if need be, until the console is in a part of its second

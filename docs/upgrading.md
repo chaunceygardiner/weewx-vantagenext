@@ -25,7 +25,7 @@ better default never reaches an option that your file pins.  This page is the li
 to change by hand, newest first.  Read down to the release you are coming from.
 
 The full history is in the
-[changelog](https://github.com/chaunceygardiner/weewx-vantagenext/blob/master/changelog).
+[change history](https://github.com/chaunceygardiner/weewx-vantagenext/blob/master/changes.md).
 
 ## To 2.4
 

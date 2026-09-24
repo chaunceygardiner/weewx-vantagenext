@@ -138,7 +138,7 @@ deleting `set_time_padding` and `time_set_goal` and checking `max_drift` (2.4), 
 and all of them are on the
 [Upgrading page](https://chaunceygardiner.github.io/weewx-vantagenext/upgrading.html).  The
 full history is in the
-[changelog](https://github.com/chaunceygardiner/weewx-vantagenext/blob/master/changelog).
+[change history](https://github.com/chaunceygardiner/weewx-vantagenext/blob/master/changes.md).
 
 ## Testing
 

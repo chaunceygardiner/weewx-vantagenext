@@ -25,10 +25,11 @@ polling the console until its second changes, and when the clock is more than
 clock_recenter_threshold (new; default 1.2 seconds, minimum 0.7) from the
 center of the sawtooth it steps it by the whole number of seconds that will
 go longest before the next set.  This happens when WeeWX checks the clock
-(every clock_check seconds); max_drift is now only a backstop.  On the
-consoles measured the worst clock error falls from over 4 seconds to about 3
-for the same number of clock sets, and the average error from most of a second
-fast to about zero.
+(every clock_check seconds), and a measurement stands until the next midnight,
+since the distance from center changes only at the daily jump; max_drift is
+now only a backstop.  On the consoles measured the worst clock error falls
+from over 4 seconds to about 3 for the same number of clock sets, and the
+average error from most of a second fast to about zero.
 The clock error WeeWX logs is now the true error, no longer half a second
 slow, and is reported as it stands after any step.
 Unforced clock sets are limited to one in 20 hours, and none is made in the

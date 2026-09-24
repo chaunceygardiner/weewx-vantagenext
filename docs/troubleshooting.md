@@ -50,7 +50,7 @@ startup summary shown on the [Installation](installation.md#confirming-it-took) 
 |---|---|
 | `Clock is about ... s off center (one reading, good to +-0.5 s; threshold ...).` | The routine check.  Nothing needed doing. |
 | `Clock is about ... s off center (one reading, good to +-0.5 s; threshold ...), but it may not be set for another ... hours (weewx started, or the clock was set, too recently); leaving it alone.` | The clock is beyond its threshold, but WeeWX started within the last 30 minutes or the clock was set within the last 20 hours.  Repeated daily, the clock options are wrong. |
-| `Clock is ... s off center (threshold ..., measured to ... ms); not set.` | A precise measurement found the clock within its threshold after all. |
+| `Clock is ... s off center (threshold ..., measured to ... ms); not set.` | A precise measurement found the clock within its threshold after all.  It is not measured again until after midnight. |
 | `Clock stepped ... s: error ... -> ... s, off center ... -> ... s (threshold ..., ...) (...)` | The clock was set.  [Every field is explained here](clock.md#the-clock-lines-in-the-log). |
 | `setTime ignored during time change transition period.` | WeeWX asked for a clock set inside a [time change window](dst.md). |
 | `setTime ignored in the 600 seconds after midnight, while the console's daily jump may be in progress.` | WeeWX asked for a clock set in the first ten minutes of the day.  It will ask again at the next check. |
