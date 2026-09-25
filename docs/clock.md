@@ -152,11 +152,59 @@ picture of your console is wrong — which is the next section.
 
 ## Tuning it to your console
 
-You need a day or two of hourly `Clock error is ...` lines with no clock set among them (no
-`Clock stepped` line) and no restart.  Set `clock_check = 3600` in `[StdTimeSynch]` if you
-have not, so there are 24 readings a day to work with.
+The log already holds both numbers.  WeeWX writes a `Clock error is ...` line at every clock
+check, whatever the driver, and the driver can read them back for you.  Run it with the
+Python that runs WeeWX, from the directory that holds the installed `user` directory —
+`~/weewx-data/bin` for a pip install, `/etc/weewx/bin` for a package install — and name
+the log files, rotated and gzipped ones included:
 
-Here are real readings from one console, one line in six:
+```
+cd ~/weewx-data/bin
+~/weewx-venv/bin/python -m user.vantagenext --clock-options /var/log/weewx.log*
+```
+
+Name whichever files your WeeWX log goes to (`/var/log/syslog*` on many systems), or pipe
+the journal in: `journalctl -u weewx | ~/weewx-venv/bin/python -m user.vantagenext
+--clock-options -`.  It only reads the log, so WeeWX can keep running.  Run it on the
+station's own machine, or one in the same time zone: it finds midnight by that machine's
+clock.  On a machine that runs more than one WeeWX, give it only this station's log: nothing
+in a `Clock error` line says which console it came from.  Here is what it said about one
+console after a month:
+
+```
+830 clock readings, 2026-08-23 to 2026-09-24: 33 days usable, 15 midnights.  WeeWX restarted 103 times and the clock was moved 10 times; each starts the fit afresh.
+
+In the [VantageNext] section of weewx.conf:
+    clock_drift_secs = -3.41
+    day_start_jump = 4.01
+
+clock_drift_secs is -3.41 +- 0.04; single days varied by 0.15.
+day_start_jump is 4.01 +- 0.02; single midnights varied by 0.08.
+The clock creeps +0.61 s a day net of its jump.
+In [StdTimeSynch], max_drift = 5 (at least |clock_drift_secs| / 2 + clock_recenter_threshold 1.20 + 1.5 = 4.4; WeeWX's default is 5).
+
+The driver last logged clock_drift_secs = -3.39 and day_start_jump = 4.01, which agree.
+```
+
+It fits one straight line through every day at once and reads a step off every midnight,
+starting afresh wherever the clock was moved or WeeWX restarted (a restart late at night
+costs that midnight); a day on which the clocks change is left out.  The `+-` is how well the average is known.  How much single days varied is how much
+the console itself wanders — a few hundredths to a couple of tenths — so two decimals are
+all the precision the options need.  Aim for a `+-` of about 0.1 or less; if it is larger,
+run it again after more quiet days, with no restart of WeeWX and no clock set by hand.  When the values the driver is running with differ
+from what the log shows by more than a tenth, the last line says to change them.
+
+It needs at least a day and a half of clock checks, across a midnight, and says so when it
+has less.  Set `clock_check = 3600` in `[StdTimeSynch]` if you have not, so there are 24
+readings a day to work with.  A log written by the built-in driver serves just as well, so
+you can measure a console before switching to this driver.
+
+### Doing it by hand
+
+What `--clock-options` does, done with a handful of readings, is below.  You need a day or
+two of hourly `Clock error is ...` lines with no clock set among them (no `Clock set to`
+or `Clock stepped` line) and no restart of WeeWX: a restart can shift every reading after it
+by up to a second.  Here are real readings from one console, one line in six:
 
 | When | Clock error | | When | Clock error |
 |---|---|---|---|---|

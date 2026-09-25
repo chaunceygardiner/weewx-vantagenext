@@ -31,7 +31,7 @@ in this manual is describing a driver you are not running.
 | `SerialException on read.` with `Is there a competing process running??` | Something else has the port: a second `weewxd`, a `weectl device` left running, a modem manager. |
 | `rxCheckPercent` is implausibly low, or missing | It is gauged against `iss_id`.  Check the `ISS ID is ...` line at startup against your transmitters; a live `iss_id` line in `weewx.conf` overrides detection.  See [`iss_id`](configuration.md#iss_id). |
 | The wind reads wrong after `--set-wind-cup` | The codes differ from WeeWX's guide: `1` is small here.  See [Configuring the console](console.md#the-wind-cup-codes-are-different-here). |
-| The clock is set every day, or the log says `leaving it alone` every day | `clock_drift_secs` and `day_start_jump` do not describe your console.  See [Tuning it to your console](clock.md#tuning-it-to-your-console). |
+| The clock is set every day, or the log says `leaving it alone` every day | `clock_drift_secs` and `day_start_jump` do not describe your console.  `--clock-options` measures both from the log: see [Tuning it to your console](clock.md#tuning-it-to-your-console). |
 | WeeWX logs `Clock error` values of two or three seconds and the driver does nothing | That can be right.  The error is a daily sawtooth as tall as `clock_drift_secs`; the driver centers it and cannot flatten it.  Judge by the driver's own `off center` line. |
 | The clock is set more often than the driver's log lines account for | `max_drift` is too small and WeeWX is forcing sets.  See [Configuration](configuration.md#the-clock-options-and-stdtimesynch). |
 | Two startup clock lines, a moment apart, half a second different | Each is one reading, good to ±0.5 s.  See [the clock lines in the log](clock.md#the-clock-lines-in-the-log). |
@@ -132,7 +132,9 @@ It reads no `weewx.conf`, so the driver's defaults apply to everything else, and
 lines go to the system log under the name `vantagenext`.
 
 `weectl device --info` and `weectl device --current` are the other two read-only looks at
-the console, and they also need WeeWX stopped.
+the console, and they also need WeeWX stopped.  `python -m user.vantagenext --clock-options`
+reads the log instead of the console, and WeeWX may be running: see
+[Tuning it to your console](clock.md#tuning-it-to-your-console).
 
 ## Reporting a problem
 

@@ -373,6 +373,21 @@ class TestConstants:
             assert phrase in page, phrase
         assert VantageNext.CLOCK_JUMP_WINDOW == 600  # "the first ten minutes of the day"
 
+    def test_the_clock_options_sample_is_what_the_driver_prints(self):
+        # Numbers aside, the sample on the clock page is the report's own
+        # text: the same lines, the same wording, the same layout.
+        sample = re.search(r'```\n(\d+ clock readings.*?)```', pages()['clock.md'], re.S)
+        assert sample, 'no --clock-options sample on the clock page'
+        fit = {'drift': -3.35, 'drift_se': 0.01, 'drift_sd': 0.07, 'jump': 3.98,
+               'jump_se': 0.02, 'jump_sd': 0.05, 'days': 33, 'midnights': 23, 'span': 1.0}
+        stats = {'readings': 830, 'first': 1.7e9, 'last': 1.7e9 + 86400 * 32,
+                 'moves': 10, 'breaks': 0, 'restarts': 12}
+        options = {'clock_drift_secs': -3.39, 'day_start_jump': 4.01}
+        text, status = vantagenext.clock_options_report(fit, options, stats)
+        assert status == 0
+        number = re.compile(r'[-+]?\d+(?:[.-]\d+)*')
+        assert number.sub('#', sample.group(1)) == number.sub('#', text)
+
     def test_the_batch_size_is_the_drivers(self):
         source = read('bin', 'user', 'vantagenext.py')
         assert 'self.genDavisLoopPackets(200)' in source

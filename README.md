@@ -55,8 +55,8 @@ problems it solves.
   forward just after midnight, so its error is a daily sawtooth that no setting can
   flatten.  The driver measures the error to a few hundredths of a second, keeps the
   sawtooth centered on zero, and steps the clock by whole seconds — the only change a
-  console accepts — chosen to go as long as possible before the next one.  The manual
-  shows how to measure your own console's drift and jump from the log.
+  console accepts — chosen to go as long as possible before the next one.  The driver
+  measures your own console's drift and jump from the log (`--clock-options`).
   → [Keeping the console clock](https://chaunceygardiner.github.io/weewx-vantagenext/clock.html)
 
 - **The Davis sonic anemometer.**  `weectl device --set-wind-cup=3` selects it; see the

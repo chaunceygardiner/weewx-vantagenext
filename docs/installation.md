@@ -77,6 +77,10 @@ The two drivers read their settings from different sections — `[Vantage]` and
   option names and meanings are the same.
 - **Leave everything else commented out**, as the installer wrote it.  See
   [the commented-out convention](configuration.md#options-shown-commented-out).
+- **Except `clock_drift_secs` and `day_start_jump`, which are worth measuring first.**  The
+  built-in driver's log already holds them: once the driver is installed, `--clock-options`
+  reads them out of it, before you switch.  See
+  [Tuning it to your console](clock.md#tuning-it-to-your-console).
 
 The `[Vantage]` section can stay where it is.  Nothing reads it while `station_type` is
 `VantageNext`, and it is what you go back to if you ever switch back.

@@ -40,6 +40,14 @@
 - weectl device --set-time now says what it did, which may be nothing: the clock
   is not set inside a time change window, in the ten minutes after midnight, or
   when it is already within half a second of center.
+- New: python -m user.vantagenext --clock-options LOGFILE... reads WeeWX's own
+  "Clock error is" lines and works out clock_drift_secs and day_start_jump for
+  your console, with how well each is known, the max_drift to go with them,
+  and whether the values the driver is running with need changing.  It reads
+  gzipped rotations and the journal (- for standard input), starts afresh
+  wherever the clock was set or WeeWX restarted, and works on a log written
+  by the built-in driver, so a console can be measured before switching.
+  WeeWX may be running.
 - Fix reading and setting the console clock from 2028-01-01.  The console's year
   byte (years since 1900) was packed and unpacked as a signed byte, which holds
   no more than 127: every clock set would have raised an error WeeWX does not

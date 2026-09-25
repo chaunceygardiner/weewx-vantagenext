@@ -14,6 +14,7 @@ import datetime
 import inspect
 import logging
 import math
+import re
 import struct
 import sys
 import time
@@ -3665,6 +3666,372 @@ class VantageNextConfEditor(weewx.drivers.AbstractConfEditor):
             settings['host'] = self._prompt('host')
         return settings
 
+# ===============================================================================
+#   --clock-options: clock_drift_secs and day_start_jump, from the log
+# ===============================================================================
+#
+# weewx.engine logs "Clock error is ... seconds" at every clock check, for any
+# driver.  Between clock sets the error follows the console's sawtooth: a
+# straight line through each day (its slope is clock_drift_secs) and a step
+# across each midnight (day_start_jump).  So the log already holds both
+# numbers, measured hundreds of times.
+#
+# The readings are cut into PIECES -- one day of one unbroken run, in this
+# machine's time zone -- and a single slope is fitted through every piece at
+# once, each piece keeping an intercept of its own.  A run is broken wherever
+# the clock was, or may have been, moved (a "Clock set to", "Clock stepped" or
+# "Max retries exceeded while setting time" line, or an unexplained jump
+# between two close readings, as when someone sets the console by hand -- a
+# move of more than about CLOCK_LOG_MAX_STEP + 1 s, since two whole-second
+# readings can differ by nearly a second on their own) and at every restart
+# of weewxd.  A driver changes only across a restart, and that matters:
+# versions before 2.4 log the error half a second low.  Breaking on the
+# restart itself, seen in the process id on every line, needs no record of
+# which driver ran before -- a line that rotated out of the log long ago.
+# Each midnight between two pieces of one run gives a jump: the later
+# piece's line at midnight less the earlier one's.  Dropped: readings in the
+# first CLOCK_JUMP_WINDOW seconds of a day, when the jump may be half done;
+# readings more than CLOCK_LOG_MAX_ERROR out, which are misreads; and whole
+# days on which the UTC offset changes.
+
+# A reading this far out is a misread (an hour, in a time change), not drift.
+CLOCK_LOG_MAX_ERROR = 60.0
+# Two readings of one day, this close together, may differ by this much at
+# most (a coarse reading is good to +-0.5 s); more, and the clock was moved.
+# The window takes in WeeWX's default clock_check of four hours, which is
+# what a log written by the built-in driver usually has.
+CLOCK_LOG_MAX_STEP = 2.5
+CLOCK_LOG_STEP_WINDOW = 6 * 3600
+# A piece needs this many readings to count, and to span this long to help
+# with the slope.
+CLOCK_LOG_MIN_READINGS = 3
+CLOCK_LOG_MIN_SPAN = 2 * 3600
+# The least span of readings, over all pieces, for a slope worth reporting.
+CLOCK_LOG_MIN_TOTAL_SPAN = 12 * 3600
+# A piece this long, with this many readings, is a day's own measurement of
+# the drift: their spread says how much the console varies from day to day.
+CLOCK_LOG_DAY_SPAN = 12 * 3600
+CLOCK_LOG_DAY_READINGS = 12
+# Fitted and running values further apart than this are worth a word.
+CLOCK_LOG_STALE = 0.1
+
+_CLOCK_LOG_ISO = re.compile(r'^(\d{4})-(\d\d)-(\d\d)[T ](\d\d):(\d\d):(\d\d)(?:[.,](\d+))?'
+                            r'(Z|[+-]\d\d:?\d\d)?\s')
+_CLOCK_LOG_SYSLOG = re.compile(r'^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) +(\d{1,2}) '
+                               r'(\d\d):(\d\d):(\d\d)\s')
+_CLOCK_LOG_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                     'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+_CLOCK_LOG_ERROR = re.compile(r'weewx\.engine: Clock error is (-?\d+(?:\.\d+)?) seconds')
+# A set that ran out of retries may have been made all the same: the console
+# may have acted on it and only the ACK been lost.
+_CLOCK_LOG_MOVED = re.compile(r'Clock set to|Clock stepped|Max retries exceeded while setting time')
+# The process id, just before the level: "weewxd[1234]: INFO" from WeeWX 5,
+# "weewx[7206] INFO" from WeeWX 4.
+_CLOCK_LOG_PID = re.compile(r'\[(\d+)\]:? +(?:DEBUG|INFO|WARNING|ERROR|CRITICAL) ')
+_CLOCK_LOG_OPTION = re.compile(r'user\.vantagenext: (clock_drift_secs|day_start_jump|'
+                               r'clock_recenter_threshold) *: (-?\d+(?:\.\d+)?)')
+
+
+def _clock_log_time(line, now):
+    """The time a log line was written: (epoch, local date, seconds into the
+    local day, UTC offset in seconds), or None.  "Local" is this machine's
+    time zone, whatever zone the line was stamped in -- journalctl --utc, or
+    an rsyslog set to UTC, would otherwise cut the days at the wrong
+    midnight.  A line that carries no UTC offset, or no year, is taken to be
+    in this machine's time zone, and a missing year is the latest one that
+    does not put the line in the future."""
+    m = _CLOCK_LOG_ISO.match(line)
+    if m:
+        y, mo, d, hh, mi, ss = (int(x) for x in m.group(1, 2, 3, 4, 5, 6))
+        frac = float('0.' + m.group(7)) if m.group(7) else 0.0
+        zone = m.group(8)
+    else:
+        m = _CLOCK_LOG_SYSLOG.match(line)
+        if not m:
+            return None
+        mo = _CLOCK_LOG_MONTHS.index(m.group(1)) + 1
+        d, hh, mi, ss = (int(x) for x in m.group(2, 3, 4, 5))
+        frac = 0.0
+        zone = None
+        # The latest year that has such a day (a Feb 29 needs a leap year)
+        # and does not put the line in the future.
+        this_year = time.localtime(now).tm_year
+        for y in range(this_year, this_year - 9, -1):
+            if (mo, d) == (2, 29) and not (y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)):
+                continue
+            if time.mktime((y, mo, d, hh, mi, ss, 0, 0, -1)) <= now + 86400:
+                break
+        else:
+            return None
+    if zone:
+        offset = 0 if zone == 'Z' else ((1 if zone[0] == '+' else -1)
+                                        * (int(zone[1:3]) * 3600 + int(zone[-2:]) * 60))
+        epoch = ((datetime.datetime(y, mo, d) - datetime.datetime(1970, 1, 1)).total_seconds()
+                 + hh * 3600 + mi * 60 + ss + frac - offset)
+    else:
+        epoch = time.mktime((y, mo, d, hh, mi, ss, 0, 0, -1)) + frac
+    lt = time.localtime(epoch)
+    return (epoch, datetime.date(lt.tm_year, lt.tm_mon, lt.tm_mday),
+            lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec + frac, lt.tm_gmtoff)
+
+
+def read_clock_log(lines, now=None):
+    """What --clock-options needs from a WeeWX log: the clock readings, cut
+    into pieces (see above), and the clock options the driver last logged.
+    Returns (pieces, options, stats): pieces maps (run, local date) to a list
+    of (epoch, seconds into the day, UTC offset, error)."""
+    now = time.time() if now is None else now
+    events = []
+    for line in lines:
+        m = _CLOCK_LOG_ERROR.search(line)
+        moved = _CLOCK_LOG_MOVED.search(line)
+        option = _CLOCK_LOG_OPTION.search(line)
+        if not (m or moved or option):
+            continue
+        stamp = _clock_log_time(line, now)
+        if stamp is None:
+            continue
+        if m:
+            pid = _CLOCK_LOG_PID.search(line)
+            events.append((stamp, 'error', (float(m.group(1)), pid.group(1) if pid else None)))
+        elif moved:
+            events.append((stamp, 'moved', None))
+        else:
+            events.append((stamp, 'option', (option.group(1), float(option.group(2)))))
+    # Stable, so lines logged in the same second keep the order they were
+    # written in: a step before the error it reports, a set after the error
+    # that caused it.
+    events.sort(key=lambda e: e[0][0])
+
+    pieces = {}
+    options = {}
+    stats = {'readings': 0, 'first': None, 'last': None, 'moves': 0, 'breaks': 0,
+             'restarts': 0}
+    run = 0
+    last = None
+    last_pid = None
+    for (epoch, date, secs, offset), kind, value in events:
+        if kind == 'option':
+            options[value[0]] = value[1]
+            continue
+        if kind == 'moved':
+            run += 1
+            stats['moves'] += 1
+            last = None
+            continue
+        value, pid = value
+        if pid is not None:
+            if last_pid is not None and pid != last_pid:
+                run += 1
+                stats['restarts'] += 1
+                last = None
+            last_pid = pid
+        if abs(value) > CLOCK_LOG_MAX_ERROR or secs < VantageNext.CLOCK_JUMP_WINDOW:
+            continue
+        if (last is not None and last[1] == date and epoch - last[0] < CLOCK_LOG_STEP_WINDOW
+                and abs(value - last[2]) > CLOCK_LOG_MAX_STEP):
+            run += 1
+            stats['breaks'] += 1
+        last = (epoch, date, value)
+        pieces.setdefault((run, date), []).append((epoch, secs, offset, value))
+        stats['readings'] += 1
+        stats['first'] = epoch if stats['first'] is None else stats['first']
+        stats['last'] = epoch
+    # A day on which the UTC offset changes has two different lengths of
+    # "midnight to now": leave it out.
+    for key in [k for k, v in pieces.items() if len(set(r[2] for r in v)) > 1]:
+        del pieces[key]
+    return pieces, options, stats
+
+
+def fit_clock_log(pieces):
+    """Fit one slope through every piece, each with an intercept of its own,
+    then read the jump off each midnight between two pieces of one run.
+    Returns a dict: drift and drift_se (seconds a day), jump and jump_se (None
+    without a usable midnight), drift_sd and jump_sd (how much single days
+    and single midnights varied; None with fewer than three), days,
+    midnights, and span (seconds of readings behind the slope)."""
+    usable = {k: v for k, v in pieces.items() if len(v) >= CLOCK_LOG_MIN_READINGS}
+    sxx = sxy = 0.0
+    span = 0.0
+    n = 0
+    means = {}
+    for key, rs in usable.items():
+        tbar = sum(r[0] for r in rs) / len(rs)
+        ebar = sum(r[3] for r in rs) / len(rs)
+        means[key] = (tbar, ebar, len(rs))
+        if rs[-1][0] - rs[0][0] < CLOCK_LOG_MIN_SPAN:
+            continue
+        span += rs[-1][0] - rs[0][0]
+        n += len(rs)
+        for r in rs:
+            x = (r[0] - tbar) / 86400.0
+            sxx += x * x
+            sxy += x * (r[3] - ebar)
+    result = {'drift': None, 'drift_se': None, 'jump': None, 'jump_se': None,
+              'drift_sd': None, 'jump_sd': None,
+              'days': len(set(k[1] for k in usable)), 'midnights': 0, 'span': span}
+    slope_pieces = [k for k, v in usable.items() if v[-1][0] - v[0][0] >= CLOCK_LOG_MIN_SPAN]
+    if span < CLOCK_LOG_MIN_TOTAL_SPAN or sxx <= 0.0 or n <= len(slope_pieces) + 1:
+        return result
+    drift = sxy / sxx
+    rss = 0.0
+    for key in slope_pieces:
+        tbar, ebar, unused_count = means[key]
+        rss += sum((r[3] - ebar - drift * (r[0] - tbar) / 86400.0) ** 2 for r in usable[key])
+    # Never quite 0: the log gives the error to 0.01 s, and a flawless line
+    # must not divide the weights below by nothing.
+    sd = max(math.sqrt(rss / (n - len(slope_pieces) - 1)), 0.003)
+    result['drift'] = drift
+    result['drift_se'] = sd / math.sqrt(sxx)
+    day_slopes = []
+    for key in slope_pieces:
+        rs = usable[key]
+        if len(rs) >= CLOCK_LOG_DAY_READINGS and rs[-1][0] - rs[0][0] >= CLOCK_LOG_DAY_SPAN:
+            tbar, ebar, unused_count = means[key]
+            day_sxx = sum(((r[0] - tbar) / 86400.0) ** 2 for r in rs)
+            day_slopes.append(sum((r[0] - tbar) / 86400.0 * (r[3] - ebar) for r in rs) / day_sxx)
+    result['drift_sd'] = _clock_log_spread(day_slopes)
+    # The readings are not independent: each is truncated to whole seconds
+    # at a point in the console's second that moves steadily, so the error
+    # logged is a staircase, and a restart shifts it.  So never claim more
+    # than the days themselves bear out.
+    if result['drift_sd'] is not None:
+        result['drift_se'] = max(result['drift_se'],
+                                 result['drift_sd'] / math.sqrt(len(day_slopes)))
+
+    # Each midnight: the next day's line at midnight less the day before's.
+    weight_sum = weighted = lever = 0.0
+    jumps = []
+    for (run, date), (tbar_a, ebar_a, n_a) in means.items():
+        after = (run, date + datetime.timedelta(days=1))
+        if after not in means:
+            continue
+        tbar_b, ebar_b, n_b = means[after]
+        # The two lines share a slope, so where midnight falls between them
+        # does not matter: the step between them is the same all the way.
+        jump = ebar_b - ebar_a - drift * (tbar_b - tbar_a) / 86400.0
+        jumps.append(jump)
+        weight = 1.0 / (sd * sd / n_a + sd * sd / n_b)
+        weight_sum += weight
+        weighted += weight * jump
+        lever += weight * (tbar_b - tbar_a) / 86400.0
+        result['midnights'] += 1
+    if result['midnights']:
+        result['jump'] = weighted / weight_sum
+        # The slope's own uncertainty moves every jump the same way.
+        result['jump_se'] = math.sqrt(1.0 / weight_sum
+                                      + (result['drift_se'] * lever / weight_sum) ** 2)
+    result['jump_sd'] = _clock_log_spread(jumps)
+    if result['jump_sd'] is not None:
+        result['jump_se'] = max(result['jump_se'], result['jump_sd'] / math.sqrt(len(jumps)))
+    return result
+
+
+def _clock_log_spread(values):
+    """The sample standard deviation, or None with fewer than three values."""
+    if len(values) < 3:
+        return None
+    mean = sum(values) / len(values)
+    return math.sqrt(sum((v - mean) ** 2 for v in values) / (len(values) - 1))
+
+
+def _clock_log_count(n, one, many):
+    return "%d %s" % (n, one if n == 1 else many)
+
+
+def _clock_log_times(verb, n):
+    if n == 0:
+        return "never " + verb
+    return "%s %s" % (verb, 'once' if n == 1 else '%d times' % n)
+
+
+def clock_options_report(fit, options, stats):
+    """What --clock-options prints.  Returns (text, exit status): 0 with a
+    recommendation, 1 when the log does not hold enough to make one."""
+    out = []
+    if stats['readings']:
+        moves = stats['moves'] + stats['breaks']
+        out.append("%s, %s to %s: %s usable, %s.  WeeWX %s and the clock was %s%s"
+                   % (_clock_log_count(stats['readings'], 'clock reading', 'clock readings'),
+                      time.strftime('%Y-%m-%d', time.localtime(stats['first'])),
+                      time.strftime('%Y-%m-%d', time.localtime(stats['last'])),
+                      _clock_log_count(fit['days'], 'day', 'days'),
+                      _clock_log_count(fit['midnights'], 'midnight', 'midnights'),
+                      _clock_log_times('restarted', stats['restarts']),
+                      _clock_log_times('moved', moves),
+                      "." if not (moves or stats['restarts']) else "; each starts the fit afresh."))
+    else:
+        out.append("No \"Clock error is\" lines found.  They are logged by weewx.engine at every "
+                   "clock check (StdTimeSynch); check that these are WeeWX's log files.")
+    if fit['drift'] is None or fit['jump'] is None:
+        out.append("")
+        out.append("Not enough to go on.  This needs at least a day and a half of clock checks, "
+                   "across a midnight, with no clock set and no restart of WeeWX between the "
+                   "last check before that midnight and the first after it.  Set "
+                   "clock_check = 3600 in [StdTimeSynch], if it is not, and try again in a day "
+                   "or two.")
+        return '\n'.join(out) + '\n', 1
+    threshold = options.get('clock_recenter_threshold', 1.2)
+    rule = abs(fit['drift']) / 2.0 + threshold + 1.5
+    max_drift = max(5, int(math.ceil(rule - 1e-9)))
+    out.append("")
+    out.append("In the [VantageNext] section of weewx.conf:")
+    out.append("    clock_drift_secs = %.2f" % fit['drift'])
+    out.append("    day_start_jump = %.2f" % fit['jump'])
+    out.append("")
+    for name, value, se, spread, unit in (
+            ('clock_drift_secs', fit['drift'], fit['drift_se'], fit['drift_sd'], 'single days'),
+            ('day_start_jump', fit['jump'], fit['jump_se'], fit['jump_sd'], 'single midnights')):
+        out.append("%s is %.2f +- %.2f%s." % (
+            name, value, se, "" if spread is None else "; %s varied by %.2f" % (unit, spread)))
+    out.append("The clock creeps %+.2f s a day net of its jump." % (fit['drift'] + fit['jump']))
+    out.append("In [StdTimeSynch], max_drift = %d (at least |clock_drift_secs| / 2 + "
+               "clock_recenter_threshold %.2f + 1.5 = %.1f; WeeWX's default is 5)."
+               % (max_drift, threshold, rule))
+    if 'clock_drift_secs' in options and 'day_start_jump' in options:
+        stale = (abs(options['clock_drift_secs'] - fit['drift']) > CLOCK_LOG_STALE
+                 or abs(options['day_start_jump'] - fit['jump']) > CLOCK_LOG_STALE)
+        out.append("")
+        out.append("The driver last logged clock_drift_secs = %.2f and day_start_jump = %.2f%s"
+                   % (options['clock_drift_secs'], options['day_start_jump'],
+                      ": change them to the values above." if stale else ", which agree."))
+    return '\n'.join(out) + '\n', 0
+
+
+def _clock_log_lines(paths):
+    """Every line of every file named, gzipped or not; '-' is stdin."""
+    import gzip
+    import io
+    for path in paths:
+        if path == '-':
+            stdin = sys.stdin
+            if hasattr(stdin, 'buffer'):
+                stdin = io.TextIOWrapper(stdin.buffer, errors='replace')
+            for line in stdin:
+                yield line
+            continue
+        with open(path, 'rb') as f:
+            gzipped = f.read(2) == b'\x1f\x8b'
+        opener = gzip.open if gzipped else open
+        with opener(path, 'rt', errors='replace') as f:
+            for line in f:
+                yield line
+
+
+def clock_options_main(paths):
+    """The --clock-options command.  Returns the exit status."""
+    try:
+        pieces, options, stats = read_clock_log(_clock_log_lines(paths))
+    except (OSError, EOFError) as e:
+        # EOFError: a gzipped file cut short.
+        print("Cannot read the log: %s" % e, file=sys.stderr)
+        return 2
+    text, status = clock_options_report(fit_clock_log(pieces), options, stats)
+    print(text, end='')
+    return status
+
+
 def print_page(ipage):
     print("Requesting page %d/512\r" % ipage, end=' ', file=sys.stdout)
     sys.stdout.flush()
@@ -3687,7 +4054,8 @@ if __name__ == '__main__':
 
     usage = """Usage: python -m user.vantagenext --help
        python -m user.vantagenext --version
-       python -m user.vantagenext --print-loop-packets [--port=PORT] [--iss-id=ISSID]"""
+       python -m user.vantagenext --print-loop-packets [--port=PORT] [--iss-id=ISSID]
+       python -m user.vantagenext --clock-options LOGFILE... (or - for standard input)"""
 
     parser = optparse.OptionParser(usage=usage)
     parser.add_option('--version', action='store_true',
@@ -3700,11 +4068,20 @@ if __name__ == '__main__':
     parser.add_option('--iss-id', dest='iss_id', default=1,
                       help='The station number of the ISS. Default is 1',
                       metavar="ISSID")
+    parser.add_option('--clock-options', dest='clock_options', action='store_true',
+                      help='Work out clock_drift_secs and day_start_jump from the "Clock error" lines '
+                           'in the WeeWX log files named (gzipped or not; - reads standard input).  '
+                           'WeeWX may be running.')
     (options, args) = parser.parse_args()
 
     if options.version:
         print("VantageNext driver version %s" % DRIVER_VERSION)
         exit(0)
+
+    if options.clock_options:
+        if not args:
+            parser.error('--clock-options needs at least one log file (or - for standard input)')
+        exit(clock_options_main(args))
 
     if options.print_loop_packets:
         vantagenext = VantageNext(connection_type = 'serial', port=options.port, iss_id=options.iss_id)

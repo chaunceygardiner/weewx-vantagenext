@@ -41,8 +41,8 @@ The way the console clock is kept changed completely; see
    suits this driver's defaults.
 3. **Check `clock_drift_secs` and `day_start_jump`** if you have set them.  They used to
    shape where a clock set was aimed; they now decide where the clock is *held*, so stale
-   values matter more.  [Tuning it to your console](clock.md#tuning-it-to-your-console)
-   shows how to measure both from the log.
+   values matter more.  The driver measures both from the log with `--clock-options`: see
+   [Tuning it to your console](clock.md#tuning-it-to-your-console).
 
 There is one new option, `clock_recenter_threshold`.  It has a sound default and need not be
 added.
