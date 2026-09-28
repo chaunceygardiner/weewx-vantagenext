@@ -68,7 +68,8 @@
   docs/): installation and switching from the built-in driver, every option with
   its default, how the console clock is kept and how to measure your own
   console's drift and jump from the log, daylight-saving time changes, read
-  errors and recovery, configuring the console, every difference from the
+  errors and recovery (including what a clock set and the console's own midnight
+  cost in reception), configuring the console, every difference from the
   built-in driver, troubleshooting with every log message explained, and
   upgrading.  The README is rewritten as its front page.  New tests hold the
   manual to the code: the options and defaults it lists, the log lines it

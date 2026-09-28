@@ -16,7 +16,8 @@ description: How weewx-vantagenext keeps a Davis console's clock — the daily s
 The console's clock matters because the console, not the computer, timestamps every archive
 record.  And setting it has a price: on the consoles this was measured on, three clock sets
 in four were followed by a run of [truncated reads](recovery.md#when-read-errors-happen) —
-half a minute of LOOP data lost, typically, and once more than three minutes.  So the aim is a clock that is as right as it can be, set as seldom
+half a minute of LOOP data lost, typically, and once more than three minutes — and every
+set costs the console [a minute or so of its transmitter's packets](recovery.md#what-it-costs-in-reception).  So the aim is a clock that is as right as it can be, set as seldom
 as possible.  This page is how the driver does that (2.4), and how to tune it to your
 console.
 
