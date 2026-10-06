@@ -11,7 +11,9 @@ The manual covers installation, every option, how the console clock is kept, day
 time changes, read-error recovery, configuring the console and troubleshooting — with
 search.
 
-**This driver requires Python 3.9 or later and WeeWX 5.**
+**This driver requires WeeWX 5 and Python 3.9 or later** — a newer Python than WeeWX itself
+requires (3.7), so check the one that runs your WeeWX before installing: `python3 --version`,
+or `~/weewx-venv/bin/python --version` for a pip install.
 
 ## Description
 
@@ -21,13 +23,14 @@ Keffer).  It is maintained for — and runs around the clock at — the author's
 [www.paloaltoweather.com](https://www.paloaltoweather.com/).  Its focus is uptime and data
 integrity: sailing through daylight-saving time changes without losing or mangling data,
 recovering from read errors in seconds rather than minutes, and keeping the console clock
-as accurate as a console allows with as few clock sets as possible, because each clock set
-disturbs the data stream.  It also supports the Davis sonic anemometer, which the built-in
+centered without setting it, because each clock set costs the console its transmitter's
+data for a minute or so.  It also supports the Davis sonic anemometer, which the built-in
 driver cannot select.
 
-The built-in Vantage driver is excellent and well supported; if it serves you well, there
-is no need to switch.  This driver is for stations that have hit one of the specific
-problems it solves.
+The built-in Vantage driver is excellent and well supported.  But it keeps the console clock
+by setting it, and every clock set costs the console a minute or so of its transmitter's
+data — on every station, every time, whether anything else is wrong or not.  This driver
+keeps the clock without that cost, and solves the specific problems below.
 
 > **`weectl device --set-wind-cup` takes different codes with this driver.**  WeeWX's
 > hardware guide documents `0` (small) and `1` (large), which are the built-in driver's
@@ -51,12 +54,14 @@ problems it solves.
   driver can escalate until WeeWX restarts the driver, a 60-second outage.
   → [Read errors and recovery](https://chaunceygardiner.github.io/weewx-vantagenext/recovery.html)
 
-- **A console clock held centered** (2.4).  A Vantage console loses time all day and jumps
-  forward just after midnight, so its error is a daily sawtooth that no setting can
-  flatten.  The driver measures the error to a few hundredths of a second, keeps the
-  sawtooth centered on zero, and steps the clock by whole seconds — the only change a
-  console accepts — chosen to go as long as possible before the next one.  The driver
-  measures your own console's drift and jump from the log (`--clock-options`).
+- **A console clock kept centered without setting it** (3.0).  A Vantage console loses
+  time all day and corrects itself just after midnight by a jump it keeps in its own
+  memory, so its error is a daily sawtooth.  The driver learns how fast the console drifts,
+  keeps the sawtooth centered on zero, and does it by rewriting that midnight jump — which
+  costs the console nothing — instead of setting the clock, which costs it a minute of data
+  every time.  There is nothing to configure.  Clock steering does not apply to a
+  WeatherLinkIP: its clock is still set, as before, and so is the clock of a console the
+  driver cannot steer, or one lost to a power failure.
   → [Keeping the console clock](https://chaunceygardiner.github.io/weewx-vantagenext/clock.html)
 
 - **The Davis sonic anemometer.**  `weectl device --set-wind-cup=3` selects it; see the
@@ -122,7 +127,7 @@ problems it solves.
 1. Restart WeeWX, then check the log for the driver announcing itself:
 
    ```
-   INFO user.vantagenext: Driver version is 2.4
+   INFO user.vantagenext: Driver version is 3.0
    ```
 
 The manual has the full steps, including
@@ -133,10 +138,9 @@ and what to do when
 
 Upgrading from an earlier release?  Run the same `weectl extension install` command, then
 restart WeeWX.  An upgrade never rewrites weewx.conf, so a few things need doing by hand —
-deleting `set_time_padding` and `time_set_goal` and checking `max_drift` (2.4), a live
-`iss_id` line that suppresses ISS detection (2.3), the `[[dst_periods]]` section (2.0) —
-and all of them are on the
-[Upgrading page](https://chaunceygardiner.github.io/weewx-vantagenext/upgrading.html).  The
+deleting the obsolete clock options and checking `max_drift` (3.0), a live `iss_id` line that
+suppresses ISS detection (2.3), the `[[dst_periods]]` section (2.0) — and all of them are on
+the [Upgrading page](https://chaunceygardiner.github.io/weewx-vantagenext/upgrading.html).  The
 full history is in the
 [change history](https://github.com/chaunceygardiner/weewx-vantagenext/blob/master/changes.md).
 
@@ -146,9 +150,12 @@ A hermetic pytest suite lives in the `tests` directory of the repository (not th
 zip).  **No weather station is needed**: console I/O is simulated at the byte level, so
 the driver's real wake-up, acknowledgement, checksum and retry logic runs against scripted
 console responses, and the suite is safe to run anywhere.  It covers the console protocol,
-packet decoding, the clock keeping (against a simulated console that drifts, jumps and
-truncates as the real ones were measured to), daylight-saving handling, the installer's
-config stanza, and a full WeeWX engine round trip into a temporary database.  A further
+packet decoding, the clock keeping (weeks of simulated days against a console that drifts,
+slews in its midnight jump, falls silent at midnight and truncates its time, as the real
+ones were measured to; and a randomized simulation that puts a console through months of
+restarts, power losses, read errors and midnight checks — `VNEXT_SIM_SEEDS=50` runs fifty
+of them instead of two), daylight-saving handling, the installer's config stanza, and a full
+WeeWX engine round trip into a temporary database.  A further
 set keeps the manual and the code in lockstep: every documented option and default is one
 the code actually reads, every log message the manual quotes is one the driver can write,
 and every internal link and anchor resolves.  Run it with the Python that runs WeeWX:

@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="360" viewBox="0 0 760 360" role="img" aria-label="A console making its midnight jump" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">
+<title>A console making its midnight jump</title>
+<desc>Precise readings of a console clock, one a second, from twenty seconds before its midnight to forty after.  The error is flat before midnight; the console does not answer for the first few seconds of the day; then the error climbs a quarter of a second each second until the jump of 3.75 seconds is made, and is flat again.</desc>
+<rect width="760" height="360" fill="#fcfcfb"/>
+<text x="58" y="22" font-size="14" font-weight="600" fill="#0b0b0b">How far the clock has moved, seconds, against the console's own time</text>
+<rect x="286.0" y="40" width="57.0" height="274" fill="#e1e0d9" fill-opacity="0.35"/>
+<line x1="58" y1="286.6" x2="742" y2="286.6" stroke="#898781" stroke-width="1"/>
+<text x="50" y="290.6" font-size="12" text-anchor="end" fill="#898781">0</text>
+<line x1="58" y1="231.8" x2="742" y2="231.8" stroke="#e1e0d9" stroke-width="1"/>
+<text x="50" y="235.8" font-size="12" text-anchor="end" fill="#898781">+1</text>
+<line x1="58" y1="177.0" x2="742" y2="177.0" stroke="#e1e0d9" stroke-width="1"/>
+<text x="50" y="181.0" font-size="12" text-anchor="end" fill="#898781">+2</text>
+<line x1="58" y1="122.2" x2="742" y2="122.2" stroke="#e1e0d9" stroke-width="1"/>
+<text x="50" y="126.2" font-size="12" text-anchor="end" fill="#898781">+3</text>
+<line x1="58" y1="67.4" x2="742" y2="67.4" stroke="#e1e0d9" stroke-width="1"/>
+<text x="50" y="71.4" font-size="12" text-anchor="end" fill="#898781">+4</text>
+<text x="58.0" y="332" font-size="12" text-anchor="middle" fill="#898781">-20 s</text>
+<text x="172.0" y="332" font-size="12" text-anchor="middle" fill="#898781">-10 s</text>
+<text x="286.0" y="332" font-size="12" text-anchor="middle" fill="#898781">midnight</text>
+<text x="400.0" y="332" font-size="12" text-anchor="middle" fill="#898781">+10 s</text>
+<text x="514.0" y="332" font-size="12" text-anchor="middle" fill="#898781">+20 s</text>
+<text x="628.0" y="332" font-size="12" text-anchor="middle" fill="#898781">+30 s</text>
+<line x1="286.0" y1="40" x2="286.0" y2="314" stroke="#898781" stroke-width="1" stroke-dasharray="2 3"/>
+<text x="290.0" y="56.4" font-size="12" fill="#52514e">no answer</text>
+<circle cx="58.1" cy="286.1" r="3" fill="#2a78d6"/>
+<circle cx="69.6" cy="286.5" r="3" fill="#2a78d6"/>
+<circle cx="80.9" cy="286.7" r="3" fill="#2a78d6"/>
+<circle cx="92.3" cy="286.6" r="3" fill="#2a78d6"/>
+<circle cx="103.7" cy="286.3" r="3" fill="#2a78d6"/>
+<circle cx="115.1" cy="286.7" r="3" fill="#2a78d6"/>
+<circle cx="126.5" cy="286.6" r="3" fill="#2a78d6"/>
+<circle cx="137.9" cy="286.9" r="3" fill="#2a78d6"/>
+<circle cx="149.3" cy="286.8" r="3" fill="#2a78d6"/>
+<circle cx="160.7" cy="286.2" r="3" fill="#2a78d6"/>
+<circle cx="172.1" cy="287.0" r="3" fill="#2a78d6"/>
+<circle cx="183.5" cy="286.9" r="3" fill="#2a78d6"/>
+<circle cx="194.9" cy="286.4" r="3" fill="#2a78d6"/>
+<circle cx="206.3" cy="287.0" r="3" fill="#2a78d6"/>
+<circle cx="217.7" cy="286.9" r="3" fill="#2a78d6"/>
+<circle cx="229.1" cy="286.2" r="3" fill="#2a78d6"/>
+<circle cx="240.5" cy="286.2" r="3" fill="#2a78d6"/>
+<circle cx="251.9" cy="286.1" r="3" fill="#2a78d6"/>
+<circle cx="263.3" cy="286.9" r="3" fill="#2a78d6"/>
+<circle cx="274.7" cy="286.9" r="3" fill="#2a78d6"/>
+<circle cx="343.1" cy="231.3" r="3" fill="#2a78d6"/>
+<circle cx="354.5" cy="217.9" r="3" fill="#2a78d6"/>
+<circle cx="365.9" cy="204.5" r="3" fill="#2a78d6"/>
+<circle cx="377.3" cy="190.8" r="3" fill="#2a78d6"/>
+<circle cx="388.7" cy="177.3" r="3" fill="#2a78d6"/>
+<circle cx="400.1" cy="163.2" r="3" fill="#2a78d6"/>
+<circle cx="411.5" cy="149.7" r="3" fill="#2a78d6"/>
+<circle cx="422.9" cy="136.2" r="3" fill="#2a78d6"/>
+<circle cx="434.3" cy="122.4" r="3" fill="#2a78d6"/>
+<circle cx="445.7" cy="108.9" r="3" fill="#2a78d6"/>
+<circle cx="457.1" cy="94.4" r="3" fill="#2a78d6"/>
+<circle cx="468.5" cy="80.9" r="3" fill="#2a78d6"/>
+<circle cx="479.9" cy="80.7" r="3" fill="#2a78d6"/>
+<circle cx="491.3" cy="80.6" r="3" fill="#2a78d6"/>
+<circle cx="502.7" cy="81.3" r="3" fill="#2a78d6"/>
+<circle cx="514.1" cy="81.2" r="3" fill="#2a78d6"/>
+<circle cx="525.5" cy="80.9" r="3" fill="#2a78d6"/>
+<circle cx="536.9" cy="81.4" r="3" fill="#2a78d6"/>
+<circle cx="548.3" cy="81.5" r="3" fill="#2a78d6"/>
+<circle cx="559.7" cy="81.4" r="3" fill="#2a78d6"/>
+<circle cx="571.1" cy="81.0" r="3" fill="#2a78d6"/>
+<circle cx="582.5" cy="80.9" r="3" fill="#2a78d6"/>
+<circle cx="593.9" cy="81.4" r="3" fill="#2a78d6"/>
+<circle cx="605.3" cy="81.3" r="3" fill="#2a78d6"/>
+<circle cx="616.7" cy="81.2" r="3" fill="#2a78d6"/>
+<circle cx="628.1" cy="80.7" r="3" fill="#2a78d6"/>
+<circle cx="639.5" cy="80.6" r="3" fill="#2a78d6"/>
+<circle cx="651.0" cy="81.0" r="3" fill="#2a78d6"/>
+<circle cx="662.3" cy="81.2" r="3" fill="#2a78d6"/>
+<circle cx="673.7" cy="81.2" r="3" fill="#2a78d6"/>
+<circle cx="685.1" cy="80.9" r="3" fill="#2a78d6"/>
+<circle cx="696.5" cy="80.9" r="3" fill="#2a78d6"/>
+<circle cx="707.9" cy="81.5" r="3" fill="#2a78d6"/>
+<circle cx="719.3" cy="81.3" r="3" fill="#2a78d6"/>
+<circle cx="730.7" cy="81.0" r="3" fill="#2a78d6"/>
+<text x="457.0" y="166.0" font-size="12" fill="#52514e">a quarter-second each second, 3.75 s in all</text>
+</svg>

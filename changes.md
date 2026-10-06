@@ -1,73 +1,57 @@
 # weewx-vantagenext change history
 
-## 2.4 UNRELEASED
-- ACTION: delete set_time_padding and time_set_goal from the [VantageNext]
-  section of weewx.conf.  Both are obsolete and ignored; the driver logs a
-  warning at startup while they remain.  Check clock_drift_secs and
-  day_start_jump against your console's logged clock error while you are there
-  (see the README): they now decide where the clock is held, not just where a
-  set is aimed.
-- ACTION: raise max_drift in [StdTimeSynch] if you had tightened it.  It no
-  longer decides how accurate the clock is -- clock_recenter_threshold does --
-  and is now only a backstop; too small, it forces clock sets the driver would
-  not have made.  Use a whole number of at least
-  |clock_drift_secs| / 2 + clock_recenter_threshold + 1.5.  WeeWX's default of 5
-  suits this driver's defaults.
-- The console clock is now kept centered.  A console's clock error is a daily
-  sawtooth -- it loses time all day and jumps forward just after midnight -- and
-  measurements of seven consoles showed two things the old clock setting did not
-  know.  A clock set moves the console by a whole number of seconds: the console
-  keeps its own sub-second tick, so timing the command to the top of the second
-  (set_time_padding) bought nothing, and the clock landed up to a second either
-  side of where time_set_goal aimed it.  And the console reports its time in
-  whole seconds, truncated, so the clock error WeeWX logged read half a second
-  slow.  The driver now measures the error to a few hundredths of a second, by
-  polling the console until its second changes, and when the clock is more than
-  clock_recenter_threshold (new; default 1.2 seconds, minimum 0.7) from the
-  center of the sawtooth it steps it by the whole number of seconds that will
-  go longest before the next set.  This happens when WeeWX checks the clock
-  (every clock_check seconds), and a measurement stands until the next midnight,
-  since the distance from center changes only at the daily jump; max_drift is
-  now only a backstop.  On the consoles measured the worst clock error falls
-  from over 4 seconds to about 3 for the same number of clock sets, and the
-  average error from most of a second fast to about zero.
-- The clock error WeeWX logs is now the true error, no longer half a second
-  slow, and is reported as it stands after any step.
-- Unforced clock sets are limited to one in 20 hours, and none is made in the
-  first half hour after weewx starts, so a console that does not drift and jump
-  as configured cannot be set over and over, nor on every restart.  A clock
-  wrong by more than max_drift is still set at startup, as before.
-- weectl device --set-time now says what it did, which may be nothing: the clock
-  is not set inside a time change window, in the ten minutes after midnight, or
-  when it is already within half a second of center.
-- New: python -m user.vantagenext --clock-options LOGFILE... reads WeeWX's own
-  "Clock error is" lines and works out clock_drift_secs and day_start_jump for
-  your console, with how well each is known, the max_drift to go with them,
-  and whether the values the driver is running with need changing.  It reads
-  gzipped rotations and the journal (- for standard input), starts afresh
-  wherever the clock was set or WeeWX restarted, and works on a log written
-  by the built-in driver, so a console can be measured before switching.
-  WeeWX may be running.
+## 3.0 UNRELEASED
+- ACTION, when upgrading: delete clock_drift_secs, day_start_jump,
+  set_time_padding and time_set_goal (and clock_recenter_threshold, if you have
+  it) from the [VantageNext] section of weewx.conf.  All are obsolete and
+  ignored; the driver logs a warning at startup while any remains.  A fresh
+  install never writes them.
+- ACTION, when upgrading: if you tightened max_drift in [StdTimeSynch] to make
+  the clock more accurate, set it back to WeeWX's default of 5.  It is a backstop
+  only now; too small, it forces clock sets that are not needed.
+- The console clock is now kept without setting it.  A Davis console keeps the
+  correction it makes to its own clock just after midnight in its EEPROM
+  (address 0x2E, in quarter-seconds), and uses a new value at its next
+  midnight.  The driver learns how fast the console drifts and rewrites that
+  value when the clock needs it, keeping the daily sawtooth centered on zero.
+  Writing it costs the console no reception; every clock set costs about a
+  minute.  The driver keeps what it learns in vantagenext/clock.json in the
+  archive directory.  Clock steering does not apply to a WeatherLinkIP
+  (type = ethernet).  A console the driver cannot steer -- a WeatherLinkIP, one
+  with no valid jump in memory, or one whose jump cannot be written -- is kept
+  by setting it instead: stepped by whole seconds when it is more than 1.2
+  seconds from center, using the drift (and jump) it has learned.  A clock
+  wrong by more than max_drift is set to the center in any case.
+- The clock error WeeWX logs is now centered on the true error.  The console
+  reports its time in whole seconds, truncated, so it used to read half a second
+  slow; each reading is now corrected for that, and is good to half a second.
+  The driver's own two readings a day are measured to a few milliseconds.
+- weectl device --set-time now steps the clock to the center of its daily
+  sawtooth rather than to the computer's time, and says what it did, which may
+  be nothing: the clock is not set inside a time change window, in the last
+  minute before midnight or the ten minutes after it, or when it is already
+  within half a second of center.  It centers on the drift the driver has
+  learned, and records its step in vantagenext/clock.json so the driver
+  carries on steering instead of learning the drift again.  It writes that
+  file only over one weewxd has already saved, keeping its owner and
+  permissions, so a sudo weectl never leaves weewxd a file it cannot replace.
+- weectl device --info shows the console's midnight jump and what the driver
+  has learned about its clock.
 - Fix reading and setting the console clock from 2028-01-01.  The console's year
   byte (years since 1900) was packed and unpacked as a signed byte, which holds
   no more than 127: every clock set would have raised an error WeeWX does not
   catch, and the console's year would have read as 1772.
-- Nothing is decided in the ten minutes after midnight, while the console's
-  jump may be in progress.
-- On a connection too slow to find the console's second boundary (a
-  WeatherLinkIP), the driver acts only on an error that is beyond the threshold
-  for certain and steps to the center.
-- The installer no longer writes seven rarely changed options to weewx.conf at
-  all, where 2.3 wrote them commented out: baudrate, tcp_port, tcp_send_delay,
-  timeout, wait_before_retry, max_tries and model_type (which only an original
-  Vantage Pro sets; a Vue is detected).
-  The driver's defaults govern, and the manual's Configuration page lists every
-  option; add the line to set one.  Fresh installs only -- an existing
-  weewx.conf is never rewritten, and its lines go on working.
+- The installer no longer writes the clock options, nor eight rarely changed
+  options, to weewx.conf: baudrate, tcp_port, tcp_send_delay, timeout,
+  wait_before_retry, max_tries, command_delay and model_type (which only an
+  original Vantage Pro sets; a Vue is detected).  The driver's defaults
+  govern, and the manual's Configuration page lists every option; add the line
+  to set one.  Fresh
+  installs only -- an existing weewx.conf is never rewritten, and its lines go
+  on working.
 - A manual, at https://chaunceygardiner.github.io/weewx-vantagenext/ (and in
   docs/): installation and switching from the built-in driver, every option with
-  its default, how the console clock is kept and how to measure your own
-  console's drift and jump from the log, daylight-saving time changes, read
+  its default, how the console clock is kept, daylight-saving time changes, read
   errors and recovery (including what a clock set and the console's own midnight
   cost in reception), configuring the console, every difference from the
   built-in driver, troubleshooting with every log message explained, and

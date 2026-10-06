@@ -2,7 +2,7 @@
 title: Configuration
 layout: default
 nav_order: 3
-description: Every weewx-vantagenext option in one place — the [VantageNext] section of weewx.conf with each default, the commented-out convention, how iss_id is found, and how the clock options work with [StdTimeSynch].
+description: Every weewx-vantagenext option in one place — the [VantageNext] section of weewx.conf with each default, the commented-out convention, how iss_id is found, and how the console clock works with [StdTimeSynch].
 ---
 
 # Configuration
@@ -16,13 +16,13 @@ description: Every weewx-vantagenext option in one place — the [VantageNext] s
 Every option this driver reads, in one place.  All of them live in the `[VantageNext]`
 section of `weewx.conf`, and a change to any of them takes effect when WeeWX restarts.
 
-Most stations need to set two: `type`, and `port` or `host`.  The three clock options are
-worth an evening once the station has run for a few days — see
-[Keeping the console clock](clock.md).  The rest can be left alone.
+Most stations need to set two: `type`, and `port` or `host`.  The console clock needs no
+options at all: the driver learns it — see [Keeping the console clock](clock.md).  The rest
+can be left alone.
 
 ## Options shown commented out
 
-The installer writes five options to `weewx.conf` **commented out**, with the driver's own
+The installer writes two options to `weewx.conf` **commented out**, with the driver's own
 default shown:
 
 ```
@@ -36,17 +36,17 @@ station to the value written there.  Where an option instead reads `loop_request
 `#`, the value is already pinned and you edit it in place.  Both forms work; the difference
 is only whether a future release can improve the default on your behalf.
 
-Eight options that are rarely changed are not written at all (2.4) — `baudrate`,
+Eight options that are rarely changed are not written at all (3.0) — `baudrate`,
 `tcp_port`, `tcp_send_delay`, `timeout`, `wait_before_retry`, `command_delay`, `max_tries`
 and `model_type`.  An option that is not in your `weewx.conf` behaves exactly as if it were
-commented out; add the line to set it.  A station installed before 2.4 has them, live or
+commented out; add the line to set it.  A station installed before 3.0 has them, live or
 commented, and they go on working as they did.
 
 ## The options
 
 | Option | Default | Meaning |
 |---|---|---|
-| `type` | `serial` | How the console is connected: `serial` (serial or USB) or `ethernet` (a WeatherLinkIP or a serial-to-ethernet bridge). |
+| `type` | `serial` | How the console is connected: `serial` (serial or USB) or `ethernet` (a WeatherLinkIP or a serial-to-ethernet bridge).  Clock steering does not apply to a WeatherLinkIP: its clock is kept by setting it.  See [Keeping the console clock](clock.md#when-the-driver-falls-back-to-setting-the-clock). |
 | `port` | none | The serial port, for example `/dev/ttyUSB0`.  Required when `type = serial`. |
 | `host` | none | The console's IP address or hostname.  Required when `type = ethernet`. |
 | `baudrate` | `19200` | Serial baud rate.  It must match the console's own setting. |
@@ -59,9 +59,6 @@ commented, and they go on working as they did.
 | `wait_before_retry` | `1.2` | Seconds to wait before trying a failed exchange again. |
 | `command_delay` | `0.5` | Seconds to wait after sending a command before looking for its acknowledgement. |
 | `max_tries` | `4` | How many times to try an exchange before giving up on it. |
-| `clock_drift_secs` | `-3.1` | Seconds the console clock drifts in 24 hours.  Negative means it loses time. |
-| `day_start_jump` | `2.83` | Seconds the console clock jumps forward just after midnight. |
-| `clock_recenter_threshold` | `1.2` | How far, in seconds, the clock may stand off center before it is stepped back.  The minimum is `0.7`. |
 | `driver` | none | Always `user.vantagenext`.  It is how WeeWX finds this driver. |
 
 Four options are written live by the installer.  `port` and `host` have no fallback at all —
@@ -76,7 +73,7 @@ do no harm and have no effect.
 
 The options shared with the built-in driver mean what they mean there, and WeeWX's own
 [Vantage hardware guide](https://weewx.com/docs/latest/hardware/vantage/) describes them at
-more length.  The three `clock_` options are this driver's own.
+more length.
 
 ## `iss_id`
 
@@ -100,34 +97,35 @@ signal quality WeeWX records, is gauged against this transmitter.
 Set it yourself when the wind comes from somewhere the table cannot tell the driver about —
 an anemometer transmitter kit on its own id, say.
 
-## The clock options, and `[StdTimeSynch]`
+## The clock, and `[StdTimeSynch]`
 
-`clock_drift_secs` and `day_start_jump` describe your console; `clock_recenter_threshold`
-says how far from center the clock may wander before it is stepped.
-[Keeping the console clock](clock.md) explains all three and shows how to measure the first
-two from your own log.
+The driver keeps the console clock with no options of its own: it reads the console's
+midnight jump from the console, learns how fast the clock drifts, and keeps it centered by
+rewriting the jump.  [Keeping the console clock](clock.md) explains how.
 
-Two options in WeeWX's own `[StdTimeSynch]` section work with them:
+Two options in WeeWX's own `[StdTimeSynch]` section still matter:
 
 | Option | WeeWX default | What it means to this driver |
 |---|---|---|
-| `clock_check` | `14400` | How often, in seconds, WeeWX asks the driver for the console's time — and so how often the driver checks the clock.  Hourly (`3600`) is a good choice. |
-| `max_drift` | `5` | A **backstop only**.  Past it, WeeWX tells the driver to center the clock at once. |
+| `clock_check` | `14400` | How often, in seconds, WeeWX asks the driver for the console's time — and so how often the driver looks at the clock.  It decides once a day, at the first check after ten past midnight; hourly (`3600`) gets that decision made promptly. |
+| `max_drift` | `5` | A **backstop only**.  Past it, WeeWX tells the driver to set the clock to the center at once — after a power loss, say. |
 
 {: .important }
-Do not tighten `max_drift` to make the clock more accurate: that is
-`clock_recenter_threshold`'s job now.  A small `max_drift` forces clock sets the driver
-would not have made, and undoes its choice of step.  Make it a whole number — WeeWX accepts
-nothing else — of at least `|clock_drift_secs| / 2 + clock_recenter_threshold + 1.5`.
-WeeWX's default of `5` suits this driver's defaults.
+Leave `max_drift` at WeeWX's default of `5`.  The driver keeps the clock within about half
+the console's daily drift and half a second of the true time, so `5` never fires on a
+console it is keeping.  A smaller value would set the clock — which costs the console about
+a minute of its transmitter's packets — when nothing was wrong.
 
 ## Obsolete options
 
-Three options from earlier releases are ignored.  The driver logs a warning at startup for
+Six options from earlier releases are ignored.  The driver logs a warning at startup for
 as long as one remains in `weewx.conf`, so delete them:
 
 | Option | Obsolete since | Why |
 |---|---|---|
 | `[[dst_periods]]` | 2.0 | Time change windows are derived from the operating system's timezone database.  See [Daylight-saving time changes](dst.md). |
-| `set_time_padding` | 2.4 | The console keeps its own sub-second tick across a clock set, so timing the command bought nothing. |
-| `time_set_goal` | 2.4 | Replaced by keeping the clock centered.  See [Keeping the console clock](clock.md). |
+| `set_time_padding` | 3.0 | The console keeps its own sub-second tick across a clock set, so timing the command bought nothing. |
+| `time_set_goal` | 3.0 | Replaced by keeping the clock centered.  See [Keeping the console clock](clock.md). |
+| `clock_drift_secs` | 3.0 | The driver learns the drift from the console. |
+| `day_start_jump` | 3.0 | The driver reads the midnight jump from the console, and rewrites it. |
+| `clock_recenter_threshold` | 3.0 | The clock is no longer stepped back from a threshold; it is steered by its midnight jump. |

@@ -26,7 +26,7 @@ weectl device --current
 The options are the built-in driver's, and they are documented in WeeWX's
 [Vantage hardware guide](https://weewx.com/docs/latest/hardware/vantage/).  This manual does
 not repeat that reference.  It covers the one option that **differs**, which the guide gets
-wrong for this driver, and the one whose **behavior** differs.
+wrong for this driver, and the two whose **behavior** differs.
 
 ## The wind cup codes are different here
 
@@ -82,7 +82,14 @@ With the built-in driver this sets the console to the computer's time.  Here it 
 console, by whole seconds, to the *center of its daily drift* — which, for a console that
 loses time, is deliberately ahead of the computer's time after midnight and behind it
 before — and it may decline to do anything at all.  It prints what it did.  See
-[Setting the clock by hand](clock.md#setting-the-clock-by-hand).
+[Setting the clock by hand](clock.md#setting-the-clock-by-hand).  A console the driver is
+steering never needs it: it is for one whose clock was lost.
+
+## `--info`
+
+As well as the built-in driver's report, it shows the console's midnight jump and what the
+driver has learned about its clock.  See
+[What `weectl device --info` shows](clock.md#what-weectl-device---info-shows).
 
 ## Fixed here
 

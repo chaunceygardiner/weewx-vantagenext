@@ -24,7 +24,7 @@ the loop-gust bookkeeping, the units, the observation names.
 
 | | Built-in driver | This driver |
 |---|---|---|
-| **Setting the clock** | When the error passes `max_drift`, sets the console to the computer's time plus a fixed 0.75 seconds. | Keeps the clock's daily sawtooth centered on zero, stepping it by whole seconds on a measured error, as seldom as possible.  See [Keeping the console clock](clock.md). |
+| **Setting the clock** | When the error passes `max_drift`, sets the console to the computer's time plus a fixed 0.75 seconds. | Never, in normal running: keeps the clock's daily sawtooth centered on zero by rewriting the console's own midnight jump, which costs no reception.  It learns the console's drift itself.  Clock steering does not apply to a WeatherLinkIP: it, and a console the driver cannot steer, are set as before.  See [Keeping the console clock](clock.md). |
 | **The clock error WeeWX logs** | The console's truncated reading: half a second slow, on average. | Corrected for the truncation. |
 | **Daylight-saving time changes** | No special handling. | The clock is not set, and misread times are corrected, inside a window around each change.  See [Daylight-saving time changes](dst.md). |
 | **A truncated LOOP packet** (serial and USB) | Counts against the batch; enough errors and the error reaches WeeWX, which restarts the driver after 60 seconds. | The batch is dropped and a new one started at once.  See [Read errors and recovery](recovery.md). |
@@ -32,7 +32,7 @@ the loop-gust bookkeeping, the units, the observation names.
 | **Serial port not ready at startup** | Fails. | Waits five seconds and tries once more. |
 | **Finding the ISS when `iss_id` is not set** | Considers every channel — and an unconfigured channel's type reads as "iss", so a free channel below the real ISS can win, and `rxCheckPercent` is gauged against the wrong transmitter. | Considers only channels the console is listening to, and logs the result. |
 | **Rain in a LOOP packet** | Day-rain subtraction, inline. | `weewx.wxformulas.calculate_delta`; a momentary dashed day-rain value neither crashes the driver nor loses rain. |
-| **The year 2028** | The console's year byte is packed signed, which holds no more than 127: from 2028-01-01 every clock set raises an error that WeeWX does not catch, and the console's year reads as 1772. | Unsigned (2.4). |
+| **The year 2028** | The console's year byte is packed signed, which holds no more than 127: from 2028-01-01 every clock set raises an error that WeeWX does not catch, and the console's year reads as 1772. | Unsigned (3.0). |
 | **Startup logging** | Quiet. | The options in force, the time change windows and the ISS id, at INFO. |
 
 ## Decoding
@@ -51,14 +51,14 @@ the loop-gust bookkeeping, the units, the observation names.
 | **`--set-offset`** | Rejects negative humidity offsets, which the console supports. | Accepts −100 to 100 (2.2). |
 | **`--set-transmitter-type`** | Accepts an extra temperature or humidity id of 8, a channel whose data can never surface. | Rejects it (2.2). |
 | **`--set-tz-code=0`** | Silently ignored. | Works (2.0). |
-| **`--set-time`** | Sets the console to the computer's time. | Steps it to the center of its daily drift, and says what it did (2.4). |
+| **`--set-time`** | Sets the console to the computer's time. | Steps it to the center of its daily drift, and says what it did (3.0). |
+| **`--info`** | The console's settings. | Those, and the console's midnight jump and what the driver has learned about its clock (3.0). |
 
 ## Options
 
 | | Built-in driver | This driver |
 |---|---|---|
 | **Section of `weewx.conf`** | `[Vantage]` | `[VantageNext]` |
-| **`clock_drift_secs`, `day_start_jump`, `clock_recenter_threshold`** | — | See [Configuration](configuration.md). |
 | **`loop_batch`, `max_batch_errors`** | How large a LOOP batch is, and how many errors one may have. | Not read: the batch is 200, and errors are [handled differently](recovery.md). |
 
 ## A utility

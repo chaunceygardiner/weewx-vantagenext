@@ -16,7 +16,7 @@ description: Diagnosing weewx-vantagenext — confirming the driver is the one r
 Start here: **is this driver the one running?**  At startup it logs
 
 ```
-INFO user.vantagenext: Driver version is 2.4
+INFO user.vantagenext: Driver version is 3.0
 ```
 
 If that line is missing, `station_type` in `[Station]` is not `VantageNext`, and everything
@@ -32,9 +32,10 @@ in this manual is describing a driver you are not running.
 | `rxCheckPercent` low in one record just after midnight, or in the record a clock set fell in | Routine: the console let go of its transmitter for a few minutes.  See [What it costs in reception](recovery.md#what-it-costs-in-reception). |
 | `rxCheckPercent` is implausibly low, or missing | It is gauged against `iss_id`.  Check the `ISS ID is ...` line at startup against your transmitters; a live `iss_id` line in `weewx.conf` overrides detection.  See [`iss_id`](configuration.md#iss_id). |
 | The wind reads wrong after `--set-wind-cup` | The codes differ from WeeWX's guide: `1` is small here.  See [Configuring the console](console.md#the-wind-cup-codes-are-different-here). |
-| The clock is set every day, or the log says `leaving it alone` every day | `clock_drift_secs` and `day_start_jump` do not describe your console.  `--clock-options` measures both from the log: see [Tuning it to your console](clock.md#tuning-it-to-your-console). |
-| WeeWX logs `Clock error` values of two or three seconds and the driver does nothing | That can be right.  The error is a daily sawtooth as tall as `clock_drift_secs`; the driver centers it and cannot flatten it.  Judge by the driver's own `off center` line. |
-| The clock is set more often than the driver's log lines account for | `max_drift` is too small and WeeWX is forcing sets.  See [Configuration](configuration.md#the-clock-options-and-stdtimesynch). |
+| A warning that the console clock `will be kept by setting it` | The driver could not steer this console, and says why.  See [When the driver falls back to setting the clock](clock.md#when-the-driver-falls-back-to-setting-the-clock). |
+| `Clock stepped` lines in the log | The clock was set: by the backstop (`forced`), or because the driver has fallen back.  A console the driver is steering is never set. |
+| WeeWX logs `Clock error` values of two or three seconds and the driver does nothing | That can be right.  The error is a daily sawtooth as tall as the console's drift; the driver centers it and cannot flatten it.  Judge by the driver's own `off center` line. |
+| The clock is set more often than the driver's log lines account for | `max_drift` is too small and WeeWX is forcing sets.  See [Configuration](configuration.md#the-clock-and-stdtimesynch). |
 | Two startup clock lines, a moment apart, half a second different | Each is one reading, good to ±0.5 s.  See [the clock lines in the log](clock.md#the-clock-lines-in-the-log). |
 | Short reads in the log | Usually routine.  See [Routine, or a fault?](recovery.md#routine-or-a-fault) |
 | A warning at startup that an option is obsolete and ignored | Delete the option.  See [Obsolete options](configuration.md#obsolete-options). |
@@ -47,17 +48,43 @@ startup summary shown on the [Installation](installation.md#confirming-it-took) 
 
 ### Clock
 
+The driver keeping the clock by its midnight jump (see [Keeping the console clock](clock.md)):
+
+| Message | Meaning |
+|---|---|
+| `Clock: the console's midnight jump is ... s; learning its drift.` | At the first clock check, with nothing learned yet. |
+| `Clock: ..., midnight jump ... s, drift ... s a day.` | At the first clock check: resuming what it had learned. |
+| `Clock: the console's midnight jump is ... s, not the ... s last held: another console, or one set by hand.  Learning its drift afresh.` | The console is not the one the driver knew. |
+| `Clock is about ... s off center (one reading, good to +-0.5 s; ..., midnight jump ... s).` | The routine check.  Nothing needed doing. |
+| `Clock: drift ... s a day, midnight jump ... s; steering.` | The drift is learned; the driver starts steering. |
+| `Clock is ... s off center (drift ... s a day); midnight jump ... s kept.` | The day's decision: the jump stays. |
+| `Clock is ... s off center (drift ... s a day); midnight jump ... -> ... s.` | The day's decision: a new jump was written, and read back. |
+| `Clock: a reading ... s from what the drift predicts: something moved the clock.  Learning its drift afresh from this reading.` | A power loss, a set by hand, another console.  Routine after the first. |
+| `Clock: no drift fits the readings (...): something moved the clock.  Learning its drift afresh from this reading.` | The same, while the driver was still learning the drift.  Routine after the first. |
+| `Clock: writing a ... s midnight jump failed: ...` | The write failed on every try — or landed with only the console's answer lost, which the next decision finds by reading the console — or, `it reads back ...`, the console holds something other than what was written.  Two failures running, and the driver falls back. |
+| `Clock: a ... s midnight jump was written but could not be read back (...); the next decision reads what the console holds.` | The next day's decision reads the console's jump and carries on from it. |
+| `Clock: the console's midnight jump could not be read (...); trying again at the next check.` | A read error at the day's decision, on every try: that check decides nothing.  Routine once; every check, and the console or its connection is failing. |
+| `Clock: ...; the clock is kept by setting it.` | Falling back, and why: logged when a console starts out falling back (its memory holds no valid jump, or it is a WeatherLinkIP, `type = ethernet`, where clock steering does not apply), and again each time WeeWX starts while it is falling back, whatever the reason. |
+| `Clock: no longer connected over ethernet; the console's midnight jump is ... s; learning its drift.` | The first start over serial or USB after running over ethernet: steering begins afresh. |
+| `Clock: ....  The console clock will be kept by setting it instead; delete ... to try steering it again.` | A WARNING: falling back, and why.  See [When the driver falls back](clock.md#when-the-driver-falls-back-to-setting-the-clock). |
+| `Clock state ... could not be used (...): learning the console clock afresh.` | The state file was missing a piece, or unreadable.  Harmless. |
+| `Could not save the clock state to ...: ...` | A WARNING: the archive directory is not writable.  The clock is still kept; only what was learned is lost at the next restart. |
+| `Clock is ... s off center; not set.` | WeeWX asked for a set, and the clock was already within half a second of center. |
+| `Clock stepped ... s (forced): error ... -> ... s (...)` | The backstop: WeeWX asked for a set past `max_drift`.  The number at the end is the LOOP packets read so far. |
+
+After falling back, the driver keeps the clock by setting it, and says so in these:
+
 | Message | Meaning |
 |---|---|
 | `Clock is about ... s off center (one reading, good to +-0.5 s; threshold ...).` | The routine check.  Nothing needed doing. |
-| `Clock is about ... s off center (one reading, good to +-0.5 s; threshold ...), but it may not be set for another ... hours (weewx started, or the clock was set, too recently); leaving it alone.` | The clock is beyond its threshold, but WeeWX started within the last 30 minutes or the clock was set within the last 20 hours.  Repeated daily, the clock options are wrong. |
+| `Clock is about ... s off center (one reading, good to +-0.5 s; threshold ...), but it may not be set for another ... hours (weewx started, or the clock was set, too recently); leaving it alone.` | The clock is beyond its threshold, but WeeWX started within the last 30 minutes or the clock was set within the last 20 hours.  If it adds `this console's clock is not keeping to its drift`, the console is not behaving as measured. |
 | `Clock is ... s off center (threshold ..., measured to ... ms); not set.` | A precise measurement found the clock within its threshold after all.  It is not measured again until after midnight. |
-| `Clock stepped ... s: error ... -> ... s, off center ... -> ... s (threshold ..., ...) (...)` | The clock was set.  [Every field is explained here](clock.md#the-clock-lines-in-the-log). |
+| `Clock stepped ... s: error ... -> ... s, off center ... -> ... s (threshold ..., ...) (...)` | The clock was set: the step, the true error and the off-center distance before and after, how precisely it was measured, and the LOOP packets read so far. |
 | `setTime ignored during time change transition period.` | WeeWX asked for a clock set inside a [time change window](dst.md). |
 | `setTime ignored in the 600 seconds after midnight, while the console's daily jump may be in progress.` | WeeWX asked for a clock set in the first ten minutes of the day.  It will ask again at the next check. |
+| `setTime ignored in the last 60 seconds before midnight, while the console's daily jump may be in progress.` | WeeWX asked for a clock set in the last minute of the day.  It will ask again at the next check. |
 | `After the clock set the console reads ...; expected ....` | The console did not take the time it was given.  Once is a curiosity; repeatedly, report it. |
 | `The clock was set, but could not be read back to check it: ...` | A read error straight after the set, which is when they are most likely.  The set itself succeeded. |
-| `clock_recenter_threshold of ... is too tight to hold a whole-second step; using 0.700000.` | The option is below its minimum. |
 | `Max retries exceeded while getting time` / `Max retries exceeded while setting time` | The console did not answer.  See [Read errors and recovery](recovery.md). |
 
 ### Time changes
@@ -133,9 +160,8 @@ It reads no `weewx.conf`, so the driver's defaults apply to everything else, and
 lines go to the system log under the name `vantagenext`.
 
 `weectl device --info` and `weectl device --current` are the other two read-only looks at
-the console, and they also need WeeWX stopped.  `python -m user.vantagenext --clock-options`
-reads the log instead of the console, and WeeWX may be running: see
-[Tuning it to your console](clock.md#tuning-it-to-your-console).
+the console, and they also need WeeWX stopped.  `--info` includes the console's midnight
+jump and what the driver has learned about its clock.
 
 ## Reporting a problem
 

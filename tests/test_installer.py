@@ -26,7 +26,6 @@ import os
 import re
 
 import configobj
-import pytest
 import weeutil.config
 
 from vantagenext import VantageNext, VantageNextConfEditor
@@ -117,7 +116,6 @@ class TestStanzaShape:
         green."""
         found = commented_options(install_module().vantagenext_config)
         assert sorted(found) == [
-            'clock_drift_secs', 'clock_recenter_threshold', 'day_start_jump',
             'iss_id', 'loop_request']
         # Prose comments must not be mistaken for assignments.
         assert 'Connection type: serial or ethernet' not in found
@@ -189,12 +187,6 @@ class TestCommentedValuesMatchTheCode:
         for name in EXAMPLE_OPTIONS:
             commented.pop(name)
         assert int(commented.pop('loop_request')) == station.loop_request
-        assert float(commented.pop('clock_drift_secs')) == \
-            pytest.approx(station.clock_drift_secs)
-        assert float(commented.pop('day_start_jump')) == \
-            pytest.approx(station.day_start_jump)
-        assert float(commented.pop('clock_recenter_threshold')) == \
-            pytest.approx(station.clock_recenter_threshold)
         # Every commented option has now been held to the driver's value.
         assert commented == {}
 
@@ -209,6 +201,15 @@ class TestCommentedValuesMatchTheCode:
             for name in ('baudrate', 'tcp_port', 'tcp_send_delay', 'timeout',
                          'wait_before_retry', 'max_tries', 'command_delay',
                          'model_type'):
+                assert not re.search(r'^\s*#?\s*%s\s*=' % name, text, re.M), name
+
+    def test_the_obsolete_clock_options_are_not_written(self):
+        """Since 3.0 the driver learns the drift and reads the jump from the
+        console: none of the retired clock options belongs in a stanza, in either
+        form."""
+        for text in (install_module().vantagenext_config,
+                     VantageNextConfEditor().default_stanza):
+            for name in ('clock_drift_secs', 'day_start_jump', 'clock_recenter_threshold'):
                 assert not re.search(r'^\s*#?\s*%s\s*=' % name, text, re.M), name
 
 
@@ -259,4 +260,4 @@ class TestMergedStanza:
         # An indentation check cannot see a DROPPED block -- there is no line
         # left to measure -- so count them.  All five, or the ones that
         # vanished did so silently.
-        assert seen == 5
+        assert seen == 2

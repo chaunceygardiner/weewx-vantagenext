@@ -24,16 +24,17 @@ Seven consoles, 34 days, 282 truncated reads — and every one of them is accoun
 | When | Share | |
 |---|---|---|
 | In the minutes after a clock set | 62% | Three clock sets in four were followed by them: typically four in a row, the first about five seconds after the set, the last half a minute later — and once, 36 of them over more than three minutes. |
-| Two to four seconds after midnight | 35% | One, as the console rolls its day over — the same moment its [daily clock jump](clock.md#what-a-consoles-clock-does) begins.  On some consoles most nights, on others rarely, on one never. |
+| Two to four seconds after midnight | 35% | One, as the console rolls its day over — the same moment its [daily clock jump](clock.md#how-a-consoles-clock-works) begins.  On some consoles most nights, on others rarely, on one never. |
 | Two to four minutes after midnight | 3% | Eight of them, on four consoles — most on nights the console had also [lost its transmitter at midnight](#what-it-costs-in-reception), and busy reacquiring it. |
 | At any other time | none | |
 
 In 277 of the 282 the console sent nothing at all; in the other five, part of a packet.
 
 So on a sound link a truncated read means the console was busy with its clock, and the
-largest share of them is the driver's own doing.  That is the reason this driver
-[sets the clock as seldom as it can](clock.md), and it is what makes a truncated read at any
-*other* time worth a look.
+largest share of these were the driver's own doing: the measurements above were made while it
+still set the clock.  That is why it no longer does — it
+[steers the console's own midnight jump instead](clock.md) — and it is what makes a truncated
+read at any *other* time worth a look.
 
 ## What it costs in reception
 
@@ -41,31 +42,11 @@ Truncated reads are the visible side of something the archive records more preci
 Every archive record carries `rxCheckPercent`: how many of the ISS's packets the console
 received in that interval, against the number it should have.  A sound link runs at
 98 to 100 percent, record after record, so a single low record is easy to spot — and on
-these consoles it means one of two things.
-
-**A clock set.**  Of 51 clock sets measured across seven consoles, every one left the
-archive record it fell in short of ISS packets: from ten seconds' worth to nearly three
-minutes', a minute or so typically.  The other consoles at the same site, listening to the
-same ISS, lost nothing in the same record — so this is not the radio, it is the console
-letting go of its transmitter while its clock moves and taking a while to find it again.
-The run of truncated reads after a set is the console busy with that.
-
-**Midnight, about one night in twelve.**  The record for the first five minutes of the day
-is short by two to five minutes of packets — it reads anywhere from about 60 percent down
-to almost nothing, with the records either side at 100 — and by ten past the console has
-recovered.  Two years of archive from seven consoles show it on every console, at 7 to 9
-percent of nights each, every month, at a steady rate: it does not depend on the weather,
-on the size of that night's [clock jump](clock.md#what-a-consoles-clock-does), on whether
-WeeWX was restarted, or on what the other consoles did that night — each console loses its
-own nights.  On some of those nights the console also stops sending LOOP packets two to
-three minutes into the day, which is the 3% row in the table above.
-
-The driver plays no part in the midnight loss.  It sends the console nothing in the first
-ten minutes of the day, and the loss is the same on the console whose clock it has never
-set.  It is the console's own day-rollover work, occasionally costing it its transmitter
-for a few minutes; on the whole it amounts to about a dozen seconds of reception a night,
-and there is nothing to tune.  It is worth knowing about so that one low record at five
-past midnight is not mistaken for a failing link.
+these consoles it means one of two things: a **clock set**, which costs the console about a
+minute of its transmitter's packets every time, or **midnight**, when about one night in
+twelve the console loses its transmitter for a few minutes on its own.  Both, and how we
+know the packets really are lost, are in
+[What a clock set costs](clock.md#what-a-clock-set-costs).
 
 ## How LOOP data is read
 
@@ -152,7 +133,7 @@ ERROR user.vantagenext: DMPAFT max tries (4) exceeded.
 | `get_packet: Expected 99 chars; got 0` a few seconds after midnight | Routine: the console rolling its day over. |
 | The same, two to four minutes after midnight, now and then | Routine and rare: the console reacquiring its transmitter after the [midnight reception loss](#what-it-costs-in-reception). |
 | `rxCheckPercent` low in the record for five past midnight, normal either side | Routine, about one night in twelve: the [midnight reception loss](#what-it-costs-in-reception). |
-| A run of them starting a few seconds after a `Clock stepped` line | Routine: clock sets disturb the stream, which is why the driver [makes so few](clock.md). |
+| A run of them starting a few seconds after a `Clock stepped` line | Routine: clock sets disturb the stream, which is why the driver [no longer makes them](clock.md) except as a backstop, or on a console it cannot steer. |
 | The same at other times of day, now and then | Worth a look, not yet a fault.  See the next row. |
 | Truncated reads through the day, a few packets apart, with no clock set before them | A marginal link: the USB cable, a hub, the data logger's seating, power to the console.  On a WeatherLinkIP, the network. |
 | `LOOP try` and `max tries exceeded` lines without pause | The console is not answering at all.  Check that it is powered and connected — and that nothing else has the port open (see [Troubleshooting](troubleshooting.md)). |

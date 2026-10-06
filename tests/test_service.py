@@ -16,7 +16,7 @@ Covers the engine wiring, event dispatch (gust injection), the STARTUP
 hardware catch-up (DMPAFT records landing in a real sqlite database via
 StdArchive), and the engine's main packet loop end to end."""
 
-import re
+import os
 import sqlite3
 import sys
 import types
@@ -24,7 +24,7 @@ import types
 import configobj
 import pytest
 
-from common import (ACK, BASE_DT, WAKE, ClockConsole, FakeClock, ScriptedWrapper,
+from common import (ACK, BASE_DT, WAKE, FakeClock, ScriptedWrapper, SteeredConsole,
                     archive_page, archive_record_at, dmpaft_reads, make_loop1,
                     setup_reads)
 
@@ -58,6 +58,9 @@ def make_config(db_file):
     """A minimal but real weewx.conf-shaped config: VantageNext is the
     station driver.  Values are strings, as configobj would deliver them."""
     return configobj.ConfigObj({
+        # Where the driver keeps its clock state, as in production: under the
+        # archive directory of WEEWX_ROOT.
+        'WEEWX_ROOT': os.path.dirname(db_file),
         'Station': {
             'station_type': 'VantageNext',
             'altitude': [11, 'foot'],
@@ -84,7 +87,8 @@ def make_config(db_file):
                 'database_type': 'SQLite'}},
         'DatabaseTypes': {
             'SQLite': {
-                'driver': 'weedb.sqlite'}},
+                'driver': 'weedb.sqlite',
+                'SQLITE_ROOT': 'archive'}},
         'Engine': {
             'Services': {
                 'archive_services': '',
@@ -139,68 +143,55 @@ class TestEngineWiring:
 class TestTimeSynch:
     """weewx.engine's real StdTimeSynch against the driver's clock keeping."""
 
-    def make_engine(self, monkeypatch, tmp_path, error):
+    def make_engine(self, monkeypatch, tmp_path, c0):
         db_file = str(tmp_path / 'weewx.sdb')
         port = ScriptedWrapper(CONSTRUCTION_READS)
         monkeypatch.setattr(VantageNext, '_port_factory', staticmethod(lambda vp_dict: port))
         config = make_config(db_file)
-        config['VantageNext']['clock_drift_secs'] = '0'
-        # A console that gains a little, so a step has a side of the band to make for.
-        config['VantageNext']['day_start_jump'] = '0.2'
-        config['StdTimeSynch'] = {'clock_check': '3590', 'max_drift': '3'}
+        config['StdTimeSynch'] = {'clock_check': '3590', 'max_drift': '5'}
         config['Engine']['Services']['prep_services'] = 'weewx.engine.StdTimeSynch'
         engine = StdEngine(config)
         # From here on the console keeps time, on a clock the test owns; the
-        # engine computes its clock error from the same clock.
+        # engine computes its clock error from the same clock.  It loses 3.31
+        # s a day and holds a 3.25 s jump: c0 off the center of that.
         clock = FakeClock(datetime.datetime(2026, 9, 15, 14, 30, 0, 250000).timestamp())
-        console = ClockConsole(clock, error)
+        error = VantageNext.ideal_clock_error(14.5 * 3600, -3.31) + c0
+        console = SteeredConsole(clock, error, -3.31, 3.25)
         engine.console.port = console
         engine.console._now = clock.now
         engine.console._sleep = clock.sleep
-        # The driver armed its startup holdoff on the real clock; restate it
-        # on the test's.
-        engine.console._next_unforced_set_ts = clock.now() + VantageNext.CLOCK_STARTUP_HOLDOFF
         monkeypatch.setattr(weewx.engine.time, 'time', clock.now)
         return engine, console
 
-    def test_driver_steps_and_engine_stands_down(self, monkeypatch, tmp_path, caplog):
-        # 2.45 s fast.  Not at startup: a process that has just started
-        # leaves the clock alone, and the engine logs the true error.
-        engine, console = self.make_engine(monkeypatch, tmp_path, 2.45)
+    def test_the_driver_steers_and_the_engine_never_sets(self, monkeypatch, tmp_path, caplog):
+        engine, console = self.make_engine(monkeypatch, tmp_path, 0.8)
         with caplog.at_level('INFO'):
             engine.dispatchEvent(weewx.Event(weewx.STARTUP))
-            engine.dispatchEvent(weewx.Event(weewx.PRE_LOOP))
+            for unused_hour in range(4 * 24):
+                engine.dispatchEvent(weewx.Event(weewx.PRE_LOOP))
+                console.clock.sleep(3600)
         assert console.sets == []
-        # One whole-second reading, good to half a second either way.
-        logged = float(re.search(r'Clock error is (-?[\d.]+) seconds', caplog.text).group(1))
-        assert logged == pytest.approx(2.45, abs=0.5)
-        assert 'leaving it alone' in caplog.text
-        assert 'do not describe' not in caplog.text     # a restart is not a misconfiguration
-        # At the next clock check the driver steps three seconds back from
-        # inside getTime, the error the engine logs is the true one
-        # afterwards, and at under max_drift the engine does not call setTime
-        # on top of it.
-        console.clock.sleep(3600)
-        with caplog.at_level('INFO'):
-            engine.dispatchEvent(weewx.Event(weewx.PRE_LOOP))
-        assert len(console.sets) == 1
-        assert console.error == pytest.approx(-0.55, abs=1e-6)
-        assert 'Clock error is -0.55 seconds' in caplog.text
+        assert console.jump_writes
+        assert 'Clock error is' in caplog.text
+        # What it learned is where production keeps it: the archive directory.
+        state = vantagenext.ClockState.load(str(tmp_path / 'archive' / 'vantagenext' / 'clock.json'))
+        assert state.state == vantagenext.ClockState.STEERING
+        assert state.drift == pytest.approx(-3.31, abs=0.02)
         monkeypatch.undo()
         engine.shutDown()
 
     def test_engine_backstop_centers(self, monkeypatch, tmp_path):
-        # Far beyond max_drift.  The driver's own step and the engine's
-        # setTime must not fight: one way or the other the clock ends up
-        # centered, and stays put on the next check.
+        # Far beyond max_drift: the engine calls setTime, the driver steps to
+        # the center, and nothing is set again on the next check.
         engine, console = self.make_engine(monkeypatch, tmp_path, 7.45)
         engine.dispatchEvent(weewx.Event(weewx.STARTUP))
-        assert abs(console.error) <= 1.2
-        sets, polls = len(console.sets), console.gettimes
+        assert len(console.sets) == 1
+        assert abs(console.error - VantageNext.ideal_clock_error(14.5 * 3600, -3.31)) <= 0.6
+        polls = console.gettimes
         console.clock.sleep(3600)
         engine.dispatchEvent(weewx.Event(weewx.PRE_LOOP))
         assert console.gettimes > polls     # the engine did check again
-        assert len(console.sets) == sets
+        assert len(console.sets) == 1
         monkeypatch.undo()
         engine.shutDown()
 

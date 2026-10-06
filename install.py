@@ -78,18 +78,6 @@ vantagenext_config = """
     # an anemometer transmitter kit, use its id.
     #iss_id = 1
 
-    # The amount of time, in seconds, that the console clock drifts in a day.
-    # A negative number means the console loses time.
-    #clock_drift_secs = -3.1
-
-    # The number of seconds the console jumps just after midnight.
-    #day_start_jump = 2.83
-
-    # How far, in seconds, the console clock may stand from the center of its
-    # daily drift before the driver steps it back (by whole seconds).  Smaller
-    # is more accurate and sets the clock more often.  The minimum is 0.7.
-    #clock_recenter_threshold = 1.2
-
     # The driver to use:
     driver = user.vantagenext
 """
@@ -102,7 +90,7 @@ def loader():
 class VantageNextInstaller(ExtensionInstaller):
     def __init__(self):
         super(VantageNextInstaller, self).__init__(
-            version="2.4",
+            version="3.0",
             name='VantageNext',
             description='Capture weather observations from Vantage weather stations',
             author="John A Kline",

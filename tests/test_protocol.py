@@ -21,8 +21,8 @@ import time
 import pytest
 
 from common import (ACK, BASE_DT, WAKE, ClockConsole, FakeClock, ScriptedWrapper, archive_page,
-                    archive_record_at, bare_station, clock_station, dmpaft_reads,
-                    eeprom_reads, setup_reads, with_crc)
+                    SteeredConsole, archive_record_at, bare_station, clock_station,
+                    dmpaft_reads, eeprom_reads, setup_reads, with_crc)
 
 from vantagenext import VantageNext
 
@@ -577,7 +577,7 @@ class TestKeepClock:
 
     def test_a_clock_far_out_again_after_a_set_is_reported(self, caplog):
         # Beyond the threshold for certain an hour after being set: that IS
-        # worth saying, and it points at the options.
+        # worth saying: the console is not doing what its drift says.
         clock = FakeClock(AFTERNOON)
         console = ClockConsole(clock, 1.45)
         station = clock_station(clock, console)
@@ -588,7 +588,7 @@ class TestKeepClock:
             station.getTime()
         assert 'leaving it alone' in caplog.text
         assert 'one reading, good to +-0.5 s; threshold' in caplog.text
-        assert 'do not describe this console' in caplog.text
+        assert 'not keeping to its drift' in caplog.text
 
     def test_a_measurement_holds_for_the_rest_of_the_day(self):
         # Just inside the threshold, and near enough to it that one reading
@@ -651,7 +651,12 @@ class TestKeepClock:
         remeasured = 0
         for phase in PHASES:
             clock = FakeClock(start + phase)
-            console = ClockConsole(clock, 1.20)
+            # A console that really does gain 0.2 s at midnight: FALLBACK
+            # learns from its readings, so they must agree with GAINING.
+            # (Not a quarter-second, so no pair holds it: an invalid one, and
+            # the console makes the jump it was built with.)
+            console = SteeredConsole(clock, 1.20, 0.0, GAINING['day_start_jump'],
+                                     pair=(0xF0, 0x00))
             station = clock_station(clock, console, **GAINING)
             station.getTime()
             assert console.error == pytest.approx(-0.80, abs=1e-6), phase
@@ -1086,27 +1091,43 @@ class TestInit:
         monkeypatch.setattr(VantageNext, '_port_factory', staticmethod(lambda vp_dict: port))
         station = VantageNext(
             type='serial', port='/dev/vantage', max_tries='5', iss_id='2',
-            model_type='2', loop_request='1', clock_recenter_threshold='0.9',
-            clock_drift_secs='-3.84', day_start_jump='4.21')
+            model_type='2', loop_request='1')
         assert station.max_tries == 5
         assert station.iss_id == 2
-        assert station.clock_recenter_threshold == pytest.approx(0.9)
-        assert station.clock_drift_secs == pytest.approx(-3.84)
         assert station.hardware_name == 'Vantage Pro2'
         assert station.pkt_count == 0
         assert station.on_bad_read is False
         # No unforced clock set in the first half hour of a process.
         assert station._next_unforced_set_ts == pytest.approx(
             time.time() + VantageNext.CLOCK_STARTUP_HOLDOFF, abs=5)
+        # The console's jump is read at the first clock check, not here.
+        assert station._clock is None
 
-    def test_clock_threshold_floor(self, monkeypatch, caplog):
+    @pytest.mark.parametrize('connection, ethernet', [
+        (dict(type='serial', port='/dev/vantage'), False),
+        (dict(type='ethernet', host='weatherlinkip'), True),
+        (dict(type='Ethernet', host='weatherlinkip'), True),
+        (dict(connection_type='ethernet', host='weatherlinkip'), True),
+        (dict(port='/dev/vantage'), False),
+    ])
+    def test_the_connection_type_decides_whether_the_clock_is_steered(self, monkeypatch,
+                                                                        connection, ethernet):
+        port = ScriptedWrapper([WAKE, ACK, b'\x10'] + setup_reads()[1:])
+        monkeypatch.setattr(VantageNext, '_port_factory', staticmethod(lambda vp_dict: port))
+        station = VantageNext(iss_id='2', **connection)
+        assert station._ethernet is ethernet
+
+    def test_the_retired_clock_options_are_obsolete_and_ignored(self, monkeypatch, caplog):
         port = ScriptedWrapper([WAKE, ACK, b'\x10'] + setup_reads()[1:])
         monkeypatch.setattr(VantageNext, '_port_factory', staticmethod(lambda vp_dict: port))
         with caplog.at_level('WARNING'):
             station = VantageNext(type='serial', port='/dev/vantage', iss_id='2',
-                                  clock_recenter_threshold='0.2')
-        assert station.clock_recenter_threshold == pytest.approx(VantageNext.CLOCK_MIN_THRESHOLD)
-        assert 'too tight' in caplog.text
+                                  clock_drift_secs='-3.84', day_start_jump='4.21',
+                                  clock_recenter_threshold='0.9')
+        for option in ('clock_drift_secs', 'day_start_jump', 'clock_recenter_threshold'):
+            assert 'The %s option in weewx.conf is obsolete and IGNORED' % option in caplog.text
+        assert station.clock_drift_secs == 0.0 and station.day_start_jump == 0.0
+        assert station.clock_recenter_threshold == VantageNext.CLOCK_FALLBACK_THRESHOLD
 
     def test_obsolete_clock_options_warn_and_are_ignored(self, monkeypatch, caplog):
         port = ScriptedWrapper([WAKE, ACK, b'\x10'] + setup_reads()[1:])

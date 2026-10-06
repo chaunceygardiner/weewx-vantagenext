@@ -74,9 +74,9 @@ after one.
 
 Three things change, and only inside a window:
 
-- **The console clock is not set.**  Not by the driver's own clock keeping, not by WeeWX's
-  `max_drift` backstop, and not by `weectl device --set-time`.  A set in the ambiguous hour
-  is the accident described above.
+- **The console clock is not set**, nor its midnight jump decided or rewritten.  Not by the
+  driver's own clock keeping, not by WeeWX's `max_drift` backstop, and not by
+  `weectl device --set-time`.  A set in the ambiguous hour is the accident described above.
 - **The console time reported to WeeWX is corrected.**  If the console's time differs from
   the computer's by the shift, give or take 20 seconds, it is taken to be the same moment
   misread, and corrected by the shift.  WeeWX's clock check then sees a clock that is right,

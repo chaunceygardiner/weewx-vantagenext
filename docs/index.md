@@ -3,14 +3,14 @@ title: Home
 layout: default
 nav_order: 1
 permalink: /
-description: A WeeWX driver for Davis Vantage stations, built for uptime and data integrity — safe through daylight-saving time changes, quick to recover from read errors, a console clock held centered on its daily drift, and support for the Davis sonic anemometer.
+description: A WeeWX driver for Davis Vantage stations, built for uptime and data integrity — safe through daylight-saving time changes, quick to recover from read errors, a console clock kept centered without setting it, and support for the Davis sonic anemometer.
 ---
 
 # weewx-vantagenext — A Davis Vantage driver for WeeWX, built for uptime and data integrity
 
 **A fork of WeeWX's built-in Vantage driver** that sails through daylight-saving time
-changes, recovers from read errors in seconds, keeps the console clock centered on its
-daily drift, and can select the Davis sonic anemometer.
+changes, recovers from read errors in seconds, keeps the console clock centered without
+setting it, and can select the Davis sonic anemometer.
 
 [View on GitHub](https://github.com/chaunceygardiner/weewx-vantagenext){: .btn .btn-primary }
 [Download weewx-vantagenext.zip](https://github.com/chaunceygardiner/weewx-vantagenext/releases/latest/download/weewx-vantagenext.zip){: .btn }
@@ -29,9 +29,10 @@ What differs is what happens on the bad days — a time change, a truncated read
 is not ready at boot — and how the console clock is kept.
 
 {: .note }
-The built-in Vantage driver is excellent and well supported.  If it serves you well, there
-is no need to switch.  This driver is for stations that have hit one of the specific
-problems below.
+The built-in Vantage driver is excellent and well supported.  But it keeps the console clock
+by setting it, and every clock set costs the console a minute or so of its transmitter's
+data — on every station, every time, whether anything else is wrong or not.  This driver
+keeps the clock without that cost, and solves the specific problems below.
 
 ## Highlights
 
@@ -44,12 +45,14 @@ problems below.
 - **Read errors cost seconds, not a minute.**  A truncated LOOP packet abandons the batch
   and starts a new one at once, and an error reading LOOP data is retried inside the
   driver rather than handed to WeeWX, where it costs a 60-second driver restart.  See [Read errors and recovery](recovery.md).
-- **A console clock held centered** (2.4).  A Vantage console loses time all day and jumps
-  forward just after midnight: a daily sawtooth that no setting can flatten.  The driver
-  measures the error to a few hundredths of a second and keeps that sawtooth centered on
-  zero, stepping the clock by whole seconds — the only change a console accepts — as seldom
-  as it can, because each clock set tends to disturb the data stream.
-  See [Keeping the console clock](clock.md).
+- **A console clock kept centered without setting it** (3.0).  A Vantage console loses
+  time all day and corrects itself just after midnight by a jump it keeps in its own memory:
+  a daily sawtooth.  The driver learns the console's drift and keeps that sawtooth centered
+  on zero by rewriting the jump, which costs nothing, rather than setting the clock, which
+  costs the console a minute of its transmitter's data every time.  There is nothing to
+  configure.  Clock steering does not apply to a WeatherLinkIP, which is set as before; so
+  are a console the driver cannot steer and a clock lost to a power failure.  See
+  [Keeping the console clock](clock.md).
 - **The Davis sonic anemometer.**  Newer console firmware keeps the wind cup type in a
   place, and with a third value, that the built-in driver does not write.
   `weectl device --set-wind-cup=3` selects it here.
@@ -72,7 +75,7 @@ problems below.
 
 | What the driver does | |
 |---|---|
-| [Keeping the console clock](clock.md) | The daily sawtooth, how it is centered, and tuning it to your console |
+| [Keeping the console clock](clock.md) | How the console's clock works, what a clock set costs in reception, how the driver steers the midnight jump, what to expect, and every clock line in the log |
 | [Daylight-saving time changes](dst.md) | The time change windows and what happens inside one |
 | [Read errors and recovery](recovery.md) | Truncated reads, retries, and telling routine recovery from a fault |
 | [Configuring the console](console.md) | `weectl device`, and the one option that differs from WeeWX's guide |
@@ -84,7 +87,7 @@ problems below.
 
 ## Requirements
 
-- Python 3.9 or later
+- Python 3.9 or later — newer than WeeWX itself requires (3.7)
 - WeeWX 5
 - A Davis VantagePro, VantagePro2 or VantageVue, connected by serial or USB, or by ethernet
   (WeatherLinkIP)

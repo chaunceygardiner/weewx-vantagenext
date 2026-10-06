@@ -84,7 +84,7 @@ def options_the_code_reads():
         elif (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name)
               and node.value.id == 'vp_dict' and isinstance(node.slice, ast.Constant)):
             found[node.slice.value] = None
-    assert len(found) >= 15 and found.get('clock_drift_secs') == -3.1 and 'port' in found, found
+    assert len(found) >= 14 and found.get('max_tries') == 4 and 'port' in found, found
     return found
 
 
@@ -94,7 +94,7 @@ def options_the_manual_lists():
     table = text.split('\n## The options\n')[1].split('\n## ')[0]
     rows = re.findall(r'^\| `(\w+)` \| (.+?) \| ', table, re.M)
     found = {name: default.strip('`') for name, default in rows}
-    assert len(found) >= 15 and found.get('max_tries') == '4', found
+    assert len(found) >= 14 and found.get('max_tries') == '4', found
     return found
 
 
@@ -137,7 +137,7 @@ class TestOptions:
                 continue
             assert float(shown) == float(code[option]), option
             checked += 1
-        assert checked >= 11, checked
+        assert checked >= 9, checked
 
     def test_the_obsolete_options_are_the_ones_the_driver_warns_about(self):
         warned = set()
@@ -152,7 +152,7 @@ class TestOptions:
             if (isinstance(node, ast.For) and isinstance(node.target, ast.Name)
                     and node.target.id == 'obsolete'):
                 warned.update(elt.value for elt in node.iter.elts)
-        assert 'dst_periods' in warned and len(warned) == 3, warned
+        assert 'dst_periods' in warned and len(warned) == 6, warned
         text = pages()['configuration.md']
         table = text.split('\n## Obsolete options\n')[1]
         listed = {name.strip('[]') for name in re.findall(r'^\| `([\w\[\]]+)` \| ', table, re.M)}
@@ -237,13 +237,16 @@ UNDOCUMENTED_FORMATS = {
     # (it arrives as the text of "LOOP try #...; error: ...").
     'LOOP buffer failed CRC check. Calculated CRC=%d',
     'Buffer: %s',
-    # The obsolete-option warning for set_time_padding and time_set_goal: the
-    # Troubleshooting page sends its reader to the Obsolete options table,
-    # which the options audit above holds to the code.
+    # The obsolete-option warnings: the Troubleshooting page sends its reader
+    # to the Obsolete options table, which the options audit above holds to
+    # the code.
     'The %s option in weewx.conf is obsolete and IGNORED: the console '
     'keeps its own sub-second tick across a clock set, so the clock is '
-    'now stepped by whole seconds to the center of its daily drift '
-    '(see clock_recenter_threshold).  Please delete the option.',
+    'now kept by its midnight jump.  Please delete the option.',
+    'The %s option in weewx.conf is obsolete and IGNORED: the driver '
+    "learns the console's drift, reads its midnight jump from the "
+    'console, and keeps the clock centered by rewriting the jump.  '
+    'Please delete the option.',
 }
 
 # Log lines whose %s is the message of an exception raised elsewhere in the
@@ -346,7 +349,7 @@ class TestLogMessages:
         source = read('bin', 'user', 'vantagenext.py')
         table = pages()['clock.md'].split('\n## Setting the clock by hand\n')[1]
         sentences = re.findall(r'^\| `(.+?)` \| ', table, re.M)
-        assert len(sentences) == 4, sentences
+        assert len(sentences) == 5, sentences
         for sentence in sentences:
             fragments = [part for part in re.split(r'[+-]?\d+(?:\.\d+)?', sentence) if part.strip(' .')]
             assert contains_in_order(' '.join(source.split()).replace('" "', ''), fragments), sentence
@@ -361,32 +364,31 @@ class TestConstants:
     def test_the_clock_pages_numbers_are_the_drivers(self):
         page = ' '.join(pages()['clock.md'].split())
         for phrase in (
+                # Steering.
+                'Within %g seconds of center:** it leaves the jump alone' % VantageNext.JUMP_BAND,
+                'no more than %g second from the jump' % VantageNext.JUMP_SWING,
+                'the last %d days of them' % VantageNext.CLOCK_LEARN_DAYS,
+                'span half a day and a midnight',
+                'the first after noon',
+                'cannot explain by %g seconds' % VantageNext.CLOCK_MODEL_BREAK,
+                'drifts more than %g seconds a day' % VantageNext.CLOCK_MAX_DRIFT_RATE,
+                'outside \u2212%g to +%g seconds' % (-vantagenext.JUMP_MIN, vantagenext.JUMP_MAX),
+                'from half past eleven at night until midnight',
+                "%s writes in a row that fail, or don't read back as written" % (
+                    'Two' if VantageNext.JUMP_WRITE_FAILS == 2 else '?'),
+                # Falling back: FALLBACK's rule.
+                'Within %g seconds of center:** nothing' % VantageNext.CLOCK_FALLBACK_THRESHOLD,
                 'stopping %g seconds short' % VantageNext.CLOCK_LANDING_GUARD,
                 'net creep is under %g seconds a day' % VantageNext.CLOCK_MIN_CREEP,
                 'first %d minutes after WeeWX starts' % (VantageNext.CLOCK_STARTUP_HOLDOFF / 60),
                 'within %d hours of the last clock set' % (VantageNext.CLOCK_MIN_SET_INTERVAL / 3600),
-                'The minimum is %g' % VantageNext.CLOCK_MIN_THRESHOLD,
                 'in the %d seconds after midnight' % VantageNext.CLOCK_JUMP_WINDOW,
-                '`2 × threshold − %g` and `2 × threshold − %g`' % (
-                    1 + VantageNext.CLOCK_LANDING_GUARD, VantageNext.CLOCK_LANDING_GUARD),
+                'the last %d seconds before midnight' % VantageNext.CLOCK_PRE_MIDNIGHT,
         ):
             assert phrase in page, phrase
         assert VantageNext.CLOCK_JUMP_WINDOW == 600  # "the first ten minutes of the day"
-
-    def test_the_clock_options_sample_is_what_the_driver_prints(self):
-        # Numbers aside, the sample on the clock page is the report's own
-        # text: the same lines, the same wording, the same layout.
-        sample = re.search(r'```\n(\d+ clock readings.*?)```', pages()['clock.md'], re.S)
-        assert sample, 'no --clock-options sample on the clock page'
-        fit = {'drift': -3.35, 'drift_se': 0.01, 'drift_sd': 0.07, 'jump': 3.98,
-               'jump_se': 0.02, 'jump_sd': 0.05, 'days': 33, 'midnights': 23, 'span': 1.0}
-        stats = {'readings': 830, 'first': 1.7e9, 'last': 1.7e9 + 86400 * 32,
-                 'moves': 10, 'breaks': 0, 'restarts': 12}
-        options = {'clock_drift_secs': -3.39, 'day_start_jump': 4.01}
-        text, status = vantagenext.clock_options_report(fit, options, stats)
-        assert status == 0
-        number = re.compile(r'[-+]?\d+(?:[.-]\d+)*')
-        assert number.sub('#', sample.group(1)) == number.sub('#', text)
+        assert VantageNext.CLOCK_MIN_SPAN == 12 * 3600 and VantageNext.CLOCK_LEARNING_HOUR == 12
+        assert VantageNext.JUMP_NO_WRITE_AFTER == 23.5 * 3600
 
     def test_the_batch_size_is_the_drivers(self):
         source = read('bin', 'user', 'vantagenext.py')
@@ -400,20 +402,29 @@ class TestConstants:
             flat = ' '.join(text.replace('>', ' ').split())
             assert '`1` (small), `2` (large) and `3` (other' in flat
 
-    def test_the_figure_is_what_the_driver_draws(self):
+    def test_the_figures_are_what_their_sources_draw(self):
         spec = importlib.util.spec_from_file_location(
             'clock_figure', os.path.join(REPO_ROOT, 'tools', 'clock_figure.py'))
         assert spec is not None and spec.loader is not None
         figure = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(figure)
-        assert figure.render() == read('docs', 'images', 'clock-sawtooth.svg'), \
-            'run tools/clock_figure.py, and check clock.md still describes the figure'
-        # The page's account of the figure, against the figure's own numbers.
-        page = pages()['clock.md']
-        assert 'loses %.2f seconds a day and jumps %.2f' % (-figure.DRIFT, figure.JUMP) in page
-        (unused_t, before, after), = figure.simulate()[1]
-        assert 'Clock stepped %+d s: error %+.2f -> %+.2f s, off center' % (
-            round(after - before), before, after) in page
+        assert sorted(figure.FIGURES) == ['clock-midnight.svg', 'clock-sawtooth.svg', 'clock-week.svg']
+        for name, draw in figure.FIGURES.items():
+            assert draw() == read('docs', 'images', name), \
+                'run tools/clock_figure.py, and check clock.md still describes %s' % name
+            assert '](images/%s)' % name in pages()['clock.md'], name
+        # The page's account of each figure, against the figure's own numbers.
+        page = ' '.join(pages()['clock.md'].split())
+        assert 'loses %.2f seconds a day and came with a %.2f-second jump' % (
+            -figure.DRIFT, figure.JUMP) in page
+        (unused_t, unused_error, old, new) = figure.simulate()[1][0]
+        assert 'it writes a jump of %.2f seconds' % new in page
+        assert 'midnight jump %.2f -> %.2f s.' % (old, new) in page
+        drift, jump, unused_offset = figure.week_fit()
+        assert 'Each day this console loses %.2f seconds and each midnight it gains back %.2f, so the ' \
+               'whole sawtooth climbs %.2f seconds a day' % (-drift, jump, drift + jump) in page
+        assert 'A jump of 3.75 seconds takes' in page
+        assert abs(figure.midnight_readings()[-1][1] - 3.75) < 0.05
 
 
 # ---------------------------------------------------------------------------
@@ -557,7 +568,7 @@ class TestFurniture:
         assert listed == set(pages()) - {'index.md'}
 
     def test_no_new_in_openers_on_reference_pages(self):
-        # A version is a parenthetical after its subject, "(2.4)", never the
+        # A version is a parenthetical after its subject, "(2.3)", never the
         # start of a sentence: a page organized by release reads as a stale
         # changelog.  Upgrading is organized by release on purpose.
         for name, text in pages().items():

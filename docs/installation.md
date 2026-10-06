@@ -13,8 +13,16 @@ description: Installing weewx-vantagenext, switching a station over from WeeWX's
 
 ---
 
-weewx-vantagenext requires Python 3.9 or later and WeeWX 5.  It has no other dependencies:
-anything the built-in Vantage driver runs on, this runs on.
+weewx-vantagenext requires WeeWX 5 and Python 3.9 or later.  That is a newer Python than
+WeeWX itself requires (3.7), so check the Python that runs your WeeWX before installing:
+
+```
+python3 --version                      # a package install
+~/weewx-venv/bin/python --version      # a pip install
+```
+
+On an older Python the installer stops with `weewx-vantagenext requires Python 3.9 or later`
+and changes nothing.  It has no other dependencies.
 
 ## Install
 
@@ -77,10 +85,8 @@ The two drivers read their settings from different sections — `[Vantage]` and
   option names and meanings are the same.
 - **Leave everything else commented out**, as the installer wrote it.  See
   [the commented-out convention](configuration.md#options-shown-commented-out).
-- **Except `clock_drift_secs` and `day_start_jump`, which are worth measuring first.**  The
-  built-in driver's log already holds them: once the driver is installed, `--clock-options`
-  reads them out of it, before you switch.  See
-  [Tuning it to your console](clock.md#tuning-it-to-your-console).
+- **The console clock needs nothing.**  The driver reads the console's midnight jump and
+  learns its drift by itself; see [Keeping the console clock](clock.md).
 
 The `[Vantage]` section can stay where it is.  Nothing reads it while `station_type` is
 `VantageNext`, and it is what you go back to if you ever switch back.
@@ -107,11 +113,8 @@ The driver announces itself in the log at startup, with its version and the opti
 running with:
 
 ```
-INFO user.vantagenext: Driver version is 2.4
+INFO user.vantagenext: Driver version is 3.0
 INFO user.vantagenext: max_tries          : 4
-INFO user.vantagenext: clock_drift_secs   : -3.100000
-INFO user.vantagenext: day_start_jump     : 2.830000
-INFO user.vantagenext: clock_recenter_threshold: 1.200000
 INFO user.vantagenext: iss_id             : None
 INFO user.vantagenext: model_type         : 2
 INFO user.vantagenext: Option loop_request: 1
@@ -119,21 +122,23 @@ INFO user.vantagenext: time change windows derived from the OS timezone database
 INFO user.vantagenext: time_change_window : 2026: 2026-11-01 00:55:00-2026-11-01 02:05:00
 ...
 INFO user.vantagenext: ISS ID is 1
+INFO user.vantagenext: Clock: the console's midnight jump is 4.00 s; learning its drift.
 ```
 
 `iss_id : None` is not a fault: it means the option is not set, and the `ISS ID is ...`
 line a moment later says what the driver read from the console.  The `time_change_window`
-lines are explained in [Daylight-saving time changes](dst.md).
+lines are explained in [Daylight-saving time changes](dst.md), and the `Clock:` line, at the
+first clock check, in [Keeping the console clock](clock.md#the-clock-lines-in-the-log).
 
 If those lines are missing, WeeWX is still running another driver: check `station_type`.
 
 ## What the installer writes
 
 One section, `[VantageNext]`, and nothing else: no services, no reports, no database.
-Four options are written live — `type`, `port`, `host` and `driver` — and five are written
-commented out, each showing the driver's own default: `loop_request`, `iss_id` and the
-three clock options.  The options hardly anyone changes are not written at all.
-[Configuration](configuration.md) covers every option, written or not.
+Four options are written live — `type`, `port`, `host` and `driver` — and two are written
+commented out, each showing the driver's own default: `loop_request` and `iss_id`.  The
+options hardly anyone changes are not written at all.  [Configuration](configuration.md)
+covers every option, written or not.
 
 `host` is written even on a serial station, with a placeholder address.  It is ignored
 unless `type = ethernet`.
@@ -153,3 +158,8 @@ weectl extension uninstall VantageNext
 ```
 
 and restart WeeWX.  Uninstalling removes `vantagenext.py` and the `[VantageNext]` section.
+
+Two things stay.  The driver's own record of the console clock, `vantagenext/clock.json` in
+the archive directory, is not removed; delete it if you like.  And the console keeps the
+midnight jump the driver last wrote, which suits it better than the one it came with: no
+driver needs to know about it.
