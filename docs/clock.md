@@ -81,8 +81,8 @@ received in that interval, against the number it should have.  A sound link runs
 clock sets measured across seven consoles, every one left the archive record it fell in short
 of ISS packets: from ten seconds' worth to nearly three minutes', a minute or so typically.
 Most of the cost is the command, not the move.  On a spare console, a set to the very time
-the console already showed stopped its live data for about 50 seconds, and steps of two to six
-seconds for only a little longer, but eight-second steps stopped it for about 100.  The console
+the console already showed stopped its live data for about 50 seconds, and steps of two to
+eight seconds for only a little longer.  The console
 lets go of its transmitter and takes a while to find it again, and three sets in four are
 followed by a run of [truncated reads](recovery.md#when-read-errors-happen) while it does.
 
