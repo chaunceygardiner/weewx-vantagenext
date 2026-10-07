@@ -24,7 +24,7 @@ the loop-gust bookkeeping, the units, the observation names.
 
 | | Built-in driver | This driver |
 |---|---|---|
-| **Setting the clock** | When the error passes `max_drift`, sets the console to the computer's time plus a fixed 0.75 seconds. | Never, in normal running: keeps the clock's daily sawtooth centered on zero by rewriting the console's own midnight jump, which costs no reception.  It learns the console's drift itself.  Clock steering does not apply to a WeatherLinkIP: it, and a console the driver cannot steer, are set as before.  See [Keeping the console clock](clock.md). |
+| **Setting the clock** | When the error passes `max_drift`, sets the console to the computer's time plus a fixed 0.75 seconds. | Never, in normal running: keeps the clock's daily sawtooth centered on zero by rewriting the console's own midnight jump, which costs no reception.  It learns the console's drift itself.  Clock steering is not yet supported on a WeatherLinkIP: it, and a console the driver cannot steer, are set as before.  See [Keeping the console clock](clock.md). |
 | **The clock error WeeWX logs** | The console's truncated reading: half a second slow, on average. | Corrected for the truncation. |
 | **Daylight-saving time changes** | No special handling. | The clock is not set, and misread times are corrected, inside a window around each change.  See [Daylight-saving time changes](dst.md). |
 | **A truncated LOOP packet** (serial and USB) | Counts against the batch; enough errors and the error reaches WeeWX, which restarts the driver after 60 seconds. | The batch is dropped and a new one started at once.  See [Read errors and recovery](recovery.md). |
@@ -46,7 +46,7 @@ the loop-gust bookkeeping, the units, the observation names.
 
 | | Built-in driver | This driver |
 |---|---|---|
-| **`--set-wind-cup`** | `0` small, `1` large; written to a location newer firmware does not use. | `1` small, `2` large, `3` other (sonic).  See [Configuring the console](console.md#the-wind-cup-codes-are-different-here). |
+| **`--set-wind-cup`** | `0` small, `1` large; written to a bit newer firmware does not keep in step. | `1` small, `2` large, `3` other (sonic), written where the console's firmware reads it.  See [Configuring the console](console.md#the-wind-cup-codes-are-different-here). |
 | **`--set-retransmit`** | Writes a bit mask where the console expects a channel number: `on,3` programs channel 4, and channels 5 to 8 write values out of range.  `--info` decodes it the same wrong way. | Writes the channel number (2.2). |
 | **`--set-offset`** | Rejects negative humidity offsets, which the console supports. | Accepts −100 to 100 (2.2). |
 | **`--set-transmitter-type`** | Accepts an extra temperature or humidity id of 8, a channel whose data can never surface. | Rejects it (2.2). |

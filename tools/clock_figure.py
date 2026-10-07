@@ -36,9 +36,9 @@ DATA_DIR = os.path.join(REPO_ROOT, 'tools', 'clock_data')
 DRIFT = -3.39
 JUMP = 4.00
 DAYS = 7
-# The driver learns the drift over the first day and a half; its first
-# decision is just after the second midnight.
-FIRST_DECISION_DAY = 2
+# The figure opens at midnight.  The driver learns the drift over the first
+# day, so its first decision is just after the next midnight.
+FIRST_DECISION_DAY = 1
 # Where the clock stands when the figure opens.
 START_OFF_CENTER = 0.0
 # The console makes its jump in the first seconds of the day; the driver
@@ -116,9 +116,9 @@ def render():
                '\'Segoe UI\',Helvetica,Arial,sans-serif">' % (W, H, W, H))
     out.append('<title>Console clock error over a week</title>')
     out.append('<desc>The clock error falls steadily through each day and rises just after '
-               'midnight by the console\'s own jump, a sawtooth.  For the first two days the jump '
-               'is the one the console came with, and the sawtooth climbs a little each day.  From '
-               'the third, the driver rewrites the jump each night it needs to, and the sawtooth '
+               'midnight by the console\'s own jump, a sawtooth.  For the first day the jump '
+               'is the one the console came with, and the sawtooth climbs.  From the second, '
+               'the driver rewrites the jump each night it needs to, and the sawtooth '
                'stays in the band around center.  The clock is never set.</desc>')
     out.append('<rect width="%d" height="%d" fill="%s"/>' % (W, H, SURFACE))
     out.append('<text x="%d" y="22" font-size="14" font-weight="600" fill="%s">Console clock error, '
@@ -150,7 +150,7 @@ def render():
         out.append('<text x="%.1f" y="%.1f" font-size="12" fill="%s">jump %.2f &#8594; %.2f s</text>'
                    % (x + 8, y - 10 - 14 * i, INK_2, old, new))
     out.append('<text x="%.1f" y="%.1f" font-size="12" text-anchor="middle" fill="%s">shaded: the band '
-               'the driver keeps the clock in, the centered sawtooth give or take %.1f s</text>'
+               'the driver keeps the clock in, the centered sawtooth give or take %g s</text>'
                % ((LEFT + W - RIGHT) / 2.0, y_of(-2.65), INK_2, VantageNext.JUMP_BAND))
     out.append('</svg>')
     return '\n'.join(out) + '\n'

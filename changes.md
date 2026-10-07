@@ -16,7 +16,7 @@
   value when the clock needs it, keeping the daily sawtooth centered on zero.
   Writing it costs the console no reception; every clock set costs about a
   minute.  The driver keeps what it learns in vantagenext/clock.json in the
-  archive directory.  Clock steering does not apply to a WeatherLinkIP
+  archive directory.  Clock steering is not yet supported on a WeatherLinkIP
   (type = ethernet).  A console the driver cannot steer -- a WeatherLinkIP, one
   with no valid jump in memory, or one whose jump cannot be written -- is kept
   by setting it instead: stepped by whole seconds when it is more than 1.2
@@ -57,9 +57,25 @@
   built-in driver, troubleshooting with every log message explained, and
   upgrading.  The README is rewritten as its front page.  New tests hold the
   manual to the code: the options and defaults it lists, the log lines it
-  quotes, the numbers it cites, its figure and its links.
-- weectl device --set-wind-cup no longer calls the setting the "rain wind cup
-  type" when it asks for confirmation.
+  quotes, the numbers it cites, its figures and its links.
+- weectl device --set-wind-cup and --info now use wherever the console's
+  firmware keeps the wind cup type: EEPROM 0xC3 on a Vantage Pro2 with firmware
+  3.00 or later, the single bit at 0x2B on older firmware and on the original
+  Vantage Pro, which have no 'other' type (--set-wind-cup=3 is refused there).
+  On a Vantage Vue, --info reads 0xC3.  The driver used to use 0xC3 on every
+  console, a location older firmware predates.
+- weectl device --info carries on when the console does not answer a query, or
+  answers with part of it missing: the firmware date or version, the console's
+  time, the wind cup type and the calibration offsets show as <Unavailable>,
+  the reception statistics and barometer data are left out, and the rest of the
+  report is printed.  A calibration table that fails the console's own
+  consistency check no longer stops the report either.  weectl device
+  --set-wind-cup says why it could not set the type (the console would not give
+  its firmware, or did not keep the value written) rather than ending in a
+  Python traceback.
+- weectl device --set-wind-cup: the line it prints before asking to confirm
+  now reads "Old wind cup type is ..."; it said "Old rain wind cup type is
+  ...", a slip the built-in driver still has.
 
 ## 2.3 2026-08-29
 - When iss_id is not set in weewx.conf, the ISS is now guessed only from

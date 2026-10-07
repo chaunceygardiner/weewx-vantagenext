@@ -447,12 +447,12 @@ def eeprom_reads(*values):
     return reads
 
 
-def setup_reads(unit_bits=0, setup_bits=0, wind_cup=1, rain_year_start=10,
+def setup_reads(unit_bits=0, setup_bits=0, rain_year_start=10,
                 archive_interval_minutes=5, altitude=11):
     """Script a complete _setup() pass (hardware type already known): the
-    wakeup, then the six EEPROM reads in _setup's order."""
+    wakeup, then the five EEPROM reads in _setup's order."""
     return [WAKE] + eeprom_reads(bytes([unit_bits]), bytes([setup_bits]),
-                                 bytes([wind_cup]), bytes([rain_year_start]),
+                                 bytes([rain_year_start]),
                                  bytes([archive_interval_minutes]),
                                  struct.pack('<h', altitude))
 

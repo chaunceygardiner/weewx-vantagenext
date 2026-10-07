@@ -247,6 +247,7 @@ def test_the_clock_keeping_holds_through_months_of_everything(tmp_path, seed):
         off = console.error - ideal(t, sim.drift)
         assert abs(off) <= VantageNext.JUMP_BAND + 0.3, 'seed %d: steered %+.2f' % (seed, off)
     else:
-        off = VantageNext.clock_off_center(console.error, secs, sim.drift, made)
+        off = VantageNext.clock_off_center(console.error, secs, sim.drift, made,
+                                           vantagenext.day_length(t))
         assert abs(off) <= VantageNext.CLOCK_FALLBACK_THRESHOLD + 1.0, \
             'seed %d: FALLBACK %+.2f (%s)' % (seed, off, state.fallback_reason)

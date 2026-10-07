@@ -31,7 +31,7 @@ is not ready at boot — and how the console clock is kept.
 {: .note }
 The built-in Vantage driver is excellent and well supported.  But it keeps the console clock
 by setting it, and every clock set costs the console a minute or so of its transmitter's
-data — on every station, every time, whether anything else is wrong or not.  This driver
+data — on every console measured, every time, whether anything else is wrong or not.  This driver
 keeps the clock without that cost, and solves the specific problems below.
 
 ## Highlights
@@ -50,12 +50,13 @@ keeps the clock without that cost, and solves the specific problems below.
   a daily sawtooth.  The driver learns the console's drift and keeps that sawtooth centered
   on zero by rewriting the jump, which costs nothing, rather than setting the clock, which
   costs the console a minute of its transmitter's data every time.  There is nothing to
-  configure.  Clock steering does not apply to a WeatherLinkIP, which is set as before; so
-  are a console the driver cannot steer and a clock lost to a power failure.  See
-  [Keeping the console clock](clock.md).
+  configure.  Clock steering is not yet supported on a WeatherLinkIP, which is set as before;
+  so are a console the driver cannot steer and a clock lost to a power failure.  A WeatherLinkIP
+  is being tested, and clock steering may be supported in a future release.  See [Keeping the console clock](clock.md).
 - **The Davis sonic anemometer.**  Newer console firmware keeps the wind cup type in a
   place, and with a third value, that the built-in driver does not write.
-  `weectl device --set-wind-cup=3` selects it here.
+  `weectl device --set-wind-cup=3` selects it here; on older firmware the driver uses the
+  place that firmware keeps it.
   See [Configuring the console](console.md).
 - **The ISS found properly.**  With `iss_id` left out, the driver reads the ISS from the
   console's transmitter table — considering only channels the console is listening to —

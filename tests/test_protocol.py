@@ -15,6 +15,10 @@ Covers wakeup/ACK/CRC/retry primitives, DMPAFT and DMP archive downloads,
 time get/set, and the EEPROM read/write commands."""
 
 import datetime
+import io
+import locale
+import logging
+import re
 import struct
 import time
 
@@ -24,7 +28,8 @@ from common import (ACK, BASE_DT, WAKE, ClockConsole, FakeClock, ScriptedWrapper
                     SteeredConsole, archive_record_at, bare_station, clock_station,
                     dmpaft_reads, eeprom_reads, setup_reads, with_crc)
 
-from vantagenext import VantageNext
+import vantagenext
+from vantagenext import VantageNext, VantageNextConfigurator
 
 import weewx
 
@@ -800,17 +805,23 @@ class TestSetupViaProtocol:
 
     def test_full_setup(self):
         station = bare_station()
-        station.port = ScriptedWrapper(setup_reads(unit_bits=0, setup_bits=0x10, wind_cup=2))
+        station.port = ScriptedWrapper(setup_reads(unit_bits=0, setup_bits=0x10))
         station._setup()
-        assert station.wind_cup_size == 'large'
+        # WeeWX's startup never asks where the wind cup is kept ...
+        assert b'VER\n' not in station.port.writes
+        assert b'EEBRD C3 1\n' not in station.port.writes
         assert station.rain_bucket_type == 1
+        # ... and leaves it to be found when weectl first asks.
+        station.port.reads += ver_reads(b'Oct 29 2019') + eeprom_reads(b'\x03')
+        assert station.wind_cup_size == 'other'
+        assert station.port.writes[-2:] == [b'VER\n', b'EEBRD C3 1\n']
         assert station.archive_interval == 300
         assert station.altitude == 11
 
     def test_determines_hardware_when_unknown(self):
         station = bare_station(hardware_type=None)
         # After the wakeup: the WRD command ACK, the hardware byte, then the
-        # six EEPROM reads.
+        # five EEPROM reads.
         station.port = ScriptedWrapper([WAKE, ACK, b'\x10'] + setup_reads()[1:])
         station._setup()
         assert station.hardware_type == 16
@@ -843,6 +854,303 @@ class TestDetermineHardware:
 # ===============================================================================
 #                            EEPROM writes (console setters)
 # ===============================================================================
+
+def ver_reads(date):
+    """Script a VER exchange answered with the firmware `date`."""
+    return [WAKE, b'\n\rOK\n\r' + date + b'\n\r']
+
+
+def nver_reads(version):
+    """Script an NVER exchange answered with the firmware `version`."""
+    return [WAKE, b'\n\rOK\n\r' + version + b'\n\r']
+
+
+# A console that does not answer a command, three tries running.
+NO_ANSWER = [WAKE, b''] * 3
+
+
+class TestWindCupLocation:
+    """Where the wind cup type is read and written follows the rule in the
+    driver's comment: a Vue 0xC3, an original Vantage Pro 0x2B, else the
+    firmware's date, and its version for a date in 2011 or 2012."""
+
+    @pytest.mark.parametrize('date', [b'Oct 29 2019', b'Jan 22 2018', b'Jan  1 2013'])
+    def test_newer_firmware_reads_0xc3(self, date):
+        station = bare_station()
+        station.port = ScriptedWrapper(ver_reads(date) + eeprom_reads(b'\x03'))
+        assert station.wind_cup_type == 3
+        assert station.port.writes[1] == b'VER\n'
+        assert b'EEBRD C3 1\n' in station.port.writes
+        assert b'NVER\n' not in station.port.writes
+
+    @pytest.mark.parametrize('date, bits, expected', [
+        (b'Feb 18 2010', 0x0A, 2),   # 1.90 by one source; bit 3 set: large
+        (b'Jan 13 2009', 0x12, 1),   # 1.90 by the other; bit 3 clear: small
+        (b'May  5 2005', 0x08, 2),   # Davis pads the day with a space
+    ])
+    def test_older_firmware_reads_0x2b_bit_3(self, date, bits, expected):
+        station = bare_station()
+        station.port = ScriptedWrapper(ver_reads(date) + eeprom_reads(bytes([bits])))
+        assert station.wind_cup_type == expected
+        assert b'EEBRD 2B 1\n' in station.port.writes
+        assert b'EEBRD C3 1\n' not in station.port.writes
+
+    @pytest.mark.parametrize('date, asks_version', [
+        (b'Dec 31 2010', False),
+        (b'Jan  1 2011', True),
+        (b'Dec 31 2012', True),
+        (b'Jan  1 2013', False),
+    ])
+    def test_the_version_is_asked_only_for_2011_and_2012(self, date, asks_version):
+        station = bare_station()
+        reads = (ver_reads(date) + (nver_reads(b'3.00') if asks_version else [])
+                 + eeprom_reads(b'\x0B'))
+        station.port = ScriptedWrapper(reads)
+        station.wind_cup_type
+        assert (b'NVER\n' in station.port.writes) == asks_version
+
+    @pytest.mark.parametrize('version, at', [(b'3.00', b'C3'), (b'3.12', b'C3'),
+                                             (b'1.90', b'2B'), (b'1.95', b'2B')])
+    def test_firmware_from_2011_or_2012_goes_by_its_version(self, version, at):
+        station = bare_station()
+        station.port = ScriptedWrapper(ver_reads(b'Jul 10 2012') + nver_reads(version)
+                                       + eeprom_reads(b'\x0B'))
+        station.wind_cup_type
+        assert b'EEBRD ' + at + b' 1\n' in station.port.writes
+
+    @pytest.mark.parametrize('nver, error', [
+        (NO_ANSWER, weewx.RetriesExceeded),
+        (nver_reads(b'n/a'), weewx.WeeWxIOError),
+    ])
+    def test_firmware_from_2011_or_2012_without_a_version_is_not_guessed(self, nver, error):
+        station = bare_station()
+        station.port = ScriptedWrapper(ver_reads(b'Mar  3 2011') + nver)
+        with pytest.raises(error):
+            station.setWindCupType(2)
+        assert not any(w.startswith(b'EEB') for w in station.port.writes)
+        assert station._wind_cup_at is None
+
+    def test_an_original_vantage_pro_reads_0x2b_without_asking(self):
+        station = bare_station(model_type=1)
+        station.port = ScriptedWrapper(eeprom_reads(b'\x08'))
+        assert station.wind_cup_size == 'large'
+        assert b'VER\n' not in station.port.writes
+        assert b'EEBRD 2B 1\n' in station.port.writes
+
+    def test_a_failed_exchange_is_tried_again_not_taken_for_old_firmware(self):
+        # One bad exchange on a 3.88 console: the retry answers, and 0xC3 it is.
+        station = bare_station()
+        station.port = ScriptedWrapper([WAKE, b''] + ver_reads(b'Oct 29 2019')
+                                       + eeprom_reads(b'\x03'))
+        assert station.wind_cup_type == 3
+        assert b'EEBRD C3 1\n' in station.port.writes
+
+    def test_a_console_not_answering_is_not_guessed(self):
+        station = bare_station()
+        station.port = ScriptedWrapper(NO_ANSWER)
+        with pytest.raises(weewx.RetriesExceeded):
+            station.setWindCupType(2)
+        assert not any(w.startswith(b'EEB') for w in station.port.writes)
+        assert station._wind_cup_at is None   # asked again next time
+
+    def test_a_date_that_is_no_date_is_not_guessed(self):
+        station = bare_station()
+        station.port = ScriptedWrapper(ver_reads(b'Smarch 1 2020'))
+        with pytest.raises(weewx.WeeWxIOError, match='not a date'):
+            station.setWindCupType(2)
+        assert not any(w.startswith(b'EEB') for w in station.port.writes)
+        assert station._wind_cup_at is None
+
+    def test_the_date_is_read_in_any_locale(self):
+        # Davis writes English month names; strptime's %b would follow the
+        # locale weectl runs in, and a German one has no 'Oct' or 'May'.
+        saved = locale.setlocale(locale.LC_TIME)
+        try:
+            locale.setlocale(locale.LC_TIME, 'de_DE.utf8')
+        except locale.Error:
+            pytest.skip('no German locale installed')
+        try:
+            assert vantagenext.firmware_date(b'Oct 29 2019') == datetime.date(2019, 10, 29)
+            assert vantagenext.firmware_date(b'May  5 2005') == datetime.date(2005, 5, 5)
+        finally:
+            locale.setlocale(locale.LC_TIME, saved)
+
+    def test_vue_reads_0xc3_without_asking(self):
+        station = bare_station(hardware_type=17)
+        station.port = ScriptedWrapper(eeprom_reads(b'\x02'))
+        assert station.wind_cup_size == 'large'
+        assert b'VER\n' not in station.port.writes
+
+    def test_the_firmware_is_asked_once(self):
+        station = bare_station()
+        station.port = ScriptedWrapper(ver_reads(b'Jan 22 2018') + eeprom_reads(b'\x03', b'\x03'))
+        assert station.wind_cup_type == 3
+        assert station.wind_cup_size == 'other'
+        assert station.port.writes.count(b'VER\n') == 1
+
+    @pytest.mark.parametrize('code, old_bits, new_bits', [
+        (2, 0x12, 0x1A),   # large: bit 3 set, the rest kept
+        (1, 0x1A, 0x12),   # small: bit 3 cleared, the rest kept
+    ])
+    def test_older_firmware_writes_0x2b_bit_3(self, code, old_bits, new_bits):
+        station = bare_station()
+        reads = (ver_reads(b'Feb 18 2010') + eeprom_reads(bytes([old_bits])) + [ACK, ACK, ACK]
+                 + setup_reads(setup_bits=new_bits) + eeprom_reads(bytes([new_bits])))
+        station.port = ScriptedWrapper(reads)
+        station.setWindCupType(code)
+        assert b'EEBWR 2B 01\n' in station.port.writes
+        assert with_crc(bytes([new_bits])) in station.port.writes
+        assert b'NEWSETUP\n' in station.port.writes
+        assert not any(w.startswith(b'EEBWR C3') for w in station.port.writes)
+
+    @pytest.mark.parametrize('date, kept, message', [
+        (b'Oct 29 2019', b'\x03', 'read back as 3 after writing 2'),   # 0xC3 still other
+        (b'Feb 18 2010', b'\x12', 'read back as 1 after writing 2'),   # 0x2B bit 3 still small
+    ])
+    def test_a_write_the_console_did_not_keep_is_an_error(self, date, kept, message):
+        station = bare_station()
+        reads = (ver_reads(date) + eeprom_reads(kept) + [ACK, ACK, ACK]
+                 + setup_reads(setup_bits=0x12) + eeprom_reads(kept))
+        station.port = ScriptedWrapper(reads)
+        with pytest.raises(weewx.WeeWxIOError, match=message):
+            station.setWindCupType(2)
+
+    def test_older_firmware_refuses_other(self):
+        station = bare_station()
+        station.port = ScriptedWrapper(ver_reads(b'May  5 2005'))
+        with pytest.raises(weewx.ViolatedPrecondition, match="no 'other' wind cup"):
+            station.setWindCupType(3)
+        assert not any(w.startswith(b'EEBWR') for w in station.port.writes)
+
+    def test_weectl_says_why_other_is_refused(self, capsys):
+        station = bare_station()
+        station.port = ScriptedWrapper(ver_reads(b'Feb 18 2010'))
+        VantageNextConfigurator.set_wind_cup(station, 3, True)
+        captured = capsys.readouterr()
+        assert 'Unable to set new wind cup type.' in captured.out
+        assert "no 'other' wind cup type" in captured.err
+        assert not any(w.startswith(b'EEBWR') for w in station.port.writes)
+
+    @pytest.mark.parametrize('reads, reason', [
+        (NO_ANSWER, 'Max retries'),
+        (ver_reads(b'Smarch 1 2020'), 'not a date'),
+    ])
+    def test_weectl_says_why_when_the_firmware_cannot_be_read(self, capsys, reads, reason):
+        station = bare_station()
+        station.port = ScriptedWrapper(reads)
+        VantageNextConfigurator.set_wind_cup(station, 2, True)
+        captured = capsys.readouterr()
+        assert 'Unable to set new wind cup type.' in captured.out
+        assert reason in captured.err
+        assert not any(w.startswith(b'EEB') for w in station.port.writes)
+
+    def test_weectl_says_when_a_write_was_not_kept(self, capsys):
+        station = bare_station()
+        reads = (ver_reads(b'Oct 29 2019') + eeprom_reads(b'\x03') + eeprom_reads(b'\x03')
+                 + [ACK, ACK, ACK] + setup_reads(setup_bits=0x12) + eeprom_reads(b'\x03'))
+        station.port = ScriptedWrapper(reads)
+        VantageNextConfigurator.set_wind_cup(station, 2, True)
+        captured = capsys.readouterr()
+        assert 'read back as 3 after writing 2' in captured.err
+        assert "weectl device --info" in captured.err
+        assert 'Wind cup type set to' not in captured.out
+
+    @pytest.mark.parametrize('replies', [
+        NO_ANSWER * 3,                       # VER, NVER, then VER for the wind cup
+        [WAKE, b'\n\rOK\n\r'] * 3,           # each answered with a bare OK
+    ], ids=['no-answer', 'bare-ok'])
+    def test_info_carries_on_when_the_firmware_does_not_answer(self, monkeypatch, replies):
+        # --info prints <Unavailable> for what the console will not say, and
+        # the wind cup is one of those now that it asks the firmware.
+        station = bare_station(archive_interval_=300, altitude=11,
+                               altitude_vt=weewx.units.ValueTuple(11, 'foot', 'group_altitude'),
+                               altitude_unit='foot', rain_bucket_size='0.01 inches',
+                               rain_year_start=10, barometer_unit='inHg',
+                               temperature_unit='degree_F', rain_unit='inch',
+                               wind_unit='mile_per_hour')
+        station.port = ScriptedWrapper(replies)
+
+        def unavailable(*args):
+            # Any I/O error, not only retries running out: an answer cut
+            # short raises a plain WeeWxIOError.
+            raise weewx.WeeWxIOError('no answer')
+        for name in ('getStnInfo', 'getDayJump', 'getStnTransmitters', 'getRX', 'getBarData'):
+            monkeypatch.setattr(station, name, unavailable)
+        monkeypatch.setattr(station, 'getConsoleTime', lambda: 'now')
+        monkeypatch.setattr(station, 'getStnCalibration', lambda: dict.fromkeys(
+            ('wind', 'inTemp', 'inHumid', 'outTemp', 'outHumid'), 0))
+        out = io.StringIO()
+        VantageNextConfigurator.show_info(station, dest=out)
+        assert re.search(r'Wind cup type: +<Unavailable>', out.getvalue())
+        assert 'OFFSETS:' in out.getvalue()   # and the report went on
+
+    @pytest.mark.parametrize('calibration', ['raises', 'inconsistent'])
+    def test_info_carries_on_without_the_time_or_the_calibration(self, monkeypatch, calibration):
+        # GETTIME and the calibration table can fail too: each is reported
+        # <Unavailable> and the rest of the report is printed.  A table that
+        # fails its own consistency check comes back as None.
+        station = bare_station(archive_interval_=300, altitude=11,
+                               altitude_vt=weewx.units.ValueTuple(11, 'foot', 'group_altitude'),
+                               altitude_unit='foot', rain_bucket_size='0.01 inches',
+                               rain_year_start=10, barometer_unit='inHg',
+                               temperature_unit='degree_F', rain_unit='inch',
+                               wind_unit='mile_per_hour')
+        station.port = ScriptedWrapper(NO_ANSWER * 3)
+
+        def unavailable(*args):
+            raise weewx.WeeWxIOError('no answer')
+        for name in ('getStnInfo', 'getDayJump', 'getStnTransmitters', 'getRX', 'getBarData',
+                     'getConsoleTime'):
+            monkeypatch.setattr(station, name, unavailable)
+        monkeypatch.setattr(station, 'getStnCalibration',
+                            unavailable if calibration == 'raises' else lambda: None)
+        out = io.StringIO()
+        VantageNextConfigurator.show_info(station, dest=out)
+        assert re.search(r'Onboard time: +<Unavailable>', out.getvalue())
+        assert re.search(r'OFFSETS: +<Unavailable>', out.getvalue())
+
+    @pytest.mark.parametrize('command, getter', [(b'VER', 'getFirmwareDate'),
+                                                 (b'NVER', 'getFirmwareVersion')])
+    def test_an_ok_with_nothing_after_it_is_an_io_error(self, command, getter):
+        station = bare_station()
+        station.port = ScriptedWrapper([WAKE, b'\n\rOK\n\r'])
+        with pytest.raises(weewx.WeeWxIOError, match='answered %s with nothing' % command.decode()):
+            getattr(station, getter)()
+
+    @pytest.mark.parametrize('answer', [b'', b'1 2 three 4 5\n\r', b'1 2 3\n\r'])
+    def test_an_rxcheck_answer_that_is_not_five_numbers_is_an_io_error(self, answer):
+        station = bare_station()
+        station.port = ScriptedWrapper([WAKE, b'\n\rOK\n\r' + answer])
+        with pytest.raises(weewx.WeeWxIOError):
+            station.getRX()
+
+    def test_a_bardata_answer_cut_short_is_an_io_error(self):
+        station = bare_station()
+        station.port = ScriptedWrapper([WAKE, b'\n\rOK\n\rBAR 29908\n\rELEVATION 11\n\r'])
+        with pytest.raises(weewx.WeeWxIOError, match='BARDATA'):
+            station.getBarData()
+
+    def test_weectl_says_why_when_the_firmware_answers_nothing(self, capsys):
+        station = bare_station()
+        station.port = ScriptedWrapper([WAKE, b'\n\rOK\n\r'])
+        VantageNextConfigurator.set_wind_cup(station, 2, True)
+        captured = capsys.readouterr()
+        assert 'Unable to set new wind cup type.' in captured.out
+        assert 'answered VER with nothing' in captured.err
+
+    def test_weectl_reports_the_code_the_console_kept_without_reading_it_again(self, capsys,
+                                                                              caplog):
+        station = bare_station()
+        reads = (ver_reads(b'Oct 29 2019') + eeprom_reads(b'\x03') + eeprom_reads(b'\x03')
+                 + [ACK, ACK, ACK] + setup_reads(setup_bits=0x12) + eeprom_reads(b'\x02'))
+        station.port = ScriptedWrapper(reads)   # nothing scripted after the read-back
+        with caplog.at_level(logging.INFO):
+            VantageNextConfigurator.set_wind_cup(station, 2, True)
+        captured = capsys.readouterr()
+        assert 'Wind cup type set to 2 (large).' in captured.out
+        assert captured.err == ''
+        assert 'Wind cup type set to 2 (large)' in caplog.text   # and logged
+
 
 class TestSetters:
 
@@ -880,8 +1188,10 @@ class TestSetters:
 
     def test_set_wind_cup_type(self):
         station = bare_station()
-        # Read old bits (0x02), write new, NEWSETUP, then a full _setup pass.
-        reads = eeprom_reads(b'\x02') + [ACK, ACK, ACK] + setup_reads(wind_cup=3)
+        # VER (3.88's date), read old bits (0x02), write new, NEWSETUP, a
+        # full _setup pass, then 0xC3 read back for the log and for the size.
+        reads = (ver_reads(b'Oct 29 2019') + eeprom_reads(b'\x02') + [ACK, ACK, ACK] + setup_reads()
+                 + eeprom_reads(b'\x03', b'\x03'))
         station.port = ScriptedWrapper(reads)
         station.setWindCupType(3)
         assert b'EEBWR C3 01\n' in station.port.writes

@@ -238,6 +238,21 @@ class TestClockCentering:
         # On the ideal curve, but gaining a net 0.6 s a day.
         assert VantageNext.clock_off_center(0.0, 43200, -3.6, 4.2) == pytest.approx(0.3)
         assert VantageNext.clock_off_center(1.0, 43200, -3.6, 3.6) == pytest.approx(1.0)
+        # A 25-hour day drifts 0.15 s more before its jump, a 23-hour day less.
+        assert VantageNext.clock_off_center(0.0, 43200, -3.6, 3.6, 90000) == pytest.approx(-0.075)
+        assert VantageNext.clock_off_center(0.0, 43200, -3.6, 3.6, 82800) == pytest.approx(0.075)
+
+    def test_a_days_creep_is_for_its_real_length(self):
+        assert VantageNext.day_creep(-3.6, 3.6) == pytest.approx(0.0)
+        assert VantageNext.day_creep(-3.6, 3.6, 90000) == pytest.approx(-0.15)
+        assert VantageNext.day_creep(-3.6, 3.6, 82800) == pytest.approx(0.15)
+
+    @pytest.mark.parametrize('day, hours', [
+        ((2026, 11, 1), 25), ((2027, 3, 14), 23), ((2026, 10, 7), 24), ((2026, 11, 2), 24)])
+    def test_day_length(self, day, hours):
+        for hour in (0, 1, 3, 12, 23):
+            t = datetime.datetime(*day, hour, 30).timestamp()
+            assert vantagenext.day_length(t) == hours * 3600
 
     @pytest.mark.parametrize('off_center, threshold, precise, forced, creep, step', [
         # Inside the threshold: nothing.
@@ -570,10 +585,8 @@ class TestSetup:
 
     def test_decodes_eeprom(self):
         station = bare_station()
-        station.port = FakeEEPROMPort(make_eeprom(unit_bits=0, setup_bits=0x10, wind_cup=2))
+        station.port = FakeEEPROMPort(make_eeprom(unit_bits=0, setup_bits=0x10))
         station._setup()
-        assert station.wind_cup_type == 2
-        assert station.wind_cup_size == 'large'
         assert station.rain_bucket_type == 1
         assert station.rain_bucket_size == '0.2 mm'
         assert station.archive_interval == 300
@@ -582,11 +595,10 @@ class TestSetup:
         assert station.barometer_unit == 'inHg'
 
     def test_wind_cup_zero_reports_unknown(self):
-        # Regression: wind cup bits of 0 (older firmware keeps the setting at
-        # 0x2B, so 0xC3 can be 0) used to raise KeyError and kill the driver.
-        station = bare_station()
+        # Regression: wind cup bits of 0 (0xC3 holding no type) used to raise
+        # KeyError and kill the driver.
+        station = bare_station(_wind_cup_at=0xC3)
         station.port = FakeEEPROMPort(make_eeprom(wind_cup=0))
-        station._setup()
         assert station.wind_cup_type == 0
         assert station.wind_cup_size == 'unknown'
 

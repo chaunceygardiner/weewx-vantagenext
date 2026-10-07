@@ -40,9 +40,9 @@ does not set it; see [Keeping the console clock](clock.md).  It needs no clock o
    it to make the clock more accurate.  It is a backstop only now, and too small a value
    forces clock sets that are not needed.
 
-For the first day and a half after the upgrade the driver is learning the console's drift
-and changes nothing; from then on it writes a new midnight jump to the console when the clock
-needs one.  It keeps what it learns in `vantagenext/clock.json` in the archive directory.
+For about a day after the upgrade (half a day to a day and a half, depending on the hour WeeWX
+restarts) the driver is learning the console's drift and changes nothing; from then on it
+writes a new midnight jump to the console when the clock needs one.  It keeps what it learns in `vantagenext/clock.json` in the archive directory.
 
 Expect the `Clock error` lines WeeWX logs to read about half a second higher than they did:
 they are no longer half a second slow.  Expect, too, a clock that is deliberately *fast*
@@ -51,8 +51,8 @@ after midnight and *slow* before it: the driver centers its daily sawtooth on ze
 `weectl device --set-time` now steps the clock to that center rather than to the computer's
 time, and may decline to set it at all; it says which.
 
-On a WeatherLinkIP (`type = ethernet`) clock steering does not apply: its clock is kept by
-setting it, as before, from the first clock check.
+On a WeatherLinkIP (`type = ethernet`) clock steering is not yet supported: its clock is kept
+by setting it, as before, from the first clock check.
 
 ## To 2.3
 

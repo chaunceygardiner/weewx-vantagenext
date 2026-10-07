@@ -46,7 +46,7 @@ commented, and they go on working as they did.
 
 | Option | Default | Meaning |
 |---|---|---|
-| `type` | `serial` | How the console is connected: `serial` (serial or USB) or `ethernet` (a WeatherLinkIP or a serial-to-ethernet bridge).  Clock steering does not apply to a WeatherLinkIP: its clock is kept by setting it.  See [Keeping the console clock](clock.md#when-the-driver-falls-back-to-setting-the-clock). |
+| `type` | `serial` | How the console is connected: `serial` (serial or USB) or `ethernet` (a WeatherLinkIP or a serial-to-ethernet bridge).  Clock steering is not yet supported on a WeatherLinkIP: its clock is kept by setting it.  See [Keeping the console clock](clock.md#when-the-driver-falls-back-to-setting-the-clock). |
 | `port` | none | The serial port, for example `/dev/ttyUSB0`.  Required when `type = serial`. |
 | `host` | none | The console's IP address or hostname.  Required when `type = ethernet`. |
 | `baudrate` | `19200` | Serial baud rate.  It must match the console's own setting. |
@@ -107,14 +107,14 @@ Two options in WeeWX's own `[StdTimeSynch]` section still matter:
 
 | Option | WeeWX default | What it means to this driver |
 |---|---|---|
-| `clock_check` | `14400` | How often, in seconds, WeeWX asks the driver for the console's time — and so how often the driver looks at the clock.  It decides once a day, at the first check after ten past midnight; hourly (`3600`) gets that decision made promptly. |
+| `clock_check` | `14400` | How often, in seconds, WeeWX asks the driver for the console's time — and so how often the driver looks at the clock.  The default suits it: the driver decides once a day, at the first check after ten past midnight, and the clock's distance from center holds all day, so a decision made at four in the morning is as good as one made just after midnight.  A shorter interval changes only how often the log says where the clock stands, and how soon the `max_drift` backstop sees a clock something else has moved. |
 | `max_drift` | `5` | A **backstop only**.  Past it, WeeWX tells the driver to set the clock to the center at once — after a power loss, say. |
 
 {: .important }
 Leave `max_drift` at WeeWX's default of `5`.  The driver keeps the clock within about half
-the console's daily drift and half a second of the true time, so `5` never fires on a
-console it is keeping.  A smaller value would set the clock — which costs the console about
-a minute of its transmitter's packets — when nothing was wrong.
+the console's daily drift, and about a fifth of a second more, of the true time, so `5` never
+fires on a console it is keeping.  A smaller value would set the clock — which costs the console
+about a minute of its transmitter's packets — when nothing was wrong.
 
 ## Obsolete options
 

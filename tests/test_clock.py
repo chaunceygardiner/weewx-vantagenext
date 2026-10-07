@@ -12,6 +12,7 @@ import datetime
 import json
 import optparse
 import os
+import random
 
 import pytest
 import weewx
@@ -62,6 +63,28 @@ def test_an_inconsistent_pair_decodes_to_none():
 ])
 def test_choose_jump(off_center, drift, jump, chosen):
     assert vantagenext.choose_jump(off_center, drift, jump) == chosen
+
+
+@pytest.mark.parametrize('noise', [0.0, 0.012])
+def test_a_write_every_two_days_at_most_whatever_the_drift(noise):
+    # The manual's promise, and the EEPROM arithmetic under it: two years of
+    # nightly decisions for every drift between two quarter-seconds (the
+    # pattern repeats each quarter), losing or gaining, with the reading as
+    # good as the fleet's (gaps of 18-24 ms: +-0.012 s) or perfect.  The
+    # worst is a drift midway between two quarters, which switches every
+    # other night; and the clock stays in the band throughout.
+    rng = random.Random(1)
+    nights = 730
+    for k in range(101):
+        for drift in (-(3.0 + 0.25 * k / 100), 0.5 + 0.25 * k / 100):
+            off, jump, writes = 0.0, vantagenext.round_to_quarter(-drift), 0
+            for unused in range(nights):
+                new = vantagenext.choose_jump(off + rng.uniform(-noise, noise), drift, jump)
+                writes += new != jump
+                jump = new
+                off += drift + jump
+                assert abs(off) <= VantageNext.JUMP_BAND + 2 * noise + 1e-9, (drift, off)
+            assert writes <= nights / 2 + 1, (drift, writes)
 
 
 def test_nights_between_agrees_with_midnights_between_across_dst():
@@ -548,6 +571,65 @@ def test_no_write_lands_before_midnight_on_the_spring_forward_day(tmp_path):
     assert len(console.jump_writes) > writes
 
 
+@pytest.mark.parametrize('off_center, drift, jump, day_secs, chosen', [
+    (0.0, -3.36, 3.25, 86400, 3.25),    # -0.11 a night: within the band, kept
+    (0.0, -3.36, 3.25, 90000, 3.50),    # the 25-hour day loses 3.50: -0.25, out
+    (0.0, -3.36, 3.50, 86400, 3.50),    # +0.14: kept
+    (0.0, -3.36, 3.50, 82800, 3.25),    # the 23-hour day loses 3.22: +0.28, out
+])
+def test_choose_jump_allows_for_the_length_of_the_day(off_center, drift, jump, day_secs, chosen):
+    assert vantagenext.choose_jump(off_center, drift, jump, day_secs) == chosen
+
+
+def test_a_time_change_day_is_steered_for_its_real_length(tmp_path, monkeypatch):
+    # A 25-hour day loses an hour's more drift, a 23-hour day an hour's less:
+    # 0.14 s at 3.31 a day, most of the band.  Each day's decision is made for
+    # the length of the day its midnight ends.
+    lengths = {}
+    choose = vantagenext.choose_jump
+
+    def recording(off_center, drift, jump, day_secs=86400.0):
+        lengths[datetime.date.fromtimestamp(clock.t).isoformat()] = day_secs
+        return choose(off_center, drift, jump, day_secs)
+    monkeypatch.setattr(vantagenext, 'choose_jump', recording)
+    for start, days in ((datetime.datetime(2026, 10, 28, 14, 30), 7),
+                        (datetime.datetime(2027, 3, 10, 14, 30), 7)):
+        station, console, clock = make(tmp_path / start.strftime('%Y'), -3.31, 3.25, 0.0,
+                                       start=start.timestamp())
+        run_days(station, console, clock, days)
+    assert lengths['2026-11-01'] == 25 * 3600
+    assert lengths['2027-03-14'] == 23 * 3600
+    assert lengths['2026-10-31'] == lengths['2026-11-02'] == lengths['2027-03-15'] == 86400
+
+
+def test_fallback_and_the_backstop_measure_a_time_change_day_for_its_real_length(tmp_path,
+                                                                                  monkeypatch):
+    # FALLBACK's half-day look-ahead and the side it steps to, and the forced
+    # set's center, all take the creep of the day as it really is: 25 or 23
+    # hours on the day of a time change.
+    lengths = {}
+    creep = VantageNext.day_creep
+
+    def recording(drift, jump, day_secs=86400.0):
+        lengths.setdefault(datetime.date.fromtimestamp(clock.t).isoformat(), set()).add(day_secs)
+        return creep(drift, jump, day_secs)
+    monkeypatch.setattr(VantageNext, 'day_creep', staticmethod(recording))
+    for start, change in ((datetime.datetime(2026, 10, 29, 14, 30), '2026-11-01'),
+                          (datetime.datetime(2027, 3, 11, 14, 30), '2027-03-14')):
+        station, console, clock = make(tmp_path / change, -3.31, 4.00, 0.0, pair=(0xF3, 0x0E),
+                                       start=start.timestamp())
+        run_days(station, console, clock, 3)
+        clock.t = datetime.datetime.fromisoformat(change + ' 12:00').timestamp()
+        console.error += 30.0               # beyond max_drift: the backstop
+        station.getTime()
+        station.setTime()
+        run_days(station, console, clock, 2)
+    assert station._clock.state == ClockState.FALLBACK
+    assert lengths['2026-11-01'] == {25 * 3600}
+    assert lengths['2027-03-14'] == {23 * 3600}
+    assert lengths['2026-10-31'] == lengths['2026-11-02'] == lengths['2027-03-15'] == {86400}
+
+
 def test_a_pair_that_decodes_out_of_range_is_not_a_jump(tmp_path):
     # 0xB0/0x4F is a value and its complement, but decodes to 20 s: not a
     # jump any console makes.  Not steered, never written.
@@ -667,11 +749,15 @@ def test_a_console_that_goes_coarse_after_being_steered_keeps_its_jump(tmp_path)
     run_days(station, console, clock, 7)
     assert station._clock.state == ClockState.STEERING and station._clock.readings
     writes = len(console.jump_writes)
+    held = vantagenext.jump_decode(tuple(console.eeprom))
+    before = off_center(console, -3.31)
     console.io_secs = 0.2
     run_days(station, console, clock, 4)
     assert station._clock.state == ClockState.STEERING
     assert len(console.jump_writes) == writes
-    assert abs(off_center(console, -3.31)) <= VantageNext.JUMP_BAND + 4 * 0.1
+    # Four midnights, each with the held jump: the clock creeps by exactly
+    # that jump's creep, four times.
+    assert off_center(console, -3.31) == pytest.approx(before + 4 * (-3.31 + held), abs=0.05)
 
 
 def test_fallback_with_no_jump_in_memory_learns_the_drift_and_the_jump(tmp_path):
@@ -826,7 +912,7 @@ def bambi_off_center(console):
     drift and jump that are true of it."""
     t = console.clock.t
     return VantageNext.clock_off_center(console.error, t - vantagenext.startOfDay(t),
-                                        BAMBI_DRIFT, BAMBI_JUMP)
+                                        BAMBI_DRIFT, BAMBI_JUMP, vantagenext.day_length(t))
 
 
 def steered_bambi(tmp_path, off_center_secs):

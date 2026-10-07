@@ -29,7 +29,7 @@ driver cannot select.
 
 The built-in Vantage driver is excellent and well supported.  But it keeps the console clock
 by setting it, and every clock set costs the console a minute or so of its transmitter's
-data — on every station, every time, whether anything else is wrong or not.  This driver
+data — on every console measured, every time, whether anything else is wrong or not.  This driver
 keeps the clock without that cost, and solves the specific problems below.
 
 > **`weectl device --set-wind-cup` takes different codes with this driver.**  WeeWX's
@@ -59,9 +59,12 @@ keeps the clock without that cost, and solves the specific problems below.
   memory, so its error is a daily sawtooth.  The driver learns how fast the console drifts,
   keeps the sawtooth centered on zero, and does it by rewriting that midnight jump — which
   costs the console nothing — instead of setting the clock, which costs it a minute of data
-  every time.  There is nothing to configure.  Clock steering does not apply to a
-  WeatherLinkIP: its clock is still set, as before, and so is the clock of a console the
-  driver cannot steer, or one lost to a power failure.
+  every time.  There is nothing to configure.  Clock steering is not yet supported on a
+  WeatherLinkIP: its clock is still set, as before, and so is the clock of a console the driver
+  cannot steer, or one lost to a power failure.  A WeatherLinkIP is being tested, and clock
+  steering may be supported in a future release.  The manual
+  lists the consoles it has been seen on
+  ([Which consoles](https://chaunceygardiner.github.io/weewx-vantagenext/clock.html#which-consoles)).
   → [Keeping the console clock](https://chaunceygardiner.github.io/weewx-vantagenext/clock.html)
 
 - **The Davis sonic anemometer.**  `weectl device --set-wind-cup=3` selects it; see the

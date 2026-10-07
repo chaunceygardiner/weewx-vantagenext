@@ -503,6 +503,31 @@ def jump_decode(pair):
     return -(value - 256 if value >= 128 else value) / 4.0
 
 
+FIRMWARE_MONTHS = ('Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec')
+
+
+def firmware_date(ver):
+    """The date in a VER answer (b'Oct 29 2019', b'May  5 2005').  Parsed by
+    hand: strptime's %b follows the locale.  Raises WeeWxIOError if it is
+    not a date."""
+    try:
+        month, day, year = ver.decode('ascii').split()
+        return datetime.date(int(year), FIRMWARE_MONTHS.index(month) + 1, int(day))
+    except (UnicodeDecodeError, ValueError) as e:
+        raise weewx.WeeWxIOError("The console's firmware date %r is not a date" % ver) from e
+
+
+def firmware_version(nver):
+    """The number in an NVER answer (b'3.88').  Raises WeeWxIOError if it is
+    not a number."""
+    try:
+        return float(nver.decode('ascii'))
+    except (UnicodeDecodeError, ValueError) as e:
+        raise weewx.WeeWxIOError("The console's firmware version %r is not a number"
+                                 % nver) from e
+
+
 def round_to_quarter(secs):
     return math.floor(secs * 4 + 0.5) / 4.0
 
@@ -680,6 +705,14 @@ class ClockState:
         self.jumps = older[-1:] + [j for j in self.jumps if j[0] >= cutoff]
 
 
+def day_length(t):
+    """The length, in seconds, of the local day t falls in: 23 or 25 hours on
+    the day of a time change, when the console drifts for an hour less or
+    more before its midnight."""
+    start = startOfDay(t)
+    return startOfDay(start + 36 * 3600) - start
+
+
 def midnights_between(t0, t1):
     """The local midnights m with t0 < m <= t1, as timestamps.  A day of 23
     or 25 hours is found from well inside it."""
@@ -835,16 +868,19 @@ def fit_doubt(drift, jump, residuals):
     return None
 
 
-def choose_jump(off_center, drift, jump):
+def choose_jump(off_center, drift, jump, day_secs=86400.0):
     """The jump to hold for the coming midnight.  Left alone while it keeps
     the clock within JUMP_BAND of center; otherwise the quarter-second that
     brings it nearest the center, no further than JUMP_SWING from the jump
-    that only cancels the drift, and within JUMP_MIN..JUMP_MAX."""
-    if abs(off_center + drift + jump) <= VantageNext.JUMP_BAND:
+    that only cancels the drift, and within JUMP_MIN..JUMP_MAX.  day_secs is
+    the length of the day that midnight ends: on a time change day, 23 or 25
+    hours, the console drifts for an hour less or more."""
+    lost = drift * day_secs / 86400.0
+    if abs(off_center + lost + jump) <= VantageNext.JUMP_BAND:
         return jump
-    low = math.ceil((-drift - VantageNext.JUMP_SWING) * 4 - 1e-9) / 4.0
-    high = math.floor((-drift + VantageNext.JUMP_SWING) * 4 + 1e-9) / 4.0
-    want = min(max(round_to_quarter(-drift - off_center), low), high)
+    low = math.ceil((-lost - VantageNext.JUMP_SWING) * 4 - 1e-9) / 4.0
+    high = math.floor((-lost + VantageNext.JUMP_SWING) * 4 + 1e-9) / 4.0
+    want = min(max(round_to_quarter(-lost - off_center), low), high)
     return min(max(want, JUMP_MIN), JUMP_MAX)
 
 
@@ -1403,10 +1439,13 @@ class VantageNext(weewx.drivers.AbstractDevice):
     # precise reading after CLOCK_JUMP_WINDOW, it chooses the jump for the
     # coming midnight (choose_jump): the one it holds, while that keeps the
     # clock within JUMP_BAND of center; otherwise the quarter-second that
-    # brings it back.  Two quarter-seconds either side of a console's drift,
-    # held in turn, keep it centered for good.  The drift is learned (1): the
-    # slope of the console's precise readings over CLOCK_LEARN_DAYS, with the
-    # jumps and sets it knows of taken out (fit_drift).  The console makes
+    # brings it back, for the length of the day that midnight ends (23 or 25
+    # hours on a time change day).  The band is narrow, so the jump settles
+    # on the two quarter-seconds either side of the drift, held a night or a
+    # few at a time: a write every two days at most, on average.  The drift
+    # is learned (1): the slope of the console's precise readings over
+    # CLOCK_LEARN_DAYS, with the jumps and sets it knows of taken out
+    # (fit_drift).  The console makes
     # the jump it holds -- every console measured, every midnight -- so a
     # precise reading further than CLOCK_MODEL_BREAK from what the readings
     # before it predict (prediction_error) means something it does not know
@@ -1555,6 +1594,8 @@ class VantageNext(weewx.drivers.AbstractDevice):
     #     test_no_write_lands_in_the_half_hour_before_midnight
     #     test_no_write_lands_before_midnight_on_the_spring_forward_day
     #     test_a_decision_made_late_in_the_evening_writes_nothing_until_after_midnight
+    #     test_a_time_change_day_is_steered_for_its_real_length
+    #     test_a_write_every_two_days_at_most_whatever_the_drift
     #   STEERING, a write           the bookkeeping above.
     #     test_a_write_refused_on_every_try_counts_once
     #     test_a_write_that_reads_back_wrong_is_logged
@@ -1571,6 +1612,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
     #     test_fallback_finds_a_clock_moved_by_something_else_and_relearns_in_place
     #     test_fallback_measured_into_the_midnight_window_sets_nothing
     #     TestKeepClock.test_unforced_sets_are_rate_limited
+    #     test_fallback_and_the_backstop_measure_a_time_change_day_for_its_real_length
     #
     # A FORCED SET (setTime: max_drift, weectl device --set-time), any state:
     # to the center; refused in a DST window (asked as the check begins) or
@@ -1579,6 +1621,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
     # back: test_a_set_is_recorded_as_the_move_the_console_made.
     #     test_a_clock_moved_by_something_else_is_set_by_the_backstop_and_relearned
     #     test_a_forced_set_measured_into_the_midnight_window_is_refused
+    #     test_fallback_and_the_backstop_measure_a_time_change_day_for_its_real_length
     #     TestKeepClock.test_set_time_centers
     #     TestKeepClock.test_noop_in_dst_window
     # weectl device --set-time: reads clock.json, centers on what was
@@ -1615,7 +1658,8 @@ class VantageNext(weewx.drivers.AbstractDevice):
     #
     # FALLBACK's rule.  The decision (clock_step) is a pure function
     # of the off-center distance, looking half a day's creep ahead
-    # (clock_off_center):
+    # (clock_off_center; the creep of the day as long as it really is,
+    # day_creep):
     #
     #   within CLOCK_FALLBACK_THRESHOLD   do nothing.
     #   beyond it                         step a whole number of seconds to the
@@ -1660,8 +1704,13 @@ class VantageNext(weewx.drivers.AbstractDevice):
     # ===========================================================================
 
     # Steering by the jump (see above).  Leave the jump alone while it keeps
-    # the clock this close to center...
-    JUMP_BAND = 0.5
+    # the clock this close to center...  A quarter-second jump can land the
+    # clock no closer than 0.125 s, and a console whose drift falls midway
+    # between two quarter-seconds creeps 0.125 s a night on either: this
+    # leaves it room for a night and a half, so it switches every other night
+    # rather than every night.  Writes cost no reception, and a night's jump
+    # is made to a few hundredths of a second.
+    JUMP_BAND = 0.19
     # ...and never choose one further than this from the jump that only
     # cancels the drift: anything more is the backstop's to fix.
     JUMP_SWING = 1.0
@@ -1737,11 +1786,20 @@ class VantageNext(weewx.drivers.AbstractDevice):
         return -clock_drift_secs / 2.0 + clock_drift_secs * secs_into_day / 86400.0
 
     @staticmethod
-    def clock_off_center(error, secs_into_day, clock_drift_secs, day_start_jump):
+    def clock_off_center(error, secs_into_day, clock_drift_secs, day_start_jump,
+                         day_secs=86400.0):
         """How far the clock stands from the centered sawtooth, looking half a
-        day's net creep ahead (FALLBACK's measure)."""
+        day's net creep ahead (FALLBACK's measure).  day_secs is the length of
+        today: see day_creep."""
         return (error - VantageNext.ideal_clock_error(secs_into_day, clock_drift_secs)
-                + (clock_drift_secs + day_start_jump) / 2.0)
+                + VantageNext.day_creep(clock_drift_secs, day_start_jump, day_secs) / 2.0)
+
+    @staticmethod
+    def day_creep(clock_drift_secs, day_start_jump, day_secs=86400.0):
+        """How far the clock moves off center at the midnight that ends a day
+        of day_secs: the drift for that long, then the jump.  A time change
+        day of 23 or 25 hours drifts an hour less or more."""
+        return clock_drift_secs * day_secs / 86400.0 + day_start_jump
 
     @staticmethod
     def clock_step(off_center, threshold, precise, forced, creep):
@@ -2024,10 +2082,12 @@ class VantageNext(weewx.drivers.AbstractDevice):
         near = VantageNext._near_the_jump(now)
         if near:
             return error, VantageNext._jump_refusal(near, True)
+        day_secs = day_length(now)
         off_center = VantageNext.clock_off_center(
-            error, now - startOfDay(now), self.clock_drift_secs, self.day_start_jump)
-        step = VantageNext.clock_step(off_center, self.clock_recenter_threshold, gap is not None,
-                                      True, self.clock_drift_secs + self.day_start_jump)
+            error, now - startOfDay(now), self.clock_drift_secs, self.day_start_jump, day_secs)
+        step = VantageNext.clock_step(
+            off_center, self.clock_recenter_threshold, gap is not None, True,
+            VantageNext.day_creep(self.clock_drift_secs, self.day_start_jump, day_secs))
         if step == 0:
             log.info("Clock is %+.2f s off center; not set.", off_center)
             return error, ("Not set: the clock is %+.2f s from the center of its daily drift, "
@@ -2123,7 +2183,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
         if (decision_due and state.state == ClockState.STEERING
                 and clock_secs < VantageNext.JUMP_NO_WRITE_AFTER):
             off_center = error - VantageNext.ideal_clock_error(secs, state.drift)
-            new = choose_jump(off_center, state.drift, jump)
+            new = choose_jump(off_center, state.drift, jump, day_length(t))
             if new == jump:
                 log.info("Clock is %+.2f s off center (drift %+.2f s a day); midnight jump "
                          "%.2f s kept.", off_center, state.drift, jump)
@@ -2275,8 +2335,9 @@ class VantageNext(weewx.drivers.AbstractDevice):
     def _keep_clock_by_setting(self, now, error, secs_into_day):
         """FALLBACK's rule (see above), with what it has learned."""
         self._learn_by_setting(now, error, None)
+        day_secs = day_length(now)
         off_center = VantageNext.clock_off_center(
-            error, secs_into_day, self.clock_drift_secs, self.day_start_jump)
+            error, secs_into_day, self.clock_drift_secs, self.day_start_jump, day_secs)
         # This reading is good to +-0.5 s.  Poll for a precise error only
         # if one could exceed the threshold -- and, while no unforced set
         # is allowed anyway or today's has already been measured, only if
@@ -2301,20 +2362,25 @@ class VantageNext(weewx.drivers.AbstractDevice):
             return error, "Not set: the clock may not be set again yet."
 
         error, gap = self._measure_clock_error()
-        near = VantageNext._near_the_jump(self._now())
+        # Everything from here is of the moment the reading ended: its day,
+        # that day's length, and how far into it.
+        now = self._now()
+        near = VantageNext._near_the_jump(now)
         if near:
             return error, VantageNext._jump_refusal(near, False)
         if gap is not None:
             # This check's reading, made precise.
-            self._clock.readings[-1] = [self._now(), error, gap]
+            self._clock.readings[-1] = [now, error, gap]
         # When today's distance turns out to be known, it stands until the
         # jump.  The start of the next day is found from well inside it, so
         # that a 23- or 25-hour day is no matter.
         tomorrow = startOfDay(startOfDay(now) + 36 * 3600) + VantageNext.CLOCK_JUMP_WINDOW
+        day_secs = day_length(now)
         off_center = VantageNext.clock_off_center(
-            error, self._now() - startOfDay(now), self.clock_drift_secs, self.day_start_jump)
-        step = VantageNext.clock_step(off_center, self.clock_recenter_threshold, gap is not None,
-                                      False, self.clock_drift_secs + self.day_start_jump)
+            error, now - startOfDay(now), self.clock_drift_secs, self.day_start_jump, day_secs)
+        step = VantageNext.clock_step(
+            off_center, self.clock_recenter_threshold, gap is not None, False,
+            VantageNext.day_creep(self.clock_drift_secs, self.day_start_jump, day_secs))
         reading = "coarse" if gap is None else "measured to %.0f ms" % (gap * 500.0)
         if step == 0:
             if gap is not None:
@@ -2512,23 +2578,40 @@ class VantageNext(weewx.drivers.AbstractDevice):
             These are NOT the built-in Vantage driver's codes, which are 0
             (small) and 1 (large).
 
-        older firmware: windcup bit is at 0x2b: 0, 1 (small, large)
-        later firmware: windcup bits are at 0xc3: 1, 2, 3 (small, large, other)
+        Written where the console's firmware keeps it (_wind_cup_offset):
+        the two low bits of 0xC3, or bit 3 of 0x2B, which has no 'other'.
+        Returns the code read back from the console, which is the one
+        written: one that is not raises WeeWxIOError.
         """
         if new_wind_cup_code not in (1, 2, 3):
             raise weewx.ViolatedPrecondition("Invalid wind cup code %d" % new_wind_cup_code)
-        old_setup_bits = self._getEEPROM_value(0xC3)[0]
-        new_setup_bits = (old_setup_bits & 0xFC) | new_wind_cup_code
+        offset = self._wind_cup_offset()
+        if offset == 0xC3:
+            old_bits = self._getEEPROM_value(0xC3)[0]
+            new_bits = (old_bits & 0xFC) | new_wind_cup_code
+        elif new_wind_cup_code == 3:
+            raise weewx.ViolatedPrecondition(VantageNext.NO_OTHER_WIND_CUP)
+        else:
+            old_bits = self._getEEPROM_value(0x2B)[0]
+            new_bits = (old_bits & 0xF7) | ((new_wind_cup_code - 1) << 3)
 
-        # Tell the console to put one byte in hex location 0xC3
-        self.port.send_data(b"EEBWR C3 01\n")
+        # Tell the console to put one byte at that location
+        self.port.send_data(b"EEBWR %X 01\n" % offset)
         # Follow it up with the data:
-        self.port.send_data_with_crc16(int2byte(new_setup_bits), max_tries=1)
+        self.port.send_data_with_crc16(int2byte(new_bits), max_tries=1)
         # Then call NEWSETUP to get it to stick:
         self.port.send_data(b"NEWSETUP\n")
 
         self._setup()
-        log.info("Wind cup type set to %d (%s)", self.wind_cup_type, self.wind_cup_size)
+        code = self.wind_cup_type
+        if code != new_wind_cup_code:
+            # Acknowledged but not kept.  (A read-back cannot show a wrong
+            # location: it reads the one just written.)
+            raise weewx.WeeWxIOError("The wind cup type read back as %d after writing %d"
+                                     % (code, new_wind_cup_code))
+        log.info("Wind cup type set to %d (%s)", code,
+                 VantageNext.wind_cup_dict.get(code, 'unknown'))
+        return code
 
     def setBucketType(self, new_bucket_code):
         """Set the rain bucket type.
@@ -2849,39 +2932,57 @@ class VantageNext(weewx.drivers.AbstractDevice):
         # of resynchronizations, the max # of packets received w/o an error,
         the # of CRC errors detected.)"""
 
-        rx_list = self.port.send_command(b'RXCHECK\n')
-        if weewx.debug:
-            assert (len(rx_list) == 1)
-
-        # The following is a list of the reception statistics, but the elements are byte strings
-        rx_list_str = rx_list[0].split()
-        # Convert to numbers and return as a tuple:
-        rx_list = tuple(int(x) for x in rx_list_str)
+        line = self._first_line(b'RXCHECK\n')
+        # The reception statistics, as byte strings; converted to numbers.
+        # An answer that is not five of them is an I/O error, not an
+        # exception no handler expects.
+        try:
+            rx_list = tuple(int(x) for x in line.split())
+        except ValueError as e:
+            raise weewx.WeeWxIOError("The console's RXCHECK answer %r is not numbers" % line) from e
+        if len(rx_list) != 5:
+            raise weewx.WeeWxIOError("The console's RXCHECK answer %r is not five numbers" % line)
         return rx_list
 
     def getBarData(self):
         """Gets barometer calibration data. Returns as a 9 element list."""
         _bardata = self.port.send_command(b"BARDATA\n")
-        _barometer = float(_bardata[0].split()[1])/1000.0
-        _altitude  = float(_bardata[1].split()[1])
-        _dewpoint  = float(_bardata[2].split()[2])
-        _virt_temp = float(_bardata[3].split()[2])
-        _c         = float(_bardata[4].split()[1])/10.0
-        _r         = float(_bardata[5].split()[1])/1000.0
-        _barcal    = float(_bardata[6].split()[1])/1000.0
-        _gain      = float(_bardata[7].split()[1])
-        _offset    = float(_bardata[8].split()[1])
+        # An answer cut short (the rest not yet arrived, on a slow link) is
+        # an I/O error, not an exception no handler expects.
+        try:
+            _barometer = float(_bardata[0].split()[1])/1000.0
+            _altitude  = float(_bardata[1].split()[1])
+            _dewpoint  = float(_bardata[2].split()[2])
+            _virt_temp = float(_bardata[3].split()[2])
+            _c         = float(_bardata[4].split()[1])/10.0
+            _r         = float(_bardata[5].split()[1])/1000.0
+            _barcal    = float(_bardata[6].split()[1])/1000.0
+            _gain      = float(_bardata[7].split()[1])
+            _offset    = float(_bardata[8].split()[1])
+        except (IndexError, ValueError) as e:
+            raise weewx.WeeWxIOError("The console's BARDATA answer %r could not be read"
+                                     % _bardata) from e
 
         return (_barometer, _altitude, _dewpoint, _virt_temp,
                 _c, _r, _barcal, _gain, _offset)
 
     def getFirmwareDate(self):
         """Return the firmware date as a string. """
-        return self.port.send_command(b'VER\n')[0]
+        return self._first_line(b'VER\n')
 
     def getFirmwareVersion(self):
         """Return the firmware version as a string."""
-        return self.port.send_command(b'NVER\n')[0]
+        return self._first_line(b'NVER\n')
+
+    def _first_line(self, command):
+        """The first line of a command's answer.  An 'OK' with nothing after
+        it (the rest not yet arrived, on a slow link) is an I/O error, not an
+        IndexError that no handler expects."""
+        lines = self.port.send_command(command)
+        if not lines:
+            raise weewx.WeeWxIOError("The console answered %s with nothing after its OK"
+                                     % command.strip().decode('ascii'))
+        return lines[0]
 
     def getStnInfo(self):
         """Return lat / lon, time zone, etc."""
@@ -3037,7 +3138,6 @@ class VantageNext(weewx.drivers.AbstractDevice):
 
         unit_bits              = self._getEEPROM_value(0x29)[0]
         setup_bits             = self._getEEPROM_value(0x2B)[0]
-        self.wind_cup_type     = self._getEEPROM_value(0xC3)[0] & 0x3
         self.rain_year_start   = self._getEEPROM_value(0x2C)[0]
         self.archive_interval_ = self._getEEPROM_value(0x2D)[0] * 60
         self.altitude          = self._getEEPROM_value(0x0F, "<h")[0]
@@ -3056,8 +3156,6 @@ class VantageNext(weewx.drivers.AbstractDevice):
         self.altitude_unit    = VantageNext.altitude_unit_dict[altitude_unit_code]
         self.rain_unit        = VantageNext.rain_unit_dict[rain_unit_code]
         self.wind_unit        = VantageNext.wind_unit_dict[wind_unit_code]
-        # Old firmware keeps the wind cup at 0x2B, so 0xC3's low bits can be 0.
-        self.wind_cup_size    = VantageNext.wind_cup_dict.get(self.wind_cup_type, 'unknown')
         self.rain_bucket_size = VantageNext.rain_bucket_dict[self.rain_bucket_type]
 
         # Try to guess the ISS ID for gauging reception strength.  Only
@@ -3088,6 +3186,75 @@ class VantageNext(weewx.drivers.AbstractDevice):
                            or 1)  # Pick a reasonable default.
 
         log.info("ISS ID is %s", self.iss_id)
+
+    # Where the console keeps its wind cup type depends on its firmware.
+    # Davis's protocol manual (rev 2.6.0, November 2012) puts it in the two
+    # low bits of 0xC3 on a VP2 or a Vue: 1 small, 2 large, 3 other (no speed
+    # correction: the sonic anemometer, or a Vue ISS), 0 undefined.  Before
+    # that, and always on the original Vantage Pro, it is bit 3 of the setup
+    # bits at 0x2B: 0 small, 1 large, and no 'other'.  Firmware that uses
+    # 0xC3 does not keep 0x2B's bit in step (consoles on 3.83 and 3.88 read
+    # 0xC3 = 3 with 0x2B bit 3 = 1 left set), so reading or writing the wrong
+    # one silently does nothing.  Which release moved it is not documented:
+    # VP2 firmware went from 1.90 (dated 2009 or 2010, sources differ)
+    # straight to 3.00 (July 2012), and the manual first named 0xC3 in
+    # November 2012.  So the rule, asked of the console once:
+    #
+    #   Vantage Vue (hardware type 17)        0xC3
+    #   original Vantage Pro (model_type 1)   0x2B, nothing asked
+    #   firmware dated (VER) before 2011      0x2B
+    #   firmware dated 2013 or later          0xC3
+    #   dated 2011 or 2012                    NVER: 3.00 or later 0xC3, else 0x2B
+    #
+    # The date first because every console answers VER.  NVER only answers
+    # on a VP2 from 1.90 and on a Vue, so it settles the two years around
+    # 3.00 alone, where every console has it.  A date or version that cannot
+    # be read, or a console that does not answer, raises rather than
+    # guessing, and the next call asks again.  Asked only by weectl device
+    # (--info, --set-wind-cup), never at WeeWX's startup.
+    WIND_CUP_OLD_BEFORE = datetime.date(2011, 1, 1)
+    WIND_CUP_NEW_FROM = datetime.date(2013, 1, 1)
+    WIND_CUP_FIRMWARE = 3.0
+    NO_OTHER_WIND_CUP = ("This console's firmware has no 'other' wind cup type, only small (1) "
+                         "and large (2): 'other' needs a Vantage Pro2 with firmware 3.00 or "
+                         "later.")
+    _wind_cup_at = None
+
+    def _wind_cup_offset(self):
+        """0xC3 or 0x2B: where this console keeps its wind cup type."""
+        if self._wind_cup_at is None:
+            if self.hardware_type == 17:
+                at = 0xC3
+            elif self.model_type == 1:
+                at = 0x2B
+            else:
+                date = firmware_date(self.getFirmwareDate())
+                if date < VantageNext.WIND_CUP_OLD_BEFORE:
+                    at = 0x2B
+                elif date >= VantageNext.WIND_CUP_NEW_FROM:
+                    at = 0xC3
+                else:
+                    version = firmware_version(self.getFirmwareVersion())
+                    at = 0xC3 if version >= VantageNext.WIND_CUP_FIRMWARE else 0x2B
+            self._wind_cup_at = at
+        return self._wind_cup_at
+
+    @property
+    def wind_cup_type(self):
+        """1 small, 2 large or 3 other, in this driver's codes wherever the
+        console keeps it; 0 if 0xC3 holds no type."""
+        if self._wind_cup_offset() == 0xC3:
+            return self._getEEPROM_value(0xC3)[0] & 0x03
+        return ((self._getEEPROM_value(0x2B)[0] & 0x08) >> 3) + 1
+
+    @property
+    def wind_cup_size(self):
+        return VantageNext.wind_cup_dict.get(self.wind_cup_type, 'unknown')
+
+    @property
+    def has_other_wind_cup(self):
+        """Whether the console's firmware has the 'other' wind cup type."""
+        return self._wind_cup_offset() == 0xC3
 
     def _getEEPROM_value(self, offset, v_format="B"):
         """Return a list of values from the EEPROM starting at a specified offset, using a
@@ -3946,15 +4113,22 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
         print("Querying...")
         try:
             _firmware_date = station.getFirmwareDate().decode('ascii')
-        except weewx.RetriesExceeded:
+        except weewx.WeeWxIOError:
             _firmware_date = "<Unavailable>"
         try:
             _firmware_version = station.getFirmwareVersion().decode('ascii')
-        except weewx.RetriesExceeded:
+        except weewx.WeeWxIOError:
             _firmware_version = '<Unavailable>'
 
-        console_time = station.getConsoleTime()
+        try:
+            console_time = station.getConsoleTime()
+        except weewx.WeeWxIOError:
+            console_time = '<Unavailable>'
         altitude_converted = weewx.units.convert(station.altitude_vt, station.altitude_unit)[0]
+        try:
+            wind_cup_size = station.wind_cup_size
+        except weewx.WeeWxIOError:
+            wind_cup_size = '<Unavailable>'
 
         print("""Davis Vantage EEPROM settings:
 
@@ -3980,7 +4154,7 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
       """ % (station.hardware_name, _firmware_date, _firmware_version,
              station.archive_interval,
              altitude_converted, station.altitude_unit,
-             station.wind_cup_size, station.rain_bucket_size,
+             wind_cup_size, station.rain_bucket_size,
              station.rain_year_start, console_time,
              station.barometer_unit, station.temperature_unit,
              station.rain_unit, station.wind_unit), file=dest)
@@ -4006,13 +4180,13 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
       Temperature logging:          %s
         """ % (stnlat, stnlon, man_or_auto, dst, gmt_or_zone, zone_code, gmt_offset_str,
                tempLogging), file=dest)
-        except weewx.RetriesExceeded:
+        except weewx.WeeWxIOError:
             pass
 
         # The console's midnight jump, and what the driver has learned.
         try:
             jump = station.getDayJump()
-        except weewx.RetriesExceeded:
+        except weewx.WeeWxIOError:
             jump_str = '<Unavailable>'
         else:
             jump_str = ('%.2f s' % jump if jump is not None
@@ -4039,7 +4213,7 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
         transmitter_list = None
         try:
             transmitter_list = station.getStnTransmitters()
-        except weewx.RetriesExceeded:
+        except weewx.WeeWxIOError:
             transmitter_list = None
         else:
             print("    TRANSMITTERS: ", file=dest)
@@ -4094,11 +4268,19 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
       Gain:                         %.3f
       Offset:                       %.3f
       """ % _bar_list, file=dest)
-        except weewx.RetriesExceeded:
+        except weewx.WeeWxIOError:
             pass
 
-        # Add temperature/humidity/wind calibration if we can.
-        calibration_dict = station.getStnCalibration()
+        # Add temperature/humidity/wind calibration if we can.  None means
+        # the console's calibration table failed its own consistency check.
+        try:
+            calibration_dict = station.getStnCalibration()
+        except weewx.WeeWxIOError:
+            calibration_dict = None
+        if calibration_dict is None:
+            print("    OFFSETS:                        <Unavailable>", file=dest)
+            print("", file=dest)
+            return
         print("""    OFFSETS:
       Wind direction:               %(wind)+.0f deg
       Inside Temperature:           %(inTemp)+.1f F
@@ -4265,22 +4447,43 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
                   "'3' for other (sonic)." % new_wind_cup_type, file=sys.stderr)
             return
 
+        # Where the type is kept depends on the firmware, which the console
+        # must say: one that will not, or cannot be read, is not guessed at.
+        try:
+            if new_wind_cup_type == 3 and not station.has_other_wind_cup:
+                print("Unable to set new wind cup type.")
+                print("Reason: %s" % VantageNext.NO_OTHER_WIND_CUP, file=sys.stderr)
+                return
+            old_wind_cup_type = station.wind_cup_type
+        except weewx.WeeWxIOError as e:
+            print("Unable to set new wind cup type.")
+            print("Reason: %s" % e, file=sys.stderr)
+            return
+
         print("Old wind cup type is %d (%s), new one is %d (%s)."
-              % (station.wind_cup_type,
-                 station.wind_cup_size,
+              % (old_wind_cup_type,
+                 VantageNext.wind_cup_dict.get(old_wind_cup_type, 'unknown'),
                  new_wind_cup_type,
                  VantageNext.wind_cup_dict[new_wind_cup_type]))
 
-        if station.wind_cup_type == new_wind_cup_type:
+        if old_wind_cup_type == new_wind_cup_type:
             print("Old and new wind cup types are the same. Nothing done.")
         else:
             ans = weeutil.weeutil.y_or_n("Proceeding will change the wind cup type.\n"
                                          "Are you sure you want to proceed (y/n)? ",
                                          noprompt)
             if ans == 'y':
-                station.setWindCupType(new_wind_cup_type)
+                try:
+                    # The code read back and checked: no second read to fail.
+                    wind_cup_type = station.setWindCupType(new_wind_cup_type)
+                except weewx.WeeWxIOError as e:
+                    # The write may or may not have landed.
+                    print("Setting the wind cup type failed: %s" % e, file=sys.stderr)
+                    print("Check what the console holds with 'weectl device --info'.",
+                          file=sys.stderr)
+                    return
                 print("Wind cup type set to %d (%s)."
-                      % (station.wind_cup_type, station.wind_cup_size))
+                      % (wind_cup_type, VantageNext.wind_cup_dict.get(wind_cup_type, 'unknown')))
             else:
                 print("Nothing done.")
 

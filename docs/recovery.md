@@ -44,7 +44,7 @@ received in that interval, against the number it should have.  A sound link runs
 98 to 100 percent, record after record, so a single low record is easy to spot — and on
 these consoles it means one of two things: a **clock set**, which costs the console about a
 minute of its transmitter's packets every time, or **midnight**, when about one night in
-twelve the console loses its transmitter for a few minutes on its own.  Both, and how we
+fifteen the console loses its transmitter for a few minutes on its own.  Both, and how we
 know the packets really are lost, are in
 [What a clock set costs](clock.md#what-a-clock-set-costs).
 
@@ -132,7 +132,7 @@ ERROR user.vantagenext: DMPAFT max tries (4) exceeded.
 |---|---|
 | `get_packet: Expected 99 chars; got 0` a few seconds after midnight | Routine: the console rolling its day over. |
 | The same, two to four minutes after midnight, now and then | Routine and rare: the console reacquiring its transmitter after the [midnight reception loss](#what-it-costs-in-reception). |
-| `rxCheckPercent` low in the record for five past midnight, normal either side | Routine, about one night in twelve: the [midnight reception loss](#what-it-costs-in-reception). |
+| `rxCheckPercent` low in the record for five past midnight, normal either side | Routine, about one night in fifteen: the [midnight reception loss](#what-it-costs-in-reception). |
 | A run of them starting a few seconds after a `Clock stepped` line | Routine: clock sets disturb the stream, which is why the driver [no longer makes them](clock.md) except as a backstop, or on a console it cannot steer. |
 | The same at other times of day, now and then | Worth a look, not yet a fault.  See the next row. |
 | Truncated reads through the day, a few packets apart, with no clock set before them | A marginal link: the USB cable, a hub, the data logger's seating, power to the console.  On a WeatherLinkIP, the network. |

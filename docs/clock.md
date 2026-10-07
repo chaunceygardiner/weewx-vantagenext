@@ -17,8 +17,8 @@ The console's clock matters because the console, not the computer, timestamps ev
 record.  Since 3.0 the driver keeps that clock **without setting it**, because every clock set
 costs the console about a minute of its transmitter's packets.  It learns how the console's
 clock behaves and steers the correction the console already makes to itself every midnight,
-which costs nothing.  There is nothing to configure.  Clock steering does not apply to a
-WeatherLinkIP: its clock is kept by setting it, as before
+which costs nothing.  There is nothing to configure.  Clock steering is not yet supported on
+a WeatherLinkIP: its clock is kept by setting it, as before
 ([below](#when-the-driver-falls-back-to-setting-the-clock)).
 
 ## How a console's clock works
@@ -80,9 +80,9 @@ received in that interval, against the number it should have.  A sound link runs
 **Every clock set costs the console about a minute of its transmitter's packets.**  Of 51
 clock sets measured across seven consoles, every one left the archive record it fell in short
 of ISS packets: from ten seconds' worth to nearly three minutes', a minute or so typically.
-Most of the cost is the command, not the move.  On a spare console, a set to the very time
-the console already showed stopped its live data for about 50 seconds, and steps of two to
-eight seconds for only a little longer.  The console
+The cost is the command, not the move.  On a spare console, a set to the very time
+the console already showed stopped its live data for about a minute, and steps of two to
+eight seconds no longer.  The console
 lets go of its transmitter and takes a while to find it again, and three sets in four are
 followed by a run of [truncated reads](recovery.md#when-read-errors-happen) while it does.
 
@@ -91,14 +91,14 @@ That is why the driver steers the jump instead of setting the clock.
 
 ### Midnight
 
-**About one night in twelve, the console loses its transmitter just after midnight**, for two
+**About one night in fifteen, the console loses its transmitter just after midnight**, for two
 to five minutes, occasionally longer.  The record for the first five minutes of the day reads
 anywhere from about 60 percent down to almost nothing, with the records either side at 100.
-Two years of archives from seven consoles show it on every console, at 7 to 9 percent of
-nights each, every month, at a steady rate.  It does not depend on the weather, on the size
-of that night's jump, on whether WeeWX was restarted, or on what the other consoles did that
-night: each console loses its own nights.  On some of those nights the console also stops
-sending LOOP packets two to three minutes into the day.
+Two years of the site's archives show it every month, at a steady rate, and each of the four
+consoles with an archive of its own since February loses 5 to 8 percent of nights.  It does
+not depend on the weather, on the size of that night's jump, on whether WeeWX was restarted,
+or on what the other consoles did that night: each console loses its own nights.  On some of
+those nights the console also stops sending LOOP packets two to three minutes into the day.
 
 The driver plays no part in it.  In the first ten minutes of the day it makes no clock
 decision, writes no jump and sets nothing — the LOOP stream, the archive downloads and the
@@ -140,28 +140,34 @@ exactly, and changes nothing while it checks.
 **It learns the drift.**  Twice a day — at the first clock check after ten past midnight and
 the first after noon — it takes a precise reading, and fits a straight line through the
 last 14 days of them, with the jumps and any sets it knows of taken out.  Until its readings
-span half a day and a midnight it is **learning**, which takes about a day and a half.
+span half a day and a midnight it is **learning**: half a day to a day, depending on the hour
+WeeWX starts.  Its first decision comes at the next ten past midnight after that: up to a day
+and a half from the start.
 
 **Then it steers by the jump.**  Once a day, on the reading just after midnight, it works out
 where tonight's jump would leave the clock:
 
-- **Within 0.5 seconds of center:** it leaves the jump alone.
+- **Within 0.19 seconds of center:** it leaves the jump alone.
 - **Further out:** it writes the quarter-second jump that brings the clock back, no more than
   1 second from the jump that would only cancel the drift — anything bigger is the backstop's,
-  below.
+  below.  On the day of a time change it allows for the day's real length, 23 or 25 hours:
+  for a console that loses 3.3 seconds a day, an hour's drift is a seventh of a second.
 
-Two quarter-seconds either side of a console's drift, held in turn, keep it centered for good.
-A console whose drift happens to be close to a quarter-second may keep one jump for weeks;
-one whose drift falls between two writes every few days.  A console that gains time gets a
-negative jump.
+A jump moves in quarter-seconds, so no choice can land the clock closer to center than an
+eighth of a second, and few consoles drift by an exact quarter-second.  So the jump settles on
+the two quarter-seconds either side of the console's drift, held a night or a few at a time:
+a write every two days at most, on average.  Each write costs nothing.  The band is wide enough
+that a console whose drift falls midway between two quarter-seconds — creeping an eighth of a
+second a night on either — switches every other night, not every night.  A console that gains
+time gets a negative jump.
 
-![A week of clock error: two days of a sawtooth creeping up, then the jump is rewritten and the sawtooth stays in the band around center](images/clock-sawtooth.svg)
+![A week of clock error: a day of a sawtooth creeping up, then the jump is rewritten and the sawtooth stays in the band around center](images/clock-sawtooth.svg)
 
 The figure is a simulated console that loses 3.39 seconds a day and came with a 4.00-second
-jump: a creep of +0.61 seconds a day.  For two days the driver is learning, and the sawtooth
-climbs.  Just after the third midnight it writes a jump of 2.50 seconds — a second less than
-the drift calls for, to pull the clock back — and from then on the clock stays in the band, the
-jump changing only when it needs to.  The clock is never set.
+jump: a creep of +0.61 seconds a day.  For its first day the driver is learning, and the
+sawtooth climbs.  Just after the next midnight it writes a jump of 2.75 seconds — two thirds
+of a second less than the drift calls for, to pull the clock back — and from then on the clock
+stays in the band, the jump changing when it needs to.  The clock is never set.
 
 Some guards:
 
@@ -183,8 +189,8 @@ Some guards:
   more than 1.5 seconds from that prediction means something moved the clock, and the driver
   starts learning afresh from it.  It is tested against the readings *before* it, so a move
   of two seconds is found even in the first days, when a line drawn through only a few
-  readings would bend toward the new one.  Before there is a line at all — the first day
-  and a half of learning — each line drawn is asked the same of itself: one that misses
+  readings would bend toward the new one.  Before there is a line at all — while it is
+  still learning — each line drawn is asked the same of itself: one that misses
   any of its own readings by more than 1.5 seconds, or says the console drifts more than
   8 seconds a day or jumps outside −8 to +8, holds a move, and learning starts again.  A
   power loss can leave the clock anywhere, seconds or months off; the size makes no
@@ -209,14 +215,18 @@ left off.
   own, steered by a value that costs nothing to change.
 - **Its error stays within about half the drift of the true time, either way.**  For a console
   that loses 3 seconds a day: about 1.5 seconds fast just after midnight, about 1.5 seconds slow
-  just before it, and right around noon.  Steering keeps the sawtooth within half a second of
-  center, so the extremes can reach about 2 seconds.  That is the floor for any console that
+  just before it, and right around noon.  Steering keeps the sawtooth within about a fifth of a
+  second of center, so the extremes reach about 1.7 seconds.  That is the floor for any console that
   drifts, and nothing can do better without setting the clock all day.
 - **WeeWX's `Clock error` line will show those extremes**, every night, and that is normal: the
   error is largest on either side of midnight by design.
-- **The jump changes now and then**, by a quarter of a second, often settling between two
-  values.  Each change is a line in the log.
-- **The midnight loss stays.**  About one night in twelve the console still loses its
+- **The jump changes every day or few**, between the two quarter-seconds either side of the
+  drift.  Each change is a line in the log.
+- **The console's memory will outlast the console.**  The driver writes only a jump that
+  differs from the one held, every two days at most on average: under 200 writes a year.  A
+  Vantage Pro2 console keeps its settings in the EEPROM built into its microcontroller, an
+  Atmel ATmega128L, which is rated for 100,000 writes: at that rate, more than 500 years.
+- **The midnight loss stays.**  About one night in fifteen the console still loses its
   transmitter for a few minutes after midnight, on its own.  Steering removes the cost of
   clock sets, not that.
 - **The backstop never fires** on a console being steered.  It is there for a console whose
@@ -229,7 +239,7 @@ The driver recovers by itself from anything that changes the console or its cloc
 | What happened | What the driver does |
 |---|---|
 | WeeWX restarted, or the computer rebooted | Resumes from `clock.json` where it left off — including a jump it wrote just before and had not yet confirmed: found in the console, it is taken as written. |
-| `clock.json` deleted or lost | Starts learning afresh from the jump the console holds — the best starting point there is.  It costs a day and a half of learning, nothing more. |
+| `clock.json` deleted or lost | Starts learning afresh from the jump the console holds — the best starting point there is.  It costs up to a day and a half before the first decision, nothing more. |
 | The console replaced by another | Sees a jump in the console other than the one it last held, at startup or at the next daily decision, and learns the console afresh.  If a new console happens to hold the same jump, the first reading the old drift cannot explain does the same (below). |
 | The clock moved — a power loss, a set by hand, another program on the cable | A clock off by more than `max_drift` is set at once by [the backstop](#the-backstop).  Then, or for any smaller move, **a reading that the drift cannot explain by 1.5 seconds** shows the clock was moved — or, while the driver is still learning, a line that cannot explain its own readings — and the driver starts learning afresh from that reading.  How far it moved makes no difference: seconds or months. |
 | The jump cannot be steered — its memory holds no valid jump, writes fail, or it is a WeatherLinkIP | Falls back to keeping the clock by setting it ([below](#when-the-driver-falls-back-to-setting-the-clock)). |
@@ -238,6 +248,29 @@ To make the driver start over yourself — after it has fallen back, say — sto
 `vantagenext/clock.json` from the archive directory, and start it again.  The console's jump
 stays as the driver left it, which is the best starting point there is.
 
+## Which consoles
+
+Steering rests on what a console does with the jump in its memory, so this is where it has
+been seen:
+
+- **Steered:** a Vantage Pro2 console with firmware 3.88 (Oct 29 2019), and seven Envoys, six
+  with firmware 3.88 (Nov 12 2019) and one with 3.83 (Jan 22 2018).  Jumps written to them
+  were made at the next midnight with no other command: the 3.83 Envoy's went from 3.00 to
+  3.25 seconds, and was measured at 3.25 the next night.  On the Vantage Pro2, negative and
+  zero jumps were made too, and writing one cost it no reception.
+- **Not yet seen:** a Vantage Vue, an original Vantage Pro, and any other firmware.
+
+The driver does not take any of this on trust.  It reads the jump and its check byte when WeeWX
+starts and again before every day's decision, falls back to setting the clock when they are not
+a valid pair ([below](#when-the-driver-falls-back-to-setting-the-clock)), and reads back every
+jump it writes.  If you run one of the consoles not yet seen,
+[the clock lines in the log](#the-clock-lines-in-the-log) will say how it is going, and a report
+in the [issues](https://github.com/chaunceygardiner/weewx-vantagenext/issues) is welcome.
+
+A WeatherLinkIP is not steered yet: its clock is kept by setting it
+([below](#when-the-driver-falls-back-to-setting-the-clock)).  A WeatherLinkIP is being tested,
+and clock steering may be supported in a future release.
+
 ## When the driver falls back to setting the clock
 
 Three things make a console one the driver cannot steer, and it falls back to keeping the
@@ -245,8 +278,11 @@ clock by setting it:
 
 - **Its memory does not hold a valid jump** — the two bytes at `0x2E` are not a value and its
   check, or the value is outside −8 to +8 seconds — so the jump is not known.
-- **It is a WeatherLinkIP** (`type = ethernet`).  Clock steering does not apply to a
-  WeatherLinkIP: its clock is kept by setting it from the first clock check.
+- **It is a WeatherLinkIP** (`type = ethernet`).  Clock steering is not yet supported on a
+  WeatherLinkIP: its clock is kept by setting it from the first clock check.  The driver
+  waits `tcp_send_delay` after every command to one, half a second by default, which is too
+  long to catch the console's second ticking over to the quarter of a second a
+  [precise reading](#how-a-consoles-clock-works) needs.
 - **Writing the jump fails**, or the jump doesn't read back as written, twice in a row.
 
 Falling back is logged: at the first clock check for a WeatherLinkIP or a console with no valid
@@ -325,7 +361,7 @@ INFO user.vantagenext: Clock is +0.12 s off center (drift -3.39 s a day); midnig
 or a jump written (this is the first write in the figure above):
 
 ```
-INFO user.vantagenext: Clock is +1.22 s off center (drift -3.39 s a day); midnight jump 4.00 -> 2.50 s.
+INFO user.vantagenext: Clock is +0.61 s off center (drift -3.39 s a day); midnight jump 4.00 -> 2.75 s.
 ```
 
 When something moved the clock:
@@ -351,11 +387,11 @@ With WeeWX stopped, `weectl device --info` includes the clock:
 
 ```
     CONSOLE CLOCK:
-      Midnight jump (EEPROM 0x2E):  3.00 s
+      Midnight jump (EEPROM 0x2E):  3.50 s
       Driver's clock state:         STEERING
       Learned drift:                -3.39 s a day
-        2026-10-07 00:15  jump 4.00 -> 2.50 (off center +1.22)
-        2026-10-08 00:15  jump 2.50 -> 3.00 (off center +0.33)
+        2026-10-07 00:15  jump 4.00 -> 2.75 (off center +0.61)
+        2026-10-08 00:15  jump 2.75 -> 3.50 (off center -0.03)
 ```
 
 ## Setting the clock by hand
