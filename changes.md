@@ -1,6 +1,6 @@
 # weewx-vantagenext change history
 
-## 3.0 UNRELEASED
+## 3.0 2026-10-07
 - ACTION, when upgrading: delete clock_drift_secs, day_start_jump,
   set_time_padding and time_set_goal (and clock_recenter_threshold, if you have
   it) from the [VantageNext] section of weewx.conf.  All are obsolete and
