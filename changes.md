@@ -1,5 +1,20 @@
 # weewx-vantagenext change history
 
+## 3.1 UNRELEASED
+- No read waits less than 4.5 seconds for the console; a `timeout` under that
+  is raised to it, and the log says so at startup.  A Davis console sends no
+  LOOP packets from its own midnight
+  until about three seconds after it, and the gap between the last packet
+  before that and the first after it measures 4.1 to 4.2 seconds, so the
+  four-second default gave up on about half of all nights just as the console
+  started sending again: the routine `get_packet: Expected 99 chars; got 0` a
+  few seconds after midnight, a restarted batch and a few seconds of LOOP
+  lost.  Now the stream picks up with the console's own first packet, and the
+  driver logs how long it waited for it, one `LOOP waited ... s for the
+  console's first packet after its midnight` line a night.  A healthy console
+  answers within 2.25 seconds, so the extra half second is paid only on a read
+  that has already failed.  Nothing to configure.
+
 ## 3.0 2026-10-07
 - ACTION, when upgrading: delete clock_drift_secs, day_start_jump,
   set_time_padding and time_set_goal (and clock_recenter_threshold, if you have

@@ -55,7 +55,7 @@ commented, and they go on working as they did.
 | `loop_request` | `1` | The LOOP packets to ask for: `1` = LOOP1, `2` = LOOP2, `3` = both, alternating. |
 | `iss_id` | read from the console | The transmitter id of the ISS.  See [below](#iss_id). |
 | `model_type` | `2` | `1` = Vantage Pro, `2` = Vantage Pro2.  Only the owner of an original Vantage Pro sets it: a Vue is detected, whatever this says. |
-| `timeout` | `4` | Seconds to wait for the console to answer before giving up on a read.  Must be greater than 2. |
+| `timeout` | `4.5` | Seconds to wait for the console to answer before giving up on a read.  A value under 4.5 is raised to 4.5, and the log says so at startup (3.1): the console sends nothing for about three seconds after its own midnight, and the old default of four gave up on that silence just as it ended; see [the recovery page](recovery.md#the-consoles-midnight). |
 | `wait_before_retry` | `1.2` | Seconds to wait before trying a failed exchange again. |
 | `command_delay` | `0.5` | Seconds to wait after sending a command before looking for its acknowledgement. |
 | `max_tries` | `4` | How many times to try an exchange before giving up on it. |

@@ -80,12 +80,25 @@ def options_the_code_reads():
                 # literal_eval, not .value: -3.1 is a unary minus on a constant.
                 found[node.args[0].value] = ast.literal_eval(node.args[1])
             except (IndexError, ValueError):
-                found[node.args[0].value] = None
+                # A default that is a module constant's name (timeout's is
+                # MIN_READ_TIMEOUT) resolves to that constant's value.
+                default = node.args[1] if len(node.args) > 1 else None
+                found[node.args[0].value] = (module_constant(default.id)
+                                             if isinstance(default, ast.Name) else None)
         elif (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name)
               and node.value.id == 'vp_dict' and isinstance(node.slice, ast.Constant)):
             found[node.slice.value] = None
     assert len(found) >= 14 and found.get('max_tries') == 4 and 'port' in found, found
     return found
+
+
+def module_constant(name):
+    """The literal a module-level `NAME = literal` in the driver assigns."""
+    for node in driver_tree().body:
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name) and node.targets[0].id == name):
+            return ast.literal_eval(node.value)
+    raise AssertionError('no module constant %s' % name)
 
 
 def options_the_manual_lists():

@@ -44,7 +44,9 @@ keeps the clock without that cost, and solves the specific problems below.
   See [Daylight-saving time changes](dst.md).
 - **Read errors cost seconds, not a minute.**  A truncated LOOP packet abandons the batch
   and starts a new one at once, and an error reading LOOP data is retried inside the
-  driver rather than handed to WeeWX, where it costs a 60-second driver restart.  See [Read errors and recovery](recovery.md).
+  driver rather than handed to WeeWX, where it costs a 60-second driver restart.  And the
+  one place a healthy console is quiet for longer than the read timeout, the three seconds
+  after its own midnight, is waited out (3.1) rather than read as an error.  See [Read errors and recovery](recovery.md).
 - **A console clock kept centered without setting it** (3.0).  A Vantage console loses
   time all day and corrects itself just after midnight by a jump it keeps in its own memory:
   a daily sawtooth.  The driver learns the console's drift and keeps that sawtooth centered

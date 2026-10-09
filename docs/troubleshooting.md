@@ -16,7 +16,7 @@ description: Diagnosing weewx-vantagenext — confirming the driver is the one r
 Start here: **is this driver the one running?**  At startup it logs
 
 ```
-INFO user.vantagenext: Driver version is 3.0
+INFO user.vantagenext: Driver version is 3.1
 ```
 
 If that line is missing, `station_type` in `[Station]` is not `VantageNext`, and everything
@@ -101,6 +101,8 @@ After falling back, the driver keeps the clock by setting it, and says so in the
 | Message | Meaning |
 |---|---|
 | `get_packet: Expected 99 chars; got .... (...)` | A truncated LOOP packet; a new batch was started at once.  Routine. |
+| `LOOP waited ... s for the console's first packet after its midnight (the read timeout is ... s).` | Once a night: how long the console's own midnight silence held the LOOP stream.  See [the recovery page](recovery.md#the-consoles-midnight). |
+| `timeout ... s in weewx.conf is raised to ... s, the least a read can wait for the console's first packet after its midnight.` | At startup: `timeout` is set below 4.5 in weewx.conf and 4.5 is used.  Delete the line or raise it. |
 | `genDavisLoopPackets: repeated bad read.` | The packet after a truncated one was truncated too. |
 | `LOOP try #...; error: ...` | A LOOP packet failed for another reason and is being retried. |
 | `LOOP max tries (...) exceeded.` followed by `genLoopPackets: Error: .... (try ...)` | Every retry failed; a new batch is being started. |

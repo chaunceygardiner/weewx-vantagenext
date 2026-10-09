@@ -51,7 +51,9 @@ keeps the clock without that cost, and solves the specific problems below.
 
 - **Fast recovery from read errors.**  A truncated LOOP packet abandons the batch and
   starts a new one at once — a gap of a few seconds.  The same condition in the built-in
-  driver can escalate until WeeWX restarts the driver, a 60-second outage.
+  driver can escalate until WeeWX restarts the driver, a 60-second outage.  And the one
+  place a healthy console is quiet for longer than the read timeout, the three seconds
+  after its own midnight, is waited out (3.1) rather than read as an error.
   → [Read errors and recovery](https://chaunceygardiner.github.io/weewx-vantagenext/recovery.html)
 
 - **A console clock kept centered without setting it** (3.0).  A Vantage console loses
@@ -130,7 +132,7 @@ keeps the clock without that cost, and solves the specific problems below.
 1. Restart WeeWX, then check the log for the driver announcing itself:
 
    ```
-   INFO user.vantagenext: Driver version is 3.0
+   INFO user.vantagenext: Driver version is 3.1
    ```
 
 The manual has the full steps, including

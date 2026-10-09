@@ -32,9 +32,25 @@ from weewx.crc16 import crc16
 log = logging.getLogger(__name__)
 
 DRIVER_NAME = 'VantageNext'
-DRIVER_VERSION = '3.0'
+DRIVER_VERSION = '3.1'
 
 int2byte = struct.Struct(">B").pack
+
+# No read waits less than this for the console.  The console sends no LOOP
+# packets from its own midnight until about three seconds after it, then takes
+# up its 2 s cadence again by itself: 16 undisturbed console midnights on a
+# VP2 console (2026-10-09) put the last packet before midnight at -0.9 s and
+# the first after it at +3.2 to +3.3, a gap of 4.13 to 4.19 s (one of 3.90).
+# The console sets that cadence, not the LOOP command, so the gap is the same
+# every night, and a 4 s read timeout gave up on about half of all nights (45%
+# of 991 console-nights on seven Envoys, 2024-2026) just as the console started
+# sending again -- the "got 0" line a few seconds after midnight, a restarted
+# batch and a few seconds of LOOP lost.  4.5 is one quarter-second step of the
+# console's cadence above the longest gap measured, and a healthy console
+# answers within 2.25 s, so the half second over the old 4 is paid only on a
+# read that has already failed.  A configured timeout is used when it is
+# longer, raised (and said so at startup) when it is shorter.
+MIN_READ_TIMEOUT = 4.5
 
 if sys.version_info[0] < 3 or (sys.version_info[0] == 3 and sys.version_info[1] < 9):
     raise weewx.UnsupportedFeature(
@@ -74,10 +90,11 @@ class ShortReadIOError(weewx.WeeWxIOError):
 class BaseWrapper:
     """Base class for (Serial|Ethernet)Wrapper"""
 
-    def __init__(self, wait_before_retry, command_delay):
+    def __init__(self, wait_before_retry, command_delay, timeout=MIN_READ_TIMEOUT):
 
         self.wait_before_retry = wait_before_retry
         self.command_delay = command_delay
+        self.timeout = timeout             # the read timeout the device is opened with
 
     def read(self, nbytes=1):
         raise NotImplementedError
@@ -285,10 +302,9 @@ class SerialWrapper(BaseWrapper):
 
     def __init__(self, port, baudrate, timeout, wait_before_retry, command_delay):
         super().__init__(wait_before_retry=wait_before_retry,
-                                            command_delay=command_delay)
+                                            command_delay=command_delay, timeout=timeout)
         self.port = port
         self.baudrate = baudrate
-        self.timeout = timeout
 
     @guard_termios
     def flush_input(self):
@@ -364,11 +380,10 @@ class EthernetWrapper(BaseWrapper):
     def __init__(self, host, port, timeout, tcp_send_delay, wait_before_retry, command_delay):
 
         super().__init__(wait_before_retry=wait_before_retry,
-                                              command_delay=command_delay)
+                                              command_delay=command_delay, timeout=timeout)
 
         self.host = host
         self.port = port
-        self.timeout = timeout
         self.tcp_send_delay = tcp_send_delay
 
     def openPort(self):
@@ -705,12 +720,27 @@ class ClockState:
         self.jumps = older[-1:] + [j for j in self.jumps if j[0] >= cutoff]
 
 
+def day_bounds(t):
+    """(start, end) of the local day t falls in, as timestamps.  The end is
+    found from well inside the day, so a time-change day of 23 or 25 hours,
+    or a zone whose change falls at midnight (the day then begins at 01:00),
+    is measured from where the day really turns."""
+    start = startOfDay(t)
+    return start, startOfDay(start + 36 * 3600)
+
+
+def secs_from_day_boundaries(t):
+    """(seconds since the local day t is in began, seconds until it ends)."""
+    start, end = day_bounds(t)
+    return t - start, end - t
+
+
 def day_length(t):
     """The length, in seconds, of the local day t falls in: 23 or 25 hours on
     the day of a time change, when the console drifts for an hour less or
     more before its midnight."""
-    start = startOfDay(t)
-    return startOfDay(start + 36 * 3600) - start
+    start, end = day_bounds(t)
+    return end - start
 
 
 def midnights_between(t0, t1):
@@ -1192,7 +1222,9 @@ class VantageNext(weewx.drivers.AbstractDevice):
             dict: A single LOOP packet
         """
         # Fetch a packet...
+        started = self._now()
         _buffer = self.port.read(99)
+        waited = self._now() - started
         # ... see if it passes the CRC test ...
         crc = crc16(_buffer)
         if crc:
@@ -1202,8 +1234,30 @@ class VantageNext(weewx.drivers.AbstractDevice):
             raise weewx.CRCError("LOOP buffer failed CRC check")
         # ... decode it ...
         loop_packet = self._unpackLoopPacket(_buffer[:95])
+        # ... and if it was the console's first after its midnight, say how
+        # long it kept us waiting: the number the read timeout is judged
+        # against, from every console, every night.
+        if waited > VantageNext.MIDNIGHT_GAP_REPORT and not self.on_bad_read:
+            # (not on_bad_read: the first packet of a batch restarted after a
+            # zero read is the console answering a command, not resuming.)
+            boundary = self._midnight_boundary(started)
+            if boundary is not None and boundary != self._gap_logged_at:
+                self._gap_logged_at = boundary
+                log.info("LOOP waited %.2f s for the console's first packet after its midnight "
+                         "(the read timeout is %.1f s).", waited, self.port.timeout)
         # ... then return it
         return loop_packet
+
+    @staticmethod
+    def _midnight_boundary(now):
+        """The day boundary within MIDNIGHT_GAP_WINDOW of now, or None."""
+        since_start, until_end = secs_from_day_boundaries(now)
+        before, after = VantageNext.MIDNIGHT_GAP_WINDOW
+        if since_start < after:
+            return now - since_start
+        if until_end < before:
+            return now + until_end
+        return None
 
     def genArchiveRecords(self, since_ts):
         """A generator function to return archive packets from a Davis Vantage station.
@@ -1753,6 +1807,18 @@ class VantageNext(weewx.drivers.AbstractDevice):
     # Give up looking for a second boundary after this long, or this many polls.
     CLOCK_EDGE_POLL_SECS = 1.5
     CLOCK_EDGE_MAX_POLLS = 200
+    # No read waits less than this (the module constant says why).
+    MIN_READ_TIMEOUT = MIN_READ_TIMEOUT
+    # The read that spans the console's midnight logs how long it waited, so
+    # every console reports its own gap every night and one that needs more
+    # shows up in the log beside the zero read it gets.  A read that took
+    # longer than MIDNIGHT_GAP_REPORT (the cadence is 2.0 s, at most 2.25)
+    # within MIDNIGHT_GAP_WINDOW of the local midnight (seconds before, and
+    # after; the console's clock is within seconds of the host's) is that
+    # read; it is logged once per midnight.
+    MIDNIGHT_GAP_REPORT = 3.0
+    MIDNIGHT_GAP_WINDOW = (15.0, 25.0)
+    _gap_logged_at = None
 
     _next_unforced_set_ts = 0.0
     _next_poll_ts = 0.0
@@ -2010,11 +2076,10 @@ class VantageNext(weewx.drivers.AbstractDevice):
         one begun in the last seconds of a day measures into the next.  A
         reading then is no reading -- not recorded, decided or set on -- and
         the next check tries again."""
-        if t - startOfDay(t) < VantageNext.CLOCK_JUMP_WINDOW:
+        since_start, until_end = secs_from_day_boundaries(t)
+        if since_start < VantageNext.CLOCK_JUMP_WINDOW:
             return 'after'
-        # The next midnight, found from well inside the day: a DST day is
-        # 23 or 25 hours.
-        if startOfDay(startOfDay(t) + 36 * 3600) - t <= VantageNext.CLOCK_PRE_MIDNIGHT:
+        if until_end <= VantageNext.CLOCK_PRE_MIDNIGHT:
             return 'before'
         return None
 
@@ -3293,7 +3358,12 @@ class VantageNext(weewx.drivers.AbstractDevice):
     def _port_factory(vp_dict):
         """Produce a serial or ethernet port object"""
 
-        timeout = float(vp_dict.get('timeout', 4.0))
+        timeout = float(vp_dict.get('timeout', MIN_READ_TIMEOUT))
+        if timeout < MIN_READ_TIMEOUT:
+            log.info("timeout %.1f s in weewx.conf is raised to %.1f s, the least a read can "
+                     "wait for the console's first packet after its midnight.",
+                     timeout, MIN_READ_TIMEOUT)
+            timeout = MIN_READ_TIMEOUT
         wait_before_retry = float(vp_dict.get('wait_before_retry', 1.2))
         command_delay = float(vp_dict.get('command_delay', 0.5))
 

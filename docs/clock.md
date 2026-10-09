@@ -91,8 +91,9 @@ That is why the driver steers the jump instead of setting the clock.
 
 ### Midnight
 
-**About one night in fifteen, the console loses its transmitter just after midnight**, for two
-to five minutes, occasionally longer.  The record for the first five minutes of the day reads
+**About one night in fifteen, the console lost its transmitter just after midnight**, for two
+to five minutes, occasionally longer, in two years of archives — whether it still does is an
+open question, below.  The record for the first five minutes of the day reads
 anywhere from about 60 percent down to almost nothing, with the records either side at 100.
 Two years of the site's archives show it every month, at a steady rate, and each of the four
 consoles with an archive of its own since February loses 5 to 8 percent of nights.  It does
@@ -100,12 +101,15 @@ not depend on the weather, on the size of that night's jump, on whether WeeWX wa
 or on what the other consoles did that night: each console loses its own nights.  On some of
 those nights the console also stops sending LOOP packets two to three minutes into the day.
 
-The driver plays no part in it.  In the first ten minutes of the day it makes no clock
-decision, writes no jump and sets nothing — the LOOP stream, the archive downloads and the
-time read at a clock check go on as at any other hour — and the loss is the same on a
-console whose clock it has never set.  It is the console's own day-rollover work.  Averaged
-over every night, it costs about a dozen seconds of reception, and there is nothing to tune.
-It is worth knowing about so that one low record at five past midnight is not mistaken for a
+Clock sets are not the cause: the loss was the same on a console whose clock was never set.
+What is not settled is whether the computer is.  Those two years were run with WeeWX's
+`archive_delay` at 3 seconds, which puts the archive download a fraction of a second after
+the console's [three-second silence at its own midnight](recovery.md#the-consoles-midnight),
+inside whatever it is still finishing — and one console that had its clock read repeatedly
+across its midnight lost eight minutes.  Since the delay went to 6 seconds, which moves the
+download four seconds later, the loss has not been seen, on too few nights yet to say
+whether that is cause or chance.  Until it is settled: averaged over every night the loss
+cost about a dozen seconds of reception, and a low record at five past midnight is not a
 failing link.
 
 ### How we know the loss is real
@@ -226,9 +230,10 @@ left off.
   differs from the one held, every two days at most on average: under 200 writes a year.  A
   Vantage Pro2 console keeps its settings in the EEPROM built into its microcontroller, an
   Atmel ATmega128L, which is rated for 100,000 writes: at that rate, more than 500 years.
-- **The midnight loss stays.**  About one night in fifteen the console still loses its
-  transmitter for a few minutes after midnight, on its own.  Steering removes the cost of
-  clock sets, not that.
+- **The midnight loss is a separate question.**  Steering removes the cost of clock sets;
+  whether the console still loses its transmitter after midnight about one night in fifteen,
+  as it did for two years, or whether that went with the 3-second `archive_delay`, is
+  [not yet settled](#midnight).
 - **The backstop never fires** on a console being steered.  It is there for a console whose
   clock something else has moved.
 
