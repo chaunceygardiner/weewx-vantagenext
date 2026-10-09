@@ -106,11 +106,12 @@ What is not settled is whether the computer is.  Those two years were run with W
 `archive_delay` at 3 seconds, which puts the archive download a fraction of a second after
 the console's [three-second silence at its own midnight](recovery.md#the-consoles-midnight),
 inside whatever it is still finishing — and one console that had its clock read repeatedly
-across its midnight lost eight minutes.  Since the delay went to 6 seconds, which moves the
-download four seconds later, the loss has not been seen, on too few nights yet to say
-whether that is cause or chance.  Until it is settled: averaged over every night the loss
-cost about a dozen seconds of reception, and a low record at five past midnight is not a
-failing link.
+across its midnight lost eight minutes.  WeeWX's default is 15 seconds, which puts the
+download twelve seconds clear of the silence; in the two weeks these consoles have run at
+6 seconds the loss has come on two nights in 44, against one in thirteen before, and not at
+all in the 33 nights since the driver stopped setting the clock — all too few to say whether
+that is cause or chance.  Until it is settled: averaged over every night the loss cost about
+a dozen seconds of reception, and a low record at five past midnight is not a failing link.
 
 ### How we know the loss is real
 
