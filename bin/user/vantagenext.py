@@ -1807,8 +1807,6 @@ class VantageNext(weewx.drivers.AbstractDevice):
     # Give up looking for a second boundary after this long, or this many polls.
     CLOCK_EDGE_POLL_SECS = 1.5
     CLOCK_EDGE_MAX_POLLS = 200
-    # No read waits less than this (the module constant says why).
-    MIN_READ_TIMEOUT = MIN_READ_TIMEOUT
     # The read that spans the console's midnight logs how long it waited, so
     # every console reports its own gap every night and one that needs more
     # shows up in the log beside the zero read it gets.  A read that took

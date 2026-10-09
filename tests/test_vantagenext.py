@@ -902,7 +902,7 @@ class TestMidnightGap:
         assert self._lines(caplog) == []
 
     def test_the_minimum_clears_the_longest_gap_measured_by_a_cadence_step(self):
-        assert VantageNext.MIN_READ_TIMEOUT >= 4.19 + 0.25
+        assert vantagenext.MIN_READ_TIMEOUT >= 4.19 + 0.25
         assert VantageNext.MIDNIGHT_GAP_REPORT > 2.25            # the slowest normal cadence
         before, after = VantageNext.MIDNIGHT_GAP_WINDOW
         assert before >= 10 + 2 and after >= 10 + 4.2             # a console up to 10 s off
