@@ -215,8 +215,9 @@ Some guards:
   quarter-second jump; the driver then waits for the next clock check and tries again, and a
   day whose every evening check reads that way keeps its jump one more night.  (A serial or
   USB console reads to a few hundredths of a second, every time, so this is a check that
-  waits, not one that gives up.)  With a `clock_check` near a day the slot opens as the ten
-  minutes after midnight end, and the day's one reading is the decision.
+  waits, not one that gives up.)  With a `clock_check` near the limit, about 23 hours, the
+  slot opens as the ten minutes after midnight end, and the day's one reading is the
+  decision.  Longer than that is warned at startup: days would pass with no check at all.
 
 **It keeps what it learns** in `vantagenext/clock.json`, in WeeWX's archive directory
 (`~/weewx-data/archive/vantagenext/clock.json` for a pip install,
@@ -347,7 +348,7 @@ INFO user.vantagenext: Clock: STEERING, midnight jump 3.25 s, drift -3.39 s a da
 At every check, two lines: the driver's, then WeeWX's.
 
 ```
-INFO user.vantagenext: Clock is about +0.19 s off center (one reading, good to +-0.5 s; steering, midnight jump 3.25 s).
+INFO user.vantagenext: Clock is +0.19 s off center (steering, midnight jump 3.25 s).
 INFO weewx.engine: Clock error is -0.07 seconds (positive is fast)
 ```
 
@@ -356,10 +357,18 @@ The first is the distance from the *centered sawtooth*; the second is the distan
 centered clock is 0 off center and about 1.7 seconds fast.  The `Clock error` WeeWX logs is
 corrected for the half second a truncated reading drops.
 
+Every check reads the clock precisely, to a few hundredths, by catching the console's second
+ticking over: half a second of polling on average, and no LOOP packet is lost to it (measured
+on a spare console: a LOOP request up to 3.3 seconds late gets the missed tick's packet late,
+not lost).  Every check says where the clock stands; only the morning's and the evening's
+readings are kept.  While steering, a line that says `about`, "one reading, good to +-0.5 s",
+is a check on which the link was too slow to catch the tick: one whole-second reading.
+
 {: .note }
-"One reading, good to ±0.5 s" means what it says.  Two checks a moment apart can read half a
-second apart and both be right.  Read the trend over a day, not the difference between two
-lines.
+WeeWX asks for the console's time twice as it starts, a moment apart, so a restart logs two
+of these lines, with the day's reading or decision lines between them when the restart falls
+where one is due.  They agree to a few hundredths; on a slow link they can differ by the
+link's round trip, and one can be an `about` line, half a second off.
 
 When the drift is first learned:
 
@@ -367,7 +376,7 @@ When the drift is first learned:
 INFO user.vantagenext: Clock: drift -3.39 s a day, midnight jump 4.00 s; steering.
 ```
 
-And once a day, in the evening, the decision — a jump kept:
+And once a day, in the evening, after that check's own line, the decision — a jump kept:
 
 ```
 INFO user.vantagenext: Clock is +0.12 s off center (drift -3.39 s a day); midnight jump 3.25 s kept.

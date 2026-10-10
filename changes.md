@@ -12,6 +12,26 @@
   read before every reading, morning and evening, so a write not read back is
   resolved before the next reading is judged.  Nothing to configure; the saved
   clock state carries over.
+- Every clock check reads the console precisely, as only the morning and
+  evening readings did, and logs the clock's distance from center to the
+  hundredth: `Clock is +0.19 s off center (steering, midnight jump 3.25 s)`.
+  Until now the routine line was one whole-second reading, good to half a
+  second, and the two lines WeeWX's startup asks for could differ by that much.
+  A precise reading polls the console for half a second on average, and loses
+  no LOOP packet: a tick missed while the LOOP request waits is delivered
+  late (52 trials on a spare console, 2026-10-07, the request 0 to 3.3
+  seconds late).  The `about` line remains for a check on which the link was
+  too slow to read precisely.
+- A `[StdTimeSynch]` `clock_check` too long for one check to land in every
+  day's decision slot (about 23 hours, with a five-minute archive
+  interval) is warned at startup, naming the limit.  Days would otherwise pass
+  with no check at all: nothing learned, the jump kept.  WeeWX still starts.
+- A link that fails part way through a precise reading's polls, past the
+  driver's retries, leaves the reading the first poll made, a whole-second
+  one, instead of failing the check.  A console that does not answer at all
+  is an error, as it always was.
+- The manual's steering figure makes its evening decision where a check lands
+  under WeeWX's default `clock_check` of four hours.
 
 ## 3.1 2026-10-09
 - No read waits less than 4.5 seconds for the console; a `timeout` under that

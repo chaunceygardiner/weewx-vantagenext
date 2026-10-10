@@ -13,6 +13,7 @@ import json
 import optparse
 import os
 import random
+import re
 
 import pytest
 import weewx
@@ -22,7 +23,7 @@ from vantagenext import ClockState, VantageNext
 
 from common import FakeClock, SteeredConsole, bare_station, clock_station
 
-CHECK = 3590                    # the fleet's clock_check
+CHECK = 14400                   # WeeWX's default clock_check; the fleet's too
 MAX_DRIFT = 5                   # WeeWX's default
 # 14:30 on an ordinary day.
 START = datetime.datetime(2026, 10, 5, 14, 30, 0).timestamp()
@@ -226,13 +227,20 @@ def ideal(t, drift):
 
 
 def off_center(console, drift):
-    """How far the console truly stands from center, by its TRUE drift."""
+    """How far the console truly stands from center, by its TRUE drift,
+    now -- its clock is brought up to the moment first (its error otherwise
+    stands as of its last exchange, up to a check ago and a midnight short)."""
+    console.tick()
     t = console.clock.t
     return console.error - ideal(t, drift)
 
 
 def make(tmp_path, drift, jump, c0=0.0, start=START, **kw):
+    # io_secs: the fleet's serial links (the two polls either side of a second
+    # boundary are 0.018-0.03 s apart in their clock.json); every check reads
+    # precisely, and a finer link only costs more polls a reading.
     clock = FakeClock(start)
+    kw.setdefault('io_secs', 0.012)
     console = SteeredConsole(clock, ideal(start, drift) + c0, drift, jump, **kw)
     station = clock_station(clock, console, _clock=None)
     station._clock_path = str(tmp_path / 'vantagenext' / 'clock.json')
@@ -290,27 +298,32 @@ def test_every_console_is_steered_within_the_band_and_never_set(tmp_path, name, 
     # (plus what a drift learned to a few hundredths can leave).
     late = [e - ideal(t, drift) for t, e in record if t > START + 5 * 86400]
     assert max(abs(c) for c in late) <= VantageNext.JUMP_BAND + 0.1, name
-    # A write every couple of days at most, and only when it changes the jump.
+    # A write every other night at most, on average (a swing back can come
+    # the next night), and only when it changes the jump.
     writes = [j for unused, j in console.jump_writes]
-    assert len(writes) <= 45 / 2
+    assert len(writes) <= (45 + 1) // 2
     assert all(a != b for a, b in zip([jump] + writes, writes))
 
 
 def test_nothing_is_written_until_the_drift_is_learned(tmp_path):
-    # From 14:30: a reading then, one that evening, the next morning's (a
-    # 10-hour span: not yet) and the next evening's (28 hours across a
-    # midnight: learned) -- which is that day's decision, so the first write
-    # comes with it, for the midnight a few hours off.
-    station, console, clock = make(tmp_path, -3.31, 4.00, 0.0)
-    run_days(station, console, clock, 0.8)
+    # From 11:30, checks four hours apart: a reading then, one at 19:30
+    # (the evening's), 23:30's, and the next morning's at 03:30 -- sixteen
+    # hours across a midnight: learned.  (From 14:30 the morning reading
+    # would come at exactly CLOCK_MIN_SPAN, a boundary not worth sitting on.)
+    # Nothing is written until that day's evening decision, at 19:30, for
+    # the midnight a few hours off.
+    station, console, clock = make(tmp_path, -3.31, 4.00, 0.0, start=START - 3 * 3600)
+    run_days(station, console, clock, 0.5)             # to 23:30: no midnight read yet
     assert station._clock.state == ClockState.LEARNING
     assert console.jump_writes == []
-    run_days(station, console, clock, 0.4)
+    run_days(station, console, clock, 0.2)             # 23:30's check, then 03:30's reading
     assert station._clock.state == ClockState.STEERING
+    assert console.jump_writes == []
+    run_days(station, console, clock, 0.55)            # the evening decision
     assert len(console.jump_writes) == 1               # 4.00 leaves +0.69 a day: rewritten
     first = datetime.datetime.fromtimestamp(console.jump_writes[0][0])
-    assert (first.day, first.hour) == (6, 18)
-    run_days(station, console, clock, 0.4)             # across that midnight
+    assert (first.day, first.hour) == (6, 19)
+    run_days(station, console, clock, 0.2)             # across that midnight
     assert console.jumps_made[-1] == (datetime.datetime(2026, 10, 7).timestamp(),
                                       console.jump_writes[0][1])
 
@@ -335,6 +348,122 @@ def test_a_restart_resumes_without_relearning_or_deciding_twice(tmp_path, caplog
     assert again._clock.drift == drift and again._clock.decision_day == day
     assert len(console.jump_writes) == writes
     assert 'learning' not in caplog.text.lower()
+
+
+def said_off_center(caplog):
+    """The off-center distances the driver's own lines said, in order."""
+    return [float(m) for m in re.findall(r'Clock is (?:about )?([-+][\d.]+) s off center',
+                                         caplog.text)]
+
+
+def test_every_check_reads_precisely_and_only_two_a_day_are_kept(tmp_path, caplog):
+    # Every check reads the clock to the hundredth and says so, with no
+    # 'about'; WeeWX's two startup asks, a moment apart, agree; and only the
+    # morning's and the evening's readings are kept.
+    station, console, clock = make(tmp_path, -3.13, 3.25, 0.4)
+    run_days(station, console, clock, 6 - 8 / 24.0)      # ends 06:30: the morning read, the evening off
+    kept = list(station._clock.readings)
+    again = restart(station, console, clock)
+    with caplog.at_level('INFO'):
+        again.getTime()
+        clock.sleep(2)                                   # StdArchive asks once more
+        again.getTime()
+    first, second = said_off_center(caplog)
+    assert first == pytest.approx(second, abs=0.05)
+    caplog.clear()
+    truth = []
+    with caplog.at_level('INFO'):
+        for unused in range(2):                          # the next two checks, before the evening
+            clock.sleep(CHECK)
+            truth.append(off_center(console, -3.13))
+            again.getTime()
+    assert 'Clock is about' not in caplog.text
+    assert said_off_center(caplog) == [pytest.approx(c, abs=0.1) for c in truth]
+    assert again._clock.readings == kept
+    day = datetime.date.fromtimestamp(START) + datetime.timedelta(days=3)
+    assert len(readings_on(again._clock, day)) == 2
+
+
+def test_the_kept_readings_say_where_the_clock_stands_too(tmp_path, caplog):
+    # The morning reading and the evening decision log the check's own line
+    # like any other check; the decision then adds its line.
+    station, console, clock = make(tmp_path, -3.13, 3.25, 0.4)
+    run_days(station, console, clock, 6)
+    assert station._clock.state == ClockState.STEERING
+    day = datetime.date.fromtimestamp(clock.t) + datetime.timedelta(days=1)
+    own = r'Clock is [-+][\d.]+ s off center \(steering, midnight jump'
+    for hour, minute in ((0, 20), (18, 30)):             # the morning reading, the decision
+        clock.sleep(datetime.datetime.combine(day, datetime.time(hour, minute)).timestamp()
+                    - clock.t)
+        console.tick()
+        caplog.clear()
+        with caplog.at_level('INFO'):
+            station.getTime()
+        assert len(re.findall(own, caplog.text)) == 1
+        assert 'Clock is about' not in caplog.text
+    assert len(readings_on(station._clock, day)) == 2
+    assert station._clock.decision_day == day.isoformat()
+    assert re.search(r'midnight jump [\d.]+ s kept|midnight jump [\d.]+ -> [\d.]+ s', caplog.text)
+
+
+def test_a_link_that_fails_mid_reading_leaves_a_coarse_reading(tmp_path, caplog):
+    # The link fails part way through a precise reading's polls, past the
+    # retries: the first poll's reading stands, coarse, and the check goes on.
+    # A link that fails on the first poll raises, as every check always has:
+    # StdTimeSynch catches it; StdArchive's one ask, before the first LOOP
+    # batch, does not, and weewxd restarts rather than run on a console whose
+    # clock it could not check.  The next check reads as usual either way.
+    station, console, clock = make(tmp_path, -3.13, 3.25, 0.0)
+    run_days(station, console, clock, 6)
+    console.fail_gettimes_from = console.gettimes + 1    # the first poll answers; the rest do not
+    with caplog.at_level('INFO'):
+        station.getTime()
+    assert 'link failed part way through a precise reading' in caplog.text
+    assert 'Clock is about' in caplog.text
+    clock.sleep(CHECK)
+    console.fail_gettimes_from = console.gettimes         # nothing answers
+    with pytest.raises(weewx.WeeWxIOError):
+        station.getTime()
+    console.fail_gettimes_from = None
+    caplog.clear()
+    clock.sleep(CHECK)
+    with caplog.at_level('INFO'):
+        station.getTime()
+    assert 'Clock is ' in caplog.text and 'about' not in caplog.text and 'link failed' not in caplog.text
+
+
+def test_a_first_check_whose_state_load_spans_a_second_still_reads_precisely(tmp_path, caplog):
+    # The check's entry poll is the precise reading's first -- except on a
+    # process's first check, where the state load (an EEPROM read) sits
+    # between it and the next poll: a slow one that spans the console's
+    # second would end a seeded reading coarse, so that reading makes its
+    # own first poll after the load.
+    station, console, clock = make(tmp_path, -3.13, 3.25, 0.0)
+    run_days(station, console, clock, 6 - 8 / 24.0)      # 06:30: nothing due
+    again = restart(station, console, clock)
+    read = again.getDayJump
+
+    def slow_read():
+        clock.sleep(0.6)                                  # the console's second passes meanwhile
+        return read()
+    again.getDayJump = slow_read
+    console.tick()                                        # its error as of now, not its last exchange
+    frac = (clock.t + console.error) % 1.0
+    clock.sleep((0.7 - frac) % 1.0)                       # the entry poll reads at .7 of a second
+    with caplog.at_level('INFO'):
+        again.getTime()
+    assert 'Clock is ' in caplog.text and 'about' not in caplog.text
+
+
+def test_a_check_on_a_slow_link_logs_a_coarse_reading(tmp_path, caplog):
+    # A link too slow to catch the console's second ticking over: the check
+    # says so, one reading good to half a second.
+    station, console, clock = make(tmp_path, -3.13, 3.25, 0.0)
+    run_days(station, console, clock, 6)
+    console.slow_hours = (0, 24)
+    with caplog.at_level('INFO'):
+        station.getTime()
+    assert 'Clock is about' in caplog.text and 'good to +-0.5 s' in caplog.text
 
 
 def test_another_console_is_learned_afresh(tmp_path, caplog):
@@ -413,12 +542,13 @@ def test_a_jump_the_driver_did_not_write_is_another_console(tmp_path, caplog):
     station, console, clock = make(tmp_path, -3.31, 3.25, 0.0)
     run_days(station, console, clock, 5)
     assert station._clock.state == ClockState.STEERING
-    while datetime.datetime.fromtimestamp(clock.t).hour != 20:
+    while datetime.datetime.fromtimestamp(clock.t).hour != 22:
         run_days(station, console, clock, CHECK / 86400.0)
+    held = station._clock.jump
     console.eeprom = bytearray(vantagenext.jump_encode(3.50))
     with caplog.at_level('INFO'):
         run_days(station, console, clock, 1)
-    assert 'not the 3.25 s last held: another console' in caplog.text
+    assert 'not the %.2f s last held: another console' % held in caplog.text
     assert station._clock.state == ClockState.LEARNING and station._clock.jump == 3.50
     assert station._clock.drift is None
     run_days(station, console, clock, 3)
@@ -563,7 +693,8 @@ def test_a_decision_made_late_in_the_evening_writes_nothing_until_the_next_eveni
     run_days(station, console, clock, 1)
     assert len(console.jump_writes) == writes + 1
     written = datetime.datetime.fromtimestamp(console.jump_writes[-1][0])
-    assert written.date() == late + datetime.timedelta(days=1) and written.hour == 18
+    # The first check from 18:00: four hours apart from 23:35, that is 19:35.
+    assert written.date() == late + datetime.timedelta(days=1) and written.hour == 19
 
 
 def test_no_write_lands_before_midnight_on_the_spring_forward_day(tmp_path):
@@ -632,7 +763,9 @@ def test_fallback_and_the_backstop_measure_a_time_change_day_for_its_real_length
         station, console, clock = make(tmp_path / change, -3.31, 4.00, 0.0, pair=(0xF3, 0x0E),
                                        start=start.timestamp())
         run_days(station, console, clock, 3)
-        clock.t = datetime.datetime.fromisoformat(change + ' 12:00').timestamp()
+        # 12:05, so that no check lands on 00:00 exactly, in the console's
+        # silence after its midnight.
+        clock.t = datetime.datetime.fromisoformat(change + ' 12:05').timestamp()
         console.error += 30.0               # beyond max_drift: the backstop
         station.getTime()
         station.setTime()
@@ -692,10 +825,9 @@ def test_a_jump_that_cannot_be_read_puts_the_reading_off_to_the_next_check(tmp_p
     assert datetime.datetime.fromtimestamp(first[0]).hour == 18
     assert station._clock.pending_jump is not None
     day = station._clock.reading_day
-    while datetime.datetime.fromtimestamp(clock.t).hour != 23:
+    while datetime.date.fromtimestamp(clock.t).isoformat() == day:
         run_days(station, console, clock, CHECK / 86400.0)
-    run_days(station, console, clock, CHECK / 86400.0)    # to just after midnight
-    console.tick()
+    console.tick()                                        # it is past midnight
     assert console.jumps_made[-1][1] == first[1]          # the console made the new jump
     console.failing_readbacks = 4                         # every try at the jump fails
     with caplog.at_level('INFO'):
@@ -1647,7 +1779,8 @@ def test_a_reading_that_runs_into_an_evening_window_writes_nothing(tmp_path, set
     # The reading stands (the clock itself changes at 24:00), but the jump the
     # clock wants is not written inside the window; the next evening writes.
     set_tz('America/Santiago')
-    station, console, clock = make(tmp_path, -3.31, 3.50, 0.0,
+    # A 3 ms link: the check's first GETTIME must end before the window.
+    station, console, clock = make(tmp_path, -3.31, 3.50, 0.0, io_secs=0.003,
                                    start=datetime.datetime(2026, 3, 29, 14, 30).timestamp())
     run_days(station, console, clock, 5)
     assert station._clock.state == ClockState.STEERING

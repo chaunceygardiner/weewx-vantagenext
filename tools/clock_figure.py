@@ -43,9 +43,11 @@ FIRST_DECISION_DAY = 1
 # Where the clock stands when the figure opens.
 START_OFF_CENTER = 0.0
 # The console makes its jump in the first seconds of the day; the driver
-# decides at its first hourly check after the evening slot opens.
+# decides at its first check after the evening slot opens, which with
+# WeeWX's default clock_check of four hours lands anywhere in the slot's
+# first four hours: here, two hours in.
 JUMP_AT = 20.0
-DECIDE_AT = VantageNext.CLOCK_DECISION_OPENS + 300.0
+DECIDE_AT = VantageNext.CLOCK_DECISION_OPENS + 2 * 3600.0
 
 W, H = 760, 360
 LEFT, RIGHT, TOP, BOTTOM = 58, 18, 40, 46

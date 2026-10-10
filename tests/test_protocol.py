@@ -496,7 +496,25 @@ class TestKeepClock:
         station = clock_station(clock, ClockConsole(clock, 5.0), day_start_jump=3.6)
         assert station.setTime().startswith('Not set: in the 600 seconds after midnight')
 
+    def test_a_link_that_fails_mid_reading_raises_in_fallback(self):
+        # The steered check keeps the first poll's reading, coarse, when a
+        # later poll fails; FALLBACK does not, since a coarse reading from a
+        # link that has just died would be acted on: the holdoff armed and
+        # SETTIME sent down it.  The error leaves getTime, nothing armed.
+        clock = FakeClock(AFTERNOON)
+        console = ClockConsole(clock, 2.0)
+        station = clock_station(clock, console, max_tries=2)
+        holdoff = station._next_unforced_set_ts
+        console.fail_gettimes_from = console.gettimes + 2    # the entry poll and the first answer
+        with pytest.raises(weewx.RetriesExceeded):
+            station.getTime()
+        assert console.sets == [] and station._next_unforced_set_ts == holdoff
+
     def test_set_retries_exceeded(self):
+        # The set's RetriesExceeded leaves getTime, as any I/O error past the
+        # retries does: StdTimeSynch catches it; StdArchive's one ask, before
+        # the first LOOP batch, does not, and weewxd restarts rather than run
+        # on a console whose clock it could not check.
         clock = FakeClock(AFTERNOON)
         console = ClockConsole(clock, 1.45, lose_set_acks=9)
         station = clock_station(clock, console, max_tries=2)

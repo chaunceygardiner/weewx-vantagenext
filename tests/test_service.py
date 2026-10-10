@@ -143,12 +143,12 @@ class TestEngineWiring:
 class TestTimeSynch:
     """weewx.engine's real StdTimeSynch against the driver's clock keeping."""
 
-    def make_engine(self, monkeypatch, tmp_path, c0):
+    def make_engine(self, monkeypatch, tmp_path, c0, clock_check='14400'):
         db_file = str(tmp_path / 'weewx.sdb')
         port = ScriptedWrapper(CONSTRUCTION_READS)
         monkeypatch.setattr(VantageNext, '_port_factory', staticmethod(lambda vp_dict: port))
         config = make_config(db_file)
-        config['StdTimeSynch'] = {'clock_check': '3590', 'max_drift': '5'}
+        config['StdTimeSynch'] = {'clock_check': clock_check, 'max_drift': '5'}
         config['StdArchive']['archive_interval'] = '600.0'   # to_int, as StdArchive parses it
         config['Engine']['Services']['prep_services'] = 'weewx.engine.StdTimeSynch'
         engine = StdEngine(config)
@@ -175,7 +175,7 @@ class TestTimeSynch:
         assert console.jump_writes
         # The engine's clock_check reached the driver, and the decisions are
         # made in the evening slot it sizes.
-        assert engine.console.clock_check == 3590
+        assert engine.console.clock_check == 14400
         assert engine.console.engine_archive_interval == 600
         assert engine.console.engine_archive_delay == 15
         # Under hardware record generation the batch is the console's interval.
@@ -191,6 +191,41 @@ class TestTimeSynch:
         monkeypatch.undo()
         engine.shutDown()
 
+    def test_a_clock_check_too_long_for_the_day_is_warned(self, monkeypatch, tmp_path, caplog):
+        # One check must land in every day's decision slot.  The longest
+        # interval that does is the limit; past it the driver warns at
+        # startup, naming the limit, and never refuses to start.
+        with caplog.at_level('WARNING'):
+            engine, unused_console = self.make_engine(monkeypatch, tmp_path, 0.0, clock_check='86400')
+        console = engine.console
+        limit = console._clock_check_limit()
+        # 23:30 less 00:10, less the console's LOOP batch and the slack.
+        assert limit == 84600 - 600 - (console.archive_interval + 15) - 600
+        assert 'clock_check of 86400 s in weewx.conf is more than the driver can steer the clock with' in caplog.text
+        assert 'allows %d s at most' % limit in caplog.text
+        # The slot arithmetic the limit is about: at the limit the slot opens
+        # as the midnight window ends and the latest a check can land is the
+        # deadline; one second more and the opening cannot move earlier, so
+        # a check can land past it.
+        deadline, window = VantageNext.JUMP_NO_WRITE_AFTER, VantageNext.CLOCK_JUMP_WINDOW
+        for check, fits in ((limit, True), (limit + 1, False)):
+            console.clock_check = check
+            opens = console._decision_opens(console._now())
+            assert opens == window
+            assert (opens + check + console._check_lead() <= deadline) == fits
+        # The warning's own condition, on the same console: at the limit,
+        # none; one second over, warned; over ethernet the clock is set, not
+        # steered -- no slot, no warning however long the interval.
+        for check, ethernet, warned in ((limit, False, False), (limit + 1, False, True),
+                                        (86400, True, False)):
+            console.clock_check, console._ethernet = check, ethernet
+            caplog.clear()
+            with caplog.at_level('WARNING'):
+                assert console._warn_if_clock_check_too_long() == warned
+            assert ('clock_check' in caplog.text) == warned
+        monkeypatch.undo()
+        engine.shutDown()
+
     def test_engine_backstop_centers(self, monkeypatch, tmp_path):
         # Far beyond max_drift: the engine calls setTime, the driver steps to
         # the center, and nothing is set again on the next check.
@@ -199,7 +234,7 @@ class TestTimeSynch:
         assert len(console.sets) == 1
         assert abs(console.error - VantageNext.ideal_clock_error(14.5 * 3600, -3.31)) <= 0.6
         polls = console.gettimes
-        console.clock.sleep(3600)
+        console.clock.sleep(14400)                         # the engine's next check
         engine.dispatchEvent(weewx.Event(weewx.PRE_LOOP))
         assert console.gettimes > polls     # the engine did check again
         assert len(console.sets) == 1

@@ -201,6 +201,8 @@ class ClockConsole(vantagenext.BaseWrapper):
         self.ignore_sets = ignore_sets
         # Once set, answer no more GETTIMEs: the read-back fails.
         self.mute_after_set = mute_after_set
+        # After this many GETTIMEs, answer none: the link fails mid-check.
+        self.fail_gettimes_from = None
         self.pending = []
         self.awaiting_time = False
         self.gettimes = 0
@@ -234,7 +236,8 @@ class ClockConsole(vantagenext.BaseWrapper):
             self.pending = [WAKE]
         elif data == b'GETTIME\n':
             self.gettimes += 1
-            if self.mute_after_set and self.sets:
+            if ((self.mute_after_set and self.sets)
+                    or (self.fail_gettimes_from is not None and self.gettimes > self.fail_gettimes_from)):
                 self.pending = [weewx.WeeWxIOError('no answer')]
                 return
             dt = datetime.datetime.fromtimestamp(math.floor(self.console_time()))

@@ -36,9 +36,10 @@ in this manual is describing a driver you are not running.
 | `Clock stepped` lines in the log | The clock was set: by the backstop (`forced`), or because the driver has fallen back.  A console the driver is steering is never set. |
 | WeeWX logs `Clock error` values of two or three seconds and the driver does nothing | That can be right.  The error is a daily sawtooth as tall as the console's drift; the driver centers it and cannot flatten it.  Judge by the driver's own `off center` line. |
 | The clock is set more often than the driver's log lines account for | `max_drift` is too small and WeeWX is forcing sets.  See [Configuration](configuration.md#the-clock-and-stdtimesynch). |
-| Two startup clock lines, a moment apart, half a second different | Each is one reading, good to ±0.5 s.  See [the clock lines in the log](clock.md#the-clock-lines-in-the-log). |
+| Two startup clock lines, a moment apart | WeeWX asks for the console's time twice as it starts: the clock service's check, then the archive service as it sets its first archive period.  Both are precise readings and agree to a few hundredths; on a slow link they can differ by the link's round trip, and one can be an `about` line, half a second off.  A restart where a reading is due logs that reading's lines between them.  See [the clock lines in the log](clock.md#the-clock-lines-in-the-log). |
 | Short reads in the log | Usually routine.  See [Routine, or a fault?](recovery.md#routine-or-a-fault) |
 | A warning at startup that an option is obsolete and ignored | Delete the option.  See [Obsolete options](configuration.md#obsolete-options). |
+| A warning at startup that `clock_check` is more than the driver can steer the clock with | Lower it to the figure the warning gives, or delete it for WeeWX's default.  See [Configuration](configuration.md#the-clock-and-stdtimesynch). |
 
 ## Log messages
 
@@ -52,10 +53,13 @@ The driver keeping the clock by its midnight jump (see [Keeping the console cloc
 
 | Message | Meaning |
 |---|---|
+| `The [StdTimeSynch] clock_check of ... s in weewx.conf is more than the driver can steer the clock with: the console clock is read on the engine's checks, and one must fall between ten past midnight and half past eleven every day, which with this station's LOOP batch allows ... s at most (WeeWX's default is 14400).  Days without a check learn nothing and keep their midnight jump.` | A WARNING at startup: the interval leaves whole days with no check.  Lower `clock_check` in `[StdTimeSynch]` to the figure given, or delete it for WeeWX's default of four hours. |
+| `Clock: the link failed part way through a precise reading (...); one whole-second reading stands.` | An I/O error, past the driver's retries, on a poll after a reading's first: that first reading stands, coarse, and the check goes on.  It follows the `Max retries exceeded while getting time` line the failed poll logs.  (A console that does not answer the first poll is an error WeeWX handles: its clock service logs it and moves on; at startup weewxd restarts a minute later.) |
 | `Clock: the console's midnight jump is ... s; learning its drift.` | At the first clock check, with nothing learned yet. |
 | `Clock: ..., midnight jump ... s, drift ... s a day.` | At the first clock check: resuming what it had learned. |
 | `Clock: the console's midnight jump is ... s, not the ... s last held: another console, or one set by hand.  Learning its drift afresh.` | The console is not the one the driver knew. |
-| `Clock is about ... s off center (one reading, good to +-0.5 s; ..., midnight jump ... s).` | The routine check.  Nothing needed doing. |
+| `Clock is ... s off center (..., midnight jump ... s).` | The routine check: a precise reading.  Nothing needed doing. |
+| `Clock is about ... s off center (one reading, good to +-0.5 s; ..., midnight jump ... s).` | A check on which the link was too slow to read the clock precisely: one whole-second reading.  Nothing needed doing; if every check reads this way, see [What the driver does](clock.md#what-the-driver-does). |
 | `Clock: drift ... s a day, midnight jump ... s; steering.` | The drift is learned; the driver starts steering. |
 | `Clock is ... s off center (drift ... s a day); midnight jump ... s kept.` | The day's decision: the jump stays. |
 | `Clock is ... s off center (drift ... s a day); midnight jump ... -> ... s.` | The day's decision: a new jump was written, and read back. |
