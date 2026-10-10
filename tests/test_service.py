@@ -149,6 +149,7 @@ class TestTimeSynch:
         monkeypatch.setattr(VantageNext, '_port_factory', staticmethod(lambda vp_dict: port))
         config = make_config(db_file)
         config['StdTimeSynch'] = {'clock_check': '3590', 'max_drift': '5'}
+        config['StdArchive']['archive_interval'] = '600.0'   # to_int, as StdArchive parses it
         config['Engine']['Services']['prep_services'] = 'weewx.engine.StdTimeSynch'
         engine = StdEngine(config)
         # From here on the console keeps time, on a clock the test owns; the
@@ -172,6 +173,16 @@ class TestTimeSynch:
                 console.clock.sleep(3600)
         assert console.sets == []
         assert console.jump_writes
+        # The engine's clock_check reached the driver, and the decisions are
+        # made in the evening slot it sizes.
+        assert engine.console.clock_check == 3590
+        assert engine.console.engine_archive_interval == 600
+        assert engine.console.engine_archive_delay == 15
+        # Under hardware record generation the batch is the console's interval.
+        assert engine.console.record_generation == 'hardware'
+        assert engine.console._loop_batch_interval() == engine.console.archive_interval
+        assert all(18 <= datetime.datetime.fromtimestamp(t).hour < 23
+                   for t, unused_jump in console.jump_writes)
         assert 'Clock error is' in caplog.text
         # What it learned is where production keeps it: the archive directory.
         state = vantagenext.ClockState.load(str(tmp_path / 'archive' / 'vantagenext' / 'clock.json'))

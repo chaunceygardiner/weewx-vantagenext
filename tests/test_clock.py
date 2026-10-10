@@ -3,10 +3,10 @@
 #
 #    See the file LICENSE.txt for your full rights.
 #
-"""Keeping the console clock by its midnight jump (3.0): the pure parts, then
-the real driver run against SteeredConsole for weeks of simulated days, with
-weewx.engine's StdTimeSynch played by run_days (getTime every clock_check,
-setTime past max_drift)."""
+"""Keeping the console clock by its midnight jump (3.0; the decision moved to
+the evening in 3.2): the pure parts, then the real driver run against
+SteeredConsole for weeks of simulated days, with weewx.engine's StdTimeSynch
+played by run_days (getTime every clock_check, setTime past max_drift)."""
 
 import datetime
 import json
@@ -249,8 +249,10 @@ def restart(station, console, clock):
     return again
 
 
-def run_days(station, console, clock, days, record=None):
-    """StdTimeSynch: getTime every CHECK seconds; setTime past MAX_DRIFT."""
+def run_days(station, console, clock, days, record=None, check=CHECK):
+    """StdTimeSynch: getTime every check seconds; setTime past MAX_DRIFT.
+    (check is the engine's interval; the driver's clock_check is told
+    separately, as the loader tells it.)"""
     end = clock.t + days * 86400
     while clock.t < end:
         error = station.getTime() - clock.now()
@@ -258,7 +260,12 @@ def run_days(station, console, clock, days, record=None):
             station.setTime()
         if record is not None:
             record.append((clock.t, console.error))
-        clock.sleep(CHECK)
+        clock.sleep(check)
+
+
+def readings_on(state, day):
+    """The readings taken on a date."""
+    return [r for r in state.readings if datetime.date.fromtimestamp(r[0]) == day]
 
 
 FLEET = [   # drift, jump as set 2026-10-04, off center then
@@ -290,19 +297,22 @@ def test_every_console_is_steered_within_the_band_and_never_set(tmp_path, name, 
 
 
 def test_nothing_is_written_until_the_drift_is_learned(tmp_path):
-    # From 14:30: a reading then, the next day's decision reading (a 10-hour
-    # span: not yet), and its noon reading (22 hours across a midnight:
-    # learned).  The first write is at the decision reading after that.
+    # From 14:30: a reading then, one that evening, the next morning's (a
+    # 10-hour span: not yet) and the next evening's (28 hours across a
+    # midnight: learned) -- which is that day's decision, so the first write
+    # comes with it, for the midnight a few hours off.
     station, console, clock = make(tmp_path, -3.31, 4.00, 0.0)
     run_days(station, console, clock, 0.8)
     assert station._clock.state == ClockState.LEARNING
+    assert console.jump_writes == []
     run_days(station, console, clock, 0.4)
     assert station._clock.state == ClockState.STEERING
-    assert console.jump_writes == []
-    run_days(station, console, clock, 0.6)
-    assert console.jump_writes                         # 4.00 leaves +0.69 a day: rewritten
+    assert len(console.jump_writes) == 1               # 4.00 leaves +0.69 a day: rewritten
     first = datetime.datetime.fromtimestamp(console.jump_writes[0][0])
-    assert (first.day, first.hour) == (7, 0)
+    assert (first.day, first.hour) == (6, 18)
+    run_days(station, console, clock, 0.4)             # across that midnight
+    assert console.jumps_made[-1] == (datetime.datetime(2026, 10, 7).timestamp(),
+                                      console.jump_writes[0][1])
 
 
 def test_two_precise_readings_a_day(tmp_path):
@@ -535,10 +545,10 @@ def test_no_write_lands_in_the_half_hour_before_midnight(tmp_path):
         assert VantageNext.CLOCK_JUMP_WINDOW <= secs < VantageNext.JUMP_NO_WRITE_AFTER
 
 
-def test_a_decision_made_late_in_the_evening_writes_nothing_until_after_midnight(tmp_path):
+def test_a_decision_made_late_in_the_evening_writes_nothing_until_the_next_evening(tmp_path):
     # weewx down all day: its first check comes at 23:35, with the day's
     # decision still to make and a clock that wants a new jump.  Nothing is
-    # written so close to midnight; the decision after it writes.
+    # written so close to midnight; the next evening's decision writes.
     station, console, clock = make(tmp_path, -3.31, 4.00, 0.0)
     run_days(station, console, clock, 4)
     writes = len(console.jump_writes)
@@ -549,8 +559,11 @@ def test_a_decision_made_late_in_the_evening_writes_nothing_until_after_midnight
     station.getTime()
     assert station._clock.decision_day == datetime.date.fromtimestamp(clock.t).isoformat()
     assert len(console.jump_writes) == writes
+    late = datetime.date.fromtimestamp(clock.t)
     run_days(station, console, clock, 1)
-    assert len(console.jump_writes) > writes
+    assert len(console.jump_writes) == writes + 1
+    written = datetime.datetime.fromtimestamp(console.jump_writes[-1][0])
+    assert written.date() == late + datetime.timedelta(days=1) and written.hour == 18
 
 
 def test_no_write_lands_before_midnight_on_the_spring_forward_day(tmp_path):
@@ -666,28 +679,32 @@ def test_a_write_that_lands_as_weewx_stops_is_found_as_its_own(tmp_path, caplog)
     assert again._clock.jump == console.held_jump()
 
 
-def test_a_jump_that_cannot_be_read_puts_the_decision_off_to_the_next_check(tmp_path, caplog):
-    # Day D: the write lands, its read-back fails (PENDING).  At D+1's first
-    # decision check the console's jump cannot be read either: that check
-    # decides nothing, and the next one -- reading it -- resolves the pending
-    # write before anything is tested or fitted, so nothing is relearned.
+def test_a_jump_that_cannot_be_read_puts_the_reading_off_to_the_next_check(tmp_path, caplog):
+    # Day D, evening: the write lands, its read-back fails (PENDING), and the
+    # console makes the new jump at midnight.  At D+1's first morning check
+    # the console's jump cannot be read either: that check takes no reading,
+    # and the next one -- reading it -- resolves the pending write before
+    # anything is tested or fitted, so nothing is relearned.
     station, console, clock = make(tmp_path, -3.31, 4.00, 0.0, fail_readbacks=4)
     while not console.jump_writes:
         run_days(station, console, clock, CHECK / 86400.0)
     first = console.jump_writes[0]
+    assert datetime.datetime.fromtimestamp(first[0]).hour == 18
     assert station._clock.pending_jump is not None
-    day = station._clock.decision_day
+    day = station._clock.reading_day
     while datetime.datetime.fromtimestamp(clock.t).hour != 23:
         run_days(station, console, clock, CHECK / 86400.0)
     run_days(station, console, clock, CHECK / 86400.0)    # to just after midnight
+    console.tick()
+    assert console.jumps_made[-1][1] == first[1]          # the console made the new jump
     console.failing_readbacks = 4                         # every try at the jump fails
     with caplog.at_level('INFO'):
         run_days(station, console, clock, CHECK / 86400.0)
         assert 'could not be read' in caplog.text
-        assert station._clock.decision_day == day          # not a decision
+        assert station._clock.reading_day == day           # not a reading
         assert station._clock.pending_jump is not None
         run_days(station, console, clock, CHECK / 86400.0)
-    assert station._clock.decision_day != day              # the next check decided
+    assert station._clock.reading_day != day               # the next check read
     assert station._clock.pending_jump is None
     assert 'something moved the clock' not in caplog.text
     assert station._clock.state == ClockState.STEERING
@@ -827,14 +844,23 @@ def test_a_refused_write_is_retried_and_the_jump_lands(tmp_path, caplog):
     assert station._clock.jump == console.held_jump()
 
 
-def test_a_write_that_cannot_be_read_back_is_confirmed_at_the_next_decision(tmp_path, caplog):
-    # max_tries reads, all garbled: the read-back raises.  The write landed;
-    # the next decision reads the console and takes it as held from when it
-    # was written, so the fit takes it out at the midnight that made it.
+def test_a_write_that_cannot_be_read_back_is_confirmed_at_the_next_reading(tmp_path, caplog):
+    # max_tries reads, all garbled: the read-back raises.  The write landed,
+    # and the console made it at midnight; the morning reading reads the
+    # console and takes it as held from when it was written, so the fit
+    # takes it out at the midnight that made it.
     station, console, clock = make(tmp_path, -3.31, 4.00, 0.0, fail_readbacks=4)
     with caplog.at_level('INFO'):
-        run_days(station, console, clock, 6)
-    assert 'written but could not be read back' in caplog.text
+        while not console.jump_writes:
+            run_days(station, console, clock, CHECK / 86400.0)
+        assert 'written but could not be read back' in caplog.text
+        assert station._clock.pending_jump is not None
+        written = datetime.datetime.fromtimestamp(console.jump_writes[0][0])
+        run_days(station, console, clock, 0.5)         # past midnight, before any evening
+        assert datetime.datetime.fromtimestamp(clock.t).hour < 18
+        assert station._clock.pending_jump is None
+        assert station._clock.decision_day == written.date().isoformat()
+        run_days(station, console, clock, 5)
     state = station._clock
     assert state.state == ClockState.STEERING
     assert state.write_fails == 0
@@ -845,16 +871,16 @@ def test_a_write_that_cannot_be_read_back_is_confirmed_at_the_next_decision(tmp_
     assert 'something moved the clock' not in caplog.text
 
 
-def test_coarse_readings_in_the_small_hours_only_delay_the_decision(tmp_path):
-    # Every reading from 00:00 to 03:00 is coarse, for weeks: each day's
+def test_coarse_readings_in_the_early_evening_only_delay_the_decision(tmp_path):
+    # Every reading from 18:00 to 21:00 is coarse, for weeks: each day's
     # decision waits for the first precise one, and the console is steered.
-    station, console, clock = make(tmp_path, -3.31, 4.00, 0.0, slow_hours=(0, 3))
+    station, console, clock = make(tmp_path, -3.31, 4.00, 0.0, slow_hours=(18, 21))
     record = []
     run_days(station, console, clock, 20, record)
     assert station._clock.state == ClockState.STEERING
     assert console.jump_writes and console.sets == []
     for t, j in console.jump_writes:
-        assert datetime.datetime.fromtimestamp(t).hour >= 3
+        assert 21 <= datetime.datetime.fromtimestamp(t).hour < 23
     late = [e - ideal(t, -3.31) for t, e in record if t > START + 6 * 86400]
     assert max(abs(c) for c in late) <= VantageNext.JUMP_BAND + 0.1
 
@@ -1327,7 +1353,7 @@ def test_a_reading_in_the_last_seconds_before_midnight_is_no_reading(tmp_path):
     midnight = vantagenext.startOfDay(vantagenext.startOfDay(clock.t) + 36 * 3600)
     clock.sleep(midnight - 30.0 - clock.t)             # 23:59:30
     readings = list(station._clock.readings)
-    station._clock.decision_day = station._clock.learning_day = None
+    station._clock.decision_day = station._clock.reading_day = None
     station.getTime()
     assert station._clock.readings == readings
     assert station._clock.decision_day is None
@@ -1469,3 +1495,223 @@ def test_a_console_in_fallback_says_why_at_every_start(tmp_path, caplog, why):
         again.getTime()
     assert 'Clock: %s; the clock is kept by setting it.' % reason in caplog.text
     assert caplog.text.count('the clock is kept by setting it') == 1
+
+
+# ===============================================================================
+#                 The evening decision (3.2): when the slot opens
+# ===============================================================================
+
+def opens_at(station, when, check, archive_interval=0, archive_delay=0):
+    """_decision_opens as a clock time, 'HH:MM', for a check at `when`.  The
+    table below is for a check that lands on time; the LOOP batch a real
+    check can lag by is added separately."""
+    station.clock_check = check
+    station.engine_archive_interval = archive_interval
+    station.engine_archive_delay = archive_delay
+    secs = station._decision_opens(when.timestamp())
+    return '%02d:%02d' % (secs // 3600, secs % 3600 // 60)
+
+
+@pytest.mark.parametrize('zone, day, check, opens', [
+    # An ordinary day: 18:00 at the fleet's and the default clock_check; earlier
+    # for a longer one, so one check falls before 23:30; and with one near a
+    # day, as the midnight window ends -- the day's first reading decides.
+    ('America/Los_Angeles', datetime.datetime(2026, 10, 9, 10), 3590, '18:00'),
+    ('America/Los_Angeles', datetime.datetime(2026, 10, 9, 10), 14400, '18:00'),
+    ('America/Los_Angeles', datetime.datetime(2026, 10, 9, 10), 6 * 3600, '17:20'),
+    ('America/Los_Angeles', datetime.datetime(2026, 10, 9, 10), 23 * 3600, '00:20'),
+    ('America/Los_Angeles', datetime.datetime(2026, 10, 9, 10), 24 * 3600, '00:10'),
+    # A time change window earlier in the day -- 01:55 .. 03:05 springing
+    # forward, 00:55 .. 02:05 falling back -- is no deadline, asked before
+    # it (the day's first check) or after.
+    ('America/Los_Angeles', datetime.datetime(2027, 3, 14, 0, 30), 14400, '18:00'),
+    ('America/Los_Angeles', datetime.datetime(2026, 11, 1, 0, 20), 14400, '18:00'),
+    # With a clock_check near a day the slot is the whole day and the
+    # fall-back window does fall in it; the floor decides, and the day's
+    # first reading decides either way.
+    ('America/Los_Angeles', datetime.datetime(2026, 11, 1, 0, 20), 23 * 3600, '00:10'),
+    ('America/Los_Angeles', datetime.datetime(2027, 3, 14, 10), 14400, '18:00'),
+    # Chile changes at its midnight: the fall-back window begins at 22:55.
+    ('America/Santiago', datetime.datetime(2026, 4, 4, 10), 14400, '18:00'),
+    ('America/Santiago', datetime.datetime(2026, 4, 4, 10), 6 * 3600, '16:45'),
+    ('America/Santiago', datetime.datetime(2026, 9, 5, 10), 14400, '18:00'),   # 23:55
+    # Easter Island changes at 22:00: windows from 20:55 (fall) and 21:55.
+    ('Pacific/Easter', datetime.datetime(2026, 4, 4, 10), 14400, '16:45'),
+    ('Pacific/Easter', datetime.datetime(2026, 4, 4, 10), 3590, '18:00'),
+    ('Pacific/Easter', datetime.datetime(2026, 9, 5, 10), 14400, '17:45'),
+    # Past the window's start on the same day (inside it the check is refused
+    # before this is asked): it is no deadline any more.
+    ('Pacific/Easter', datetime.datetime(2026, 4, 4, 22, 30), 14400, '18:00'),
+    # Peru has no time change at all.
+    ('America/Lima', datetime.datetime(2026, 4, 4, 10), 14400, '18:00'),
+])
+def test_the_decision_slot_opens_early_enough_for_one_clock_check(tmp_path, set_tz, zone, day,
+                                                                   check, opens):
+    set_tz(zone)
+    station, unused_console, unused_clock = make(tmp_path, -3.31, 3.25, 0.0,
+                                                 start=day.timestamp())
+    assert opens_at(station, day, check) == opens
+
+
+@pytest.mark.parametrize('check, archive_interval, archive_delay, opens', [
+    # StdTimeSynch checks at the start of a LOOP batch, so a check lands up
+    # to a batch -- an archive interval, then archive_delay -- after it is
+    # due: the slot opens that much earlier when the lead would otherwise be
+    # tight.  WeeWX takes an archive_delay of any size, with a warning past
+    # half an interval.
+    (14400, 300, 15, '18:00'), (6 * 3600, 300, 15, '17:14'), (6 * 3600, 300, 900, '17:00'),
+    (6 * 3600, 1800, 15, '16:49'), (6 * 3600, 0, 0, '17:20'), (3590, 1800, 15, '18:00'),
+])
+def test_the_slot_allows_for_a_check_landing_a_batch_late(tmp_path, check, archive_interval,
+                                                         archive_delay, opens):
+    day = datetime.datetime(2026, 10, 9, 10)
+    station, unused_console, unused_clock = make(tmp_path, -3.31, 3.25, 0.0,
+                                                 start=day.timestamp())
+    assert opens_at(station, day, check, archive_interval, archive_delay) == opens
+
+
+@pytest.mark.parametrize('record_generation, console_interval, opens', [
+    # StdArchive runs the batch for the console's interval under hardware
+    # record generation (two hours here: 23:30 less 4 h, 2 h and 10 min), and
+    # for weewx.conf's 300 s under software, or when the console's is unknown.
+    ('hardware', 7200, '17:20'), ('software', 7200, '18:00'), ('hardware', None, '18:00'),
+])
+def test_the_batch_is_the_consoles_interval_under_hardware_record_generation(
+        tmp_path, record_generation, console_interval, opens):
+    day = datetime.datetime(2026, 10, 9, 10)
+    station, unused_console, unused_clock = make(tmp_path, -3.31, 3.25, 0.0,
+                                                 start=day.timestamp())
+    station.record_generation = record_generation
+    if console_interval is not None:
+        station.archive_interval_ = console_interval
+    assert opens_at(station, day, 14400, 300) == opens
+
+
+def test_a_state_file_naming_the_reading_day_as_3_0_did_still_loads():
+    # 3.0 and 3.1 wrote learning_day, for the noon reading that only learned;
+    # 3.2 reads it as reading_day, so no console relearns at the upgrade.
+    old = _valid()
+    old['learning_day'] = old.pop('reading_day')
+    old['learning_day'] = '2026-10-09'
+    state = ClockState.from_dict(old)
+    assert state.reading_day == '2026-10-09' and not hasattr(state, 'learning_day')
+    assert 'learning_day' not in state.to_dict()
+
+
+@pytest.mark.parametrize('start, lengths', [
+    # Fall back, 2026-04-04 (Saturday, 25 hours; window 22:55 .. 00:05).
+    (datetime.datetime(2026, 3, 29, 14, 30), {'2026-04-03': 24, '2026-04-04': 25, '2026-04-05': 24}),
+    # Spring forward, the night of 2026-09-05 (Saturday, 24 hours; window
+    # 23:55 .. 01:05); Sunday begins at 01:00 and is 23 hours long.
+    (datetime.datetime(2026, 8, 30, 14, 30), {'2026-09-05': 24, '2026-09-06': 23, '2026-09-07': 24}),
+])
+def test_chile_decides_before_its_evening_window_on_both_nights(tmp_path, set_tz, monkeypatch,
+                                                                start, lengths):
+    # The console's midnight is where the clock changes.  At WeeWX's default
+    # clock_check every day is decided, in the evening, before the window, for
+    # the real length of the day its midnight ends; the jump written is the
+    # jump made; and the clock is never set.
+    set_tz('America/Santiago')
+    decided = {}
+    choose = vantagenext.choose_jump
+
+    def recording(off_center, drift, jump, day_secs=86400.0):
+        decided[datetime.date.fromtimestamp(clock.t).isoformat()] = (
+            datetime.datetime.fromtimestamp(clock.t), day_secs)
+        return choose(off_center, drift, jump, day_secs)
+    monkeypatch.setattr(vantagenext, 'choose_jump', recording)
+    station, console, clock = make(tmp_path, -3.31, 3.50, 0.3, start=start.timestamp())
+    station.clock_check = 14400
+    run_days(station, console, clock, 12, check=14400)
+    assert station._clock.state == ClockState.STEERING and console.sets == []
+    for day, hours in lengths.items():
+        when, day_secs = decided[day]
+        assert day_secs == hours * 3600, day
+        assert 18 <= when.hour < 23, (day, when)
+        assert not VantageNext.inTimeChangeWindow(station.time_change_windows, when)
+    # Every day from the first decision on was decided.
+    first = min(decided)
+    days = {datetime.date.fromtimestamp(start.timestamp() + d * 86400).isoformat()
+            for d in range(12)}
+    assert {d for d in days if d >= first} <= set(decided)
+    for t, j in console.jump_writes:
+        assert not VantageNext.inTimeChangeWindow(station.time_change_windows,
+                                                  datetime.datetime.fromtimestamp(t))
+        made = [made for midnight, made in console.jumps_made if midnight > t]
+        assert made and made[0] == j
+
+
+def test_a_reading_that_runs_into_an_evening_window_writes_nothing(tmp_path, set_tz):
+    # Chile's fall-back day: the check begins at 22:54:59.99, a hundredth of a
+    # second before the time change window, and its reading ends inside it.
+    # The reading stands (the clock itself changes at 24:00), but the jump the
+    # clock wants is not written inside the window; the next evening writes.
+    set_tz('America/Santiago')
+    station, console, clock = make(tmp_path, -3.31, 3.50, 0.0,
+                                   start=datetime.datetime(2026, 3, 29, 14, 30).timestamp())
+    run_days(station, console, clock, 5)
+    assert station._clock.state == ClockState.STEERING
+    writes = len(console.jump_writes)
+    console.tick()
+    clock.t = datetime.datetime(2026, 4, 4, 22, 54, 59).timestamp() + 0.99
+    console.error += 0.8                         # well off center: a new jump is wanted
+    station = restart(station, console, clock)
+    station.getTime()
+    assert VantageNext.inTimeChangeWindow(station.time_change_windows,
+                                          datetime.datetime.fromtimestamp(clock.t))
+    assert station._clock.decision_day == '2026-04-04'
+    assert len(console.jump_writes) == writes
+    run_days(station, console, clock, 1.1, check=14400)    # Sunday's 21:55 check is 24 h on
+    assert len(console.jump_writes) == writes + 1
+    written = datetime.datetime.fromtimestamp(console.jump_writes[-1][0])
+    assert written.date() == datetime.date(2026, 4, 5) and 18 <= written.hour < 23
+
+
+def test_a_3_0_state_that_decided_after_midnight_makes_no_second_decision_that_day(tmp_path):
+    # Upgrade day: 3.0 decided at 00:10 and wrote tonight's jump; its state
+    # file says so (decision_day today, learning_day yesterday, under the
+    # name 3.0 used for the field).  3.2 reads
+    # the file as it is: one more reading today, no decision until tomorrow
+    # evening, and tonight's jump is the one already chosen.
+    station, console, clock = make(tmp_path, -3.31, 3.25, 0.0)
+    run_days(station, console, clock, 6)
+    while datetime.datetime.fromtimestamp(clock.t).hour != 10:
+        run_days(station, console, clock, CHECK / 86400.0)
+    today = datetime.date.fromtimestamp(clock.t)
+    state = station._clock
+    state.decision_day = today.isoformat()
+    state.reading_day = (today - datetime.timedelta(days=1)).isoformat()
+    state.readings = [r for r in state.readings if datetime.date.fromtimestamp(r[0]) < today]
+    as_3_0 = state.to_dict()
+    as_3_0['learning_day'] = as_3_0.pop('reading_day')
+    with open(station._clock_path, 'w', encoding='utf-8') as f:
+        json.dump(as_3_0, f)
+    held = console.held_jump()
+    station = restart(station, console, clock)
+    run_days(station, console, clock, (24 - 10) / 24.0 - 0.01)      # to 23:45
+    assert station._clock.state == ClockState.STEERING
+    assert len(readings_on(station._clock, today)) == 1
+    assert station._clock.decision_day == today.isoformat()
+    assert console.held_jump() == held and console.jump_writes[-1][0] < clock.t - 12 * 3600
+    tomorrow = today + datetime.timedelta(days=1)
+    run_days(station, console, clock, 1)
+    assert len(readings_on(station._clock, tomorrow)) == 2
+    assert station._clock.decision_day == tomorrow.isoformat()
+    evening = datetime.datetime.fromtimestamp(readings_on(station._clock, tomorrow)[1][0])
+    assert evening.hour == 18
+
+
+def test_a_clock_check_near_a_day_is_decided_at_the_days_first_reading(tmp_path):
+    # One check a day: the slot opens as the midnight window ends, so the
+    # day's one reading is both readings, and the console is steered as every
+    # console was before the evening decision.
+    station, console, clock = make(tmp_path, -3.31, 4.00, 0.0)
+    station.clock_check = 23 * 3600
+    record = []
+    run_days(station, console, clock, 30, record, check=23 * 3600)
+    assert station._clock.state == ClockState.STEERING and console.sets == []
+    assert console.jump_writes
+    state = station._clock
+    assert state.decision_day == state.reading_day
+    late = [e - ideal(t, -3.31) for t, e in record if t > START + 8 * 86400]
+    assert max(abs(c) for c in late) <= VantageNext.JUMP_BAND + 0.1

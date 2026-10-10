@@ -107,7 +107,7 @@ Two options in WeeWX's own `[StdTimeSynch]` section still matter:
 
 | Option | WeeWX default | What it means to this driver |
 |---|---|---|
-| `clock_check` | `14400` | How often, in seconds, WeeWX asks the driver for the console's time — and so how often the driver looks at the clock.  The default suits it: the driver decides once a day, at the first check after ten past midnight, and the clock's distance from center holds all day, so a decision made at four in the morning is as good as one made just after midnight.  A shorter interval changes only how often the log says where the clock stands, and how soon the `max_drift` backstop sees a clock something else has moved. |
+| `clock_check` | `14400` | How often, in seconds, WeeWX asks the driver for the console's time — and so how often the driver looks at the clock.  The default suits it: the driver decides once a day, on the first check from six in the evening, and opens that slot earlier for a longer interval, so that one check always falls in it before half past eleven; with an interval near a day the day's first check decides.  A shorter interval changes only how often the log says where the clock stands, how many chances the evening gets at a [precise reading](clock.md#what-the-driver-does), and how soon the `max_drift` backstop sees a clock something else has moved. |
 | `max_drift` | `5` | A **backstop only**.  Past it, WeeWX tells the driver to set the clock to the center at once — after a power loss, say. |
 
 {: .important }

@@ -132,7 +132,7 @@ keeps the clock without that cost, and solves the specific problems below.
 1. Restart WeeWX, then check the log for the driver announcing itself:
 
    ```
-   INFO user.vantagenext: Driver version is 3.1
+   INFO user.vantagenext: Driver version is 3.2
    ```
 
 The manual has the full steps, including

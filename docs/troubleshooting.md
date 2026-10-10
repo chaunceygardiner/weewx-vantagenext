@@ -16,7 +16,7 @@ description: Diagnosing weewx-vantagenext — confirming the driver is the one r
 Start here: **is this driver the one running?**  At startup it logs
 
 ```
-INFO user.vantagenext: Driver version is 3.1
+INFO user.vantagenext: Driver version is 3.2
 ```
 
 If that line is missing, `station_type` in `[Station]` is not `VantageNext`, and everything
@@ -61,9 +61,9 @@ The driver keeping the clock by its midnight jump (see [Keeping the console cloc
 | `Clock is ... s off center (drift ... s a day); midnight jump ... -> ... s.` | The day's decision: a new jump was written, and read back. |
 | `Clock: a reading ... s from what the drift predicts: something moved the clock.  Learning its drift afresh from this reading.` | A power loss, a set by hand, another console.  Routine after the first. |
 | `Clock: no drift fits the readings (...): something moved the clock.  Learning its drift afresh from this reading.` | The same, while the driver was still learning the drift.  Routine after the first. |
-| `Clock: writing a ... s midnight jump failed: ...` | The write failed on every try — or landed with only the console's answer lost, which the next decision finds by reading the console — or, `it reads back ...`, the console holds something other than what was written.  Two failures running, and the driver falls back. |
-| `Clock: a ... s midnight jump was written but could not be read back (...); the next decision reads what the console holds.` | The next day's decision reads the console's jump and carries on from it. |
-| `Clock: the console's midnight jump could not be read (...); trying again at the next check.` | A read error at the day's decision, on every try: that check decides nothing.  Routine once; every check, and the console or its connection is failing. |
+| `Clock: writing a ... s midnight jump failed: ...` | The write failed on every try — or landed with only the console's answer lost, which the next reading finds by reading the console — or, `it reads back ...`, the console holds something other than what was written.  Two failures running, and the driver falls back. |
+| `Clock: a ... s midnight jump was written but could not be read back (...); the next reading finds what the console holds.` | The next reading, the morning's, reads the console's jump and carries on from it. |
+| `Clock: the console's midnight jump could not be read (...); trying again at the next check.` | A read error before one of the day's two readings, on every try: that check takes no reading.  Routine once; every check, and the console or its connection is failing. |
 | `Clock: ...; the clock is kept by setting it.` | Falling back, and why: logged when a console starts out falling back (its memory holds no valid jump, or it is a WeatherLinkIP, `type = ethernet`, where clock steering is not yet supported), and again each time WeeWX starts while it is falling back, whatever the reason. |
 | `Clock: no longer connected over ethernet; the console's midnight jump is ... s; learning its drift.` | The first start over serial or USB after running over ethernet: steering begins afresh. |
 | `Clock: ....  The console clock will be kept by setting it instead; delete ... to try steering it again.` | A WARNING: falling back, and why.  See [When the driver falls back](clock.md#when-the-driver-falls-back-to-setting-the-clock). |

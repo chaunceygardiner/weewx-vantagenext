@@ -37,14 +37,15 @@ DRIFT = -3.39
 JUMP = 4.00
 DAYS = 7
 # The figure opens at midnight.  The driver learns the drift over the first
-# day, so its first decision is just after the next midnight.
+# day (its readings span a midnight at the second day's morning reading), so
+# its first decision is the second day's evening.
 FIRST_DECISION_DAY = 1
 # Where the clock stands when the figure opens.
 START_OFF_CENTER = 0.0
 # The console makes its jump in the first seconds of the day; the driver
-# decides at its first hourly check after CLOCK_JUMP_WINDOW.
+# decides at its first hourly check after the evening slot opens.
 JUMP_AT = 20.0
-DECIDE_AT = VantageNext.CLOCK_JUMP_WINDOW + 300.0
+DECIDE_AT = VantageNext.CLOCK_DECISION_OPENS + 300.0
 
 W, H = 760, 360
 LEFT, RIGHT, TOP, BOTTOM = 58, 18, 40, 46

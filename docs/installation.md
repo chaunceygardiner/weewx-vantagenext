@@ -113,7 +113,7 @@ The driver announces itself in the log at startup, with its version and the opti
 running with:
 
 ```
-INFO user.vantagenext: Driver version is 3.1
+INFO user.vantagenext: Driver version is 3.2
 INFO user.vantagenext: max_tries          : 4
 INFO user.vantagenext: iss_id             : None
 INFO user.vantagenext: model_type         : 2

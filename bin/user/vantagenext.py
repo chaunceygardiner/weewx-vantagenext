@@ -32,7 +32,7 @@ from weewx.crc16 import crc16
 log = logging.getLogger(__name__)
 
 DRIVER_NAME = 'VantageNext'
-DRIVER_VERSION = '3.1'
+DRIVER_VERSION = '3.2'
 
 int2byte = struct.Struct(">B").pack
 
@@ -578,8 +578,8 @@ class ClockState:
         self.fallback_reason = None
         self.pending_jump = None      # [time written, jump]: a write not yet read back
         self.write_fails = 0          # jump writes in a row that failed
-        self.decision_day = None      # 'YYYY-MM-DD' of the last decision reading
-        self.learning_day = None      # 'YYYY-MM-DD' of the last learning reading
+        self.decision_day = None      # 'YYYY-MM-DD' of the last evening (decision) reading
+        self.reading_day = None       # 'YYYY-MM-DD' of the last reading of any kind
         self.log = []                 # [host time, what was done]
 
     def note(self, now, text):
@@ -607,6 +607,11 @@ class ClockState:
 
         if not isinstance(d, dict) or d.get('version') != cls.VERSION:
             raise ValueError("not a version %d clock state" % cls.VERSION)
+        if 'learning_day' in d and 'reading_day' not in d:
+            # Before 3.2 the day's second reading only learned, and the field
+            # was named for it; now every reading does, and the file carries
+            # over under the new name.
+            d = dict(d, reading_day=d['learning_day'])
         state = cls(None, 0)
         for key in vars(state):
             if key not in d:
@@ -627,7 +632,7 @@ class ClockState:
                 isinstance(state.pending_jump, list) and len(state.pending_jump) == 2
                 and all(number(v) for v in state.pending_jump))),
             ('days', all(x is None or isinstance(x, str)
-                         for x in (state.decision_day, state.learning_day))),
+                         for x in (state.decision_day, state.reading_day))),
             ('log', isinstance(state.log, list) and all(
                 isinstance(r, list) and len(r) == 2 and number(r[0]) and isinstance(r[1], str)
                 for r in state.log)),
@@ -741,6 +746,14 @@ def day_length(t):
     more before its midnight."""
     start, end = day_bounds(t)
     return end - start
+
+
+def clock_secs(t):
+    """The time of day on the clock at t, in seconds: 23:35 is 84900 whatever
+    the day's length.  Not the time since the day began -- on a 23-hour
+    spring-forward day the two differ by an hour."""
+    local = time.localtime(t)
+    return local.tm_hour * 3600 + local.tm_min * 60 + local.tm_sec
 
 
 def midnights_between(t0, t1):
@@ -1489,17 +1502,21 @@ class VantageNext(weewx.drivers.AbstractDevice):
     # its OFF-CENTER distance, which holds all day and changes at midnight by
     # the CREEP, drift + jump.
     #
-    # It steers by the jump, never by SETTIME (3).  Once a day, on the first
-    # precise reading after CLOCK_JUMP_WINDOW, it chooses the jump for the
-    # coming midnight (choose_jump): the one it holds, while that keeps the
-    # clock within JUMP_BAND of center; otherwise the quarter-second that
-    # brings it back, for the length of the day that midnight ends (23 or 25
-    # hours on a time change day).  The band is narrow, so the jump settles
-    # on the two quarter-seconds either side of the drift, held a night or a
-    # few at a time: a write every two days at most, on average.  The drift
-    # is learned (1): the slope of the console's precise readings over
-    # CLOCK_LEARN_DAYS, with the jumps and sets it knows of taken out
-    # (fit_drift).  The console makes
+    # It steers by the jump, never by SETTIME (3).  Once a day, in the
+    # evening -- on the first precise reading after the decision slot opens
+    # (_decision_opens) -- it chooses the jump for the coming midnight, a few
+    # hours off (choose_jump): the one it holds, while that keeps the clock
+    # within JUMP_BAND of center; otherwise the quarter-second that brings it
+    # back, for the length of the day that midnight ends (23 or 25 hours on a
+    # time change day).  The off-center distance moves only at midnight, so
+    # the evening's reading says what the morning's did, and everything
+    # learned since -- a relearn, a set, a sharper drift -- goes into that
+    # night's jump instead of waiting a day.  The band is narrow, so the
+    # jump settles on the two quarter-seconds either side of the drift, held
+    # a night or a few at a time: a write every two days at most, on
+    # average.  The drift is learned (1): the slope of the console's precise
+    # readings over CLOCK_LEARN_DAYS, with the jumps and sets it knows of
+    # taken out (fit_drift).  The console makes
     # the jump it holds -- every console measured, every midnight -- so a
     # precise reading further than CLOCK_MODEL_BREAK from what the readings
     # before it predict (prediction_error) means something it does not know
@@ -1545,12 +1562,17 @@ class VantageNext(weewx.drivers.AbstractDevice):
     #     holds another jump        held from the write, write_fails = 0, resume.
     #                               Otherwise another console, or one set by
     #                               hand: LEARNING, afresh.
-    #   decision, jump read       the console's jump is read first, so the
-    #                               driver acts on the one it holds.  The
-    #                               pending write found there: held from the
-    #                               write, write_fails = 0.  Any other jump is
-    #                               another console, as at start: LEARNING,
-    #                               afresh.
+    #   reading, jump read        the console's jump is read before EVERY
+    #                               reading, the morning's too, so the driver
+    #                               acts on the one it holds: a write made in
+    #                               the evening is used at the midnight before
+    #                               the next reading, and one not read back
+    #                               would otherwise have that reading tested
+    #                               against the jump the console no longer
+    #                               holds.  The pending write found there:
+    #                               held from the write, write_fails = 0.  Any
+    #                               other jump is another console, as at
+    #                               start: LEARNING, afresh.
     #   write, before it          PENDING, and saved: a process stopped
     #                               between the write and the save finds it
     #                               at the next start as its own.
@@ -1562,8 +1584,8 @@ class VantageNext(weewx.drivers.AbstractDevice):
     #   write, read back as no    stays PENDING; write_fails + 1; the next
     #     valid jump                decision finds no valid jump: FALLBACK.
     #   write, read back right    not pending; held from now, write_fails = 0.
-    #   decision, jump unread     not a decision (as a coarse reading is not):
-    #                               the next check tries again, so nothing is
+    #   reading, jump unread      not a reading (as a coarse one is not): the
+    #                               next check tries again, so nothing is
     #                               tested, fitted or written on a jump the
     #                               driver could not read, and a PENDING write
     #                               is always resolved first.
@@ -1596,10 +1618,13 @@ class VantageNext(weewx.drivers.AbstractDevice):
     #                               the next check starts again.
     #     test_a_jump_that_cannot_be_read_at_the_first_check_is_read_at_the_next
     #   clock.json unusable         LEARNING afresh; one from an earlier 3.0
-    #                               build loads, its dropped fields ignored.
+    #                               build loads, its dropped fields ignored,
+    #                               and one from 3.0 or 3.1 loads with its
+    #                               learning_day read as reading_day.
     #     test_an_unusable_state_file_is_relearned_and_replaced
     #     test_the_state_files_of_earlier_3_0_builds_still_load
     #     test_a_state_file_from_the_first_3_0_build_still_loads
+    #     test_a_state_file_naming_the_reading_day_as_3_0_did_still_loads
     #   type = ethernet             FALLBACK, whatever was saved.
     #     test_an_ethernet_console_is_kept_by_setting_it_from_the_first_check
     #   saved on ethernet, not now  LEARNING afresh; FALLBACK, saying why, if
@@ -1613,20 +1638,31 @@ class VantageNext(weewx.drivers.AbstractDevice):
     #     TestKeepClock.test_nothing_is_decided_while_the_jump_may_be_in_progress
     #   LEARNING/STEERING, nothing  one GETTIME, logged.
     #   due                           test_two_precise_readings_a_day
+    #   ... the morning reading due the day's first precise reading after the
+    #   (or the evening's)            midnight window; the evening's, the
+    #                                 first after _decision_opens -- one
+    #                                 reading for both when the first comes
+    #                                 that late, or the slot opens that early
+    #                                 (a clock_check near a day).
+    #     test_the_decision_slot_opens_early_enough_for_one_clock_check
+    #     test_the_slot_allows_for_a_check_landing_a_batch_late
+    #     test_the_batch_is_the_consoles_interval_under_hardware_record_generation
+    #     test_a_clock_check_near_a_day_is_decided_at_the_days_first_reading
+    #     test_a_3_0_state_that_decided_after_midnight_makes_no_second_decision_that_day
     #   ... due: the reading ENDS   no reading: nothing recorded or decided.
     #   in the midnight window        test_a_decision_measured_into_the_midnight_window_is_no_reading
     #     test_a_reading_in_the_last_seconds_before_midnight_is_no_reading
     #   ... due, coarse             no reading; the next check tries again.
     #                               Never precise: nothing decided, nothing
     #                               set but by the max_drift backstop.
-    #     test_coarse_readings_in_the_small_hours_only_delay_the_decision
+    #     test_coarse_readings_in_the_early_evening_only_delay_the_decision
     #     test_a_link_too_slow_for_a_precise_reading_is_left_to_the_backstop
     #     test_a_console_that_goes_coarse_after_being_steered_keeps_its_jump
-    #   ... a decision: the jump    read first.  Unread: no decision.  Not
+    #   ... a reading: the jump     read first.  Unread: no reading.  Not
     #   the console holds             valid: FALLBACK, the held jump as the
     #                                 fitted one.  The pending write: held
     #                                 from the write.  Another: LEARNING.
-    #     test_a_jump_that_cannot_be_read_puts_the_decision_off_to_the_next_check
+    #     test_a_jump_that_cannot_be_read_puts_the_reading_off_to_the_next_check
     #     test_a_jump_that_goes_bad_at_a_decision_is_learned_in_fallback
     #     test_a_jump_found_invalid_at_a_decision_keeps_the_held_one_as_fitted
     #     test_a_write_whose_ack_is_lost_is_confirmed_at_the_next_decision
@@ -1642,19 +1678,24 @@ class VantageNext(weewx.drivers.AbstractDevice):
     #     test_a_fit_with_a_drift_no_console_has_is_no_fit
     #     test_a_fit_whose_jump_took_a_move_at_midnight_is_no_fit
     #   STEERING, a decision        choose_jump; a write, never from
-    #                               JUMP_NO_WRITE_AFTER until midnight.
+    #                               JUMP_NO_WRITE_AFTER until midnight, nor
+    #                               in a time change window (refused as the
+    #                               check begins, and asked again at the
+    #                               write).
     #     test_every_console_is_steered_within_the_band_and_never_set
     #     test_a_console_that_gains_time_is_steered_with_a_negative_jump
     #     test_no_write_lands_in_the_half_hour_before_midnight
     #     test_no_write_lands_before_midnight_on_the_spring_forward_day
-    #     test_a_decision_made_late_in_the_evening_writes_nothing_until_after_midnight
+    #     test_a_decision_made_late_in_the_evening_writes_nothing_until_the_next_evening
     #     test_a_time_change_day_is_steered_for_its_real_length
+    #     test_chile_decides_before_its_evening_window_on_both_nights
+    #     test_a_reading_that_runs_into_an_evening_window_writes_nothing
     #     test_a_write_every_two_days_at_most_whatever_the_drift
     #   STEERING, a write           the bookkeeping above.
     #     test_a_write_refused_on_every_try_counts_once
     #     test_a_write_that_reads_back_wrong_is_logged
     #     test_a_refused_write_is_retried_and_the_jump_lands
-    #     test_a_write_that_cannot_be_read_back_is_confirmed_at_the_next_decision
+    #     test_a_write_that_cannot_be_read_back_is_confirmed_at_the_next_reading
     #     test_a_restart_after_a_write_that_was_not_read_back_keeps_what_was_learned
     #     test_writes_that_read_back_wrong_fall_back
     #   FALLBACK                    FALLBACK's rule (below), learning as it
@@ -1691,8 +1732,23 @@ class VantageNext(weewx.drivers.AbstractDevice):
     #     test_a_state_holding_nan_is_never_saved
     #
     # Readings: one GETTIME at every check, as ever; a precise reading only
-    # for the day's decision (the first check after CLOCK_JUMP_WINDOW) and
-    # the day's learning reading (the first after CLOCK_LEARNING_HOUR).
+    # for the day's MORNING reading (the first check after CLOCK_JUMP_WINDOW;
+    # it only learns) and its EVENING reading (the first after the slot
+    # opens; in STEERING, the decision).  The slot opens at
+    # CLOCK_DECISION_OPENS on the clock, or earlier, so that one clock_check
+    # (from [StdTimeSynch], through the loader) falls between it and the
+    # day's deadline for a write, with CLOCK_DECISION_SLACK and a LOOP batch
+    # to spare (a check lands at the start of a batch, up to an archive
+    # interval and an archive_delay after it is due; the interval is the
+    # console's under hardware record generation, as StdArchive has it).
+    # The deadline is
+    # JUMP_NO_WRITE_AFTER, or the start of a time change window that falls in
+    # the slot, where the change is at the console's midnight
+    # (America/Santiago falls back at 24:00, so its window begins at 22:55;
+    # Pacific/Easter changes at 22:00: 20:55); a window earlier in the day
+    # (01:55 in the United States) takes nothing from the evening.  Never
+    # before the midnight window ends: with a clock_check near a day the
+    # day's first reading is the decision, as every day's was before 3.2.
     #
     # Nothing is decided inside a DST time change window, nor in the MIDNIGHT
     # WINDOW, from CLOCK_PRE_MIDNIGHT seconds before midnight until
@@ -1782,8 +1838,26 @@ class VantageNext(weewx.drivers.AbstractDevice):
     # the jump that could cancel more is out of the EEPROM's range): a fit
     # that says so holds a move (fit_doubt).
     CLOCK_MAX_DRIFT_RATE = 8.0
-    # The day's second precise reading, for the fit, is the first after this hour.
-    CLOCK_LEARNING_HOUR = 12
+    # The day's decision is made on the first precise reading from this time
+    # of day on the clock, in seconds -- or from earlier, so that one
+    # clock_check falls before the day's deadline for a write
+    # (_decision_opens)...
+    CLOCK_DECISION_OPENS = 18 * 3600
+    # ...with this much to spare beyond a LOOP batch: StdTimeSynch checks at
+    # the start of each batch, and a batch runs to the end of the archive
+    # period plus archive_delay -- so a check due at the slot's opening lands
+    # up to a batch later, and a busy engine later still.
+    CLOCK_DECISION_SLACK = 600
+    # How often StdTimeSynch asks for the console's time, and how long a LOOP
+    # batch runs: [StdTimeSynch] clock_check, and [StdArchive]
+    # archive_interval, archive_delay and record_generation (StdArchive runs
+    # the batch for the console's own interval under hardware record
+    # generation, and weewx.conf's under software: _loop_batch_interval),
+    # set by the loader; WeeWX's own defaults where there is none.
+    clock_check = 14400
+    engine_archive_interval = 300
+    engine_archive_delay = 15
+    record_generation = 'hardware'
     # FALLBACK's threshold for a step.
     CLOCK_FALLBACK_THRESHOLD = 1.2
     # Stop this far short of the trigger when stepping to a side of the band.
@@ -2171,14 +2245,14 @@ class VantageNext(weewx.drivers.AbstractDevice):
         return error + moved, "Clock stepped %+d s: error %+.2f -> %+.2f s." % (step, error, error + moved)
 
     def _steer(self, state, now, error, secs_into_day):
-        """LEARNING and STEERING: precise readings for the day's decision and
-        the day's learning reading; the decision itself in STEERING."""
+        """LEARNING and STEERING: the day's morning reading, which learns, and
+        its evening reading, the decision in STEERING."""
         today = datetime.date.fromtimestamp(now).isoformat()
-        decision_due = state.decision_day != today
-        learning_due = (state.learning_day != today
-                        and secs_into_day >= VantageNext.CLOCK_LEARNING_HOUR * 3600)
+        reading_due = state.reading_day != today
+        decision_due = (state.decision_day != today
+                        and clock_secs(now) >= self._decision_opens(now))
         jump = state.jump
-        if not decision_due and not learning_due:
+        if not decision_due and not reading_due:
             off_center = error - VantageNext.ideal_clock_error(secs_into_day, self.clock_drift_secs)
             log.info("Clock is about %+.2f s off center (one reading, good to +-0.5 s; %s, "
                      "midnight jump %.2f s).", off_center, state.state.lower(), jump)
@@ -2194,21 +2268,24 @@ class VantageNext(weewx.drivers.AbstractDevice):
             # (A serial console that never gives a precise one is not kept
             # here at all: WeeWX's max_drift backstop keeps its clock.)
             return error, "Not set: a coarse reading."
+        # The jump the console holds, read before every reading: a write
+        # made in the evening is used at the midnight before the morning
+        # reading, and a write not read back is resolved here.
+        held = self._read_held_jump(state, t)
+        if held is None:
+            # Not read: not a reading.  The next check tries again.
+            self._save_clock()
+            return error, "Not set: the console's midnight jump could not be read."
+        if not held:
+            self._sync_clock()
+            self._save_clock()
+            return error, "Not set: the console's midnight jump is not known."
+        # Another console found there starts a state of its own.
+        state = self._clock
+        # Every reading learns; the day's decision reading is marked too.
+        state.reading_day = today
         if decision_due:
-            held = self._read_held_jump(state, t)
-            if held is None:
-                # Not read: not a decision.  The next check tries again.
-                self._save_clock()
-                return error, "Not set: the console's midnight jump could not be read."
-            if not held:
-                self._sync_clock()
-                self._save_clock()
-                return error, "Not set: the console's midnight jump is not known."
-            # Another console found there starts a state of its own.
-            state = self._clock
             state.decision_day = today
-        if learning_due or decision_due and secs_into_day >= VantageNext.CLOCK_LEARNING_HOUR * 3600:
-            state.learning_day = today
         jump = state.jump
 
         reading = [t, error, gap]
@@ -2239,12 +2316,13 @@ class VantageNext(weewx.drivers.AbstractDevice):
 
         outcome = "Not set: the clock is steered by its midnight jump."
         secs = t - startOfDay(t)
-        # The time of day on the clock, not the time since midnight: on the
-        # 23-hour spring-forward day the two differ by an hour.
-        local = time.localtime(t)
-        clock_secs = local.tm_hour * 3600 + local.tm_min * 60 + local.tm_sec
+        # No write from JUMP_NO_WRITE_AFTER on the clock, nor in a time change
+        # window: refused as the check began, and asked again now, since the
+        # reading took a moment and a window may have begun meanwhile.
         if (decision_due and state.state == ClockState.STEERING
-                and clock_secs < VantageNext.JUMP_NO_WRITE_AFTER):
+                and clock_secs(t) < VantageNext.JUMP_NO_WRITE_AFTER
+                and not VantageNext.inTimeChangeWindow(self.time_change_windows,
+                                                      datetime.datetime.fromtimestamp(t))):
             off_center = error - VantageNext.ideal_clock_error(secs, state.drift)
             new = choose_jump(off_center, state.drift, jump, day_length(t))
             if new == jump:
@@ -2255,11 +2333,50 @@ class VantageNext(weewx.drivers.AbstractDevice):
         self._save_clock()
         return error, outcome
 
+    def _decision_opens(self, t):
+        """The time of day on the clock from which the day's decision is made,
+        in seconds (compared with clock_secs): CLOCK_DECISION_OPENS, or
+        earlier, so that at least one clock_check -- landing up to a LOOP
+        batch and CLOCK_DECISION_SLACK late -- falls between it and the
+        day's DEADLINE for a write.  The deadline is JUMP_NO_WRITE_AFTER, or
+        the start of a time change window that would otherwise fall inside
+        the slot (a zone that changes at its midnight has the window in the
+        evening: 22:55 falling back at 24:00, 20:55 at 22:00); one earlier in
+        the day, already past or still to come, takes nothing from the slot.
+        (A window that began before the slot and ends inside it is not
+        allowed for: no zone changes its clocks between 17:00 and 20:00.)
+        Never before the midnight window ends: with a clock_check near a day
+        it opens as that window ends and the day's first reading decides, as
+        every day's did before the evening decision."""
+        # A LOOP batch: an archive interval, then archive_delay.
+        batch = self._loop_batch_interval() + self.engine_archive_delay
+        lead = self.clock_check + batch + VantageNext.CLOCK_DECISION_SLACK
+        deadline = VantageNext.JUMP_NO_WRITE_AFTER
+        opens = min(VantageNext.CLOCK_DECISION_OPENS, deadline - lead)
+        unused_start, day_end = day_bounds(t)
+        for windows in self.time_change_windows.values():
+            for start, unused_end, unused_shift in windows:
+                start_ts = start.timestamp()
+                if t < start_ts < day_end and opens <= clock_secs(start_ts) < deadline:
+                    deadline = clock_secs(start_ts)
+        opens = min(opens, deadline - lead)
+        return max(opens, VantageNext.CLOCK_JUMP_WINDOW)
+
+    def _loop_batch_interval(self):
+        """The archive interval StdArchive runs each LOOP batch for, by its own
+        rule: the console's, read at startup, under record_generation =
+        hardware (WeeWX's default for a Vantage); weewx.conf's under software,
+        or when the console's is not known."""
+        console_interval = getattr(self, 'archive_interval_', None)
+        if self.record_generation == 'hardware' and console_interval:
+            return console_interval
+        return self.engine_archive_interval
+
     def _read_held_jump(self, state, t):
-        """At a decision: the jump the console holds, read so the driver acts
-        on it.  Returns None if it could not be read (no decision: the next
-        check tries again); False if the console no longer holds a valid one
-        (FALLBACK, learning it); else True."""
+        """Before a reading: the jump the console holds, read so the driver
+        acts on it.  Returns None if it could not be read (no reading: the
+        next check tries again); False if the console no longer holds a valid
+        one (FALLBACK, learning it); else True."""
         try:
             held = self.getDayJump()
         except weewx.WeeWxIOError as e:
@@ -2290,7 +2407,6 @@ class VantageNext(weewx.drivers.AbstractDevice):
                      'unknown' if state.jump is None else '%.2f' % state.jump)
             fresh = ClockState(held, t)
             fresh.note(t, 'LEARNING afresh: the console holds %.2f s' % held)
-            fresh.learning_day = state.learning_day
             self._clock = fresh
             self._sync_clock()
             return True
@@ -2311,7 +2427,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
         except weewx.WeeWxIOError as e:
             back, raised = None, True
             # The data may have landed with only its ACK lost: it stays
-            # PENDING, and the next decision reads what the console holds
+            # PENDING, and the next reading reads what the console holds
             # (finding it there resets the count -- but not a FALLBACK the
             # count has already reached: that takes two writes failing on
             # every try, which is not designed for).
@@ -2320,11 +2436,11 @@ class VantageNext(weewx.drivers.AbstractDevice):
             try:
                 back = self.getDayJump()
             except weewx.WeeWxIOError as e:
-                # Written, perhaps: still PENDING; tomorrow's decision reads
-                # what landed.
+                # Written, perhaps: still PENDING; the next reading, the
+                # morning's, reads what landed.
                 state.note(t, 'jump %.2f written, not read back' % new)
                 log.info("Clock: a %.2f s midnight jump was written but could not be read back "
-                         "(%s); the next decision reads what the console holds.", new, e)
+                         "(%s); the next reading finds what the console holds.", new, e)
                 return "Midnight jump %.2f s written; not yet read back." % new
         if back is not None:
             # Read back, it is known: whatever it holds is not pending.
@@ -3910,8 +4026,17 @@ class VantageNextService(VantageNext, weewx.engine.StdService):
     def __init__(self, engine, config_dict):
         VantageNext.__init__(self, **config_dict[DRIVER_NAME])
         weewx.engine.StdService.__init__(self, engine, config_dict)
-        # Where what the driver learns about the console clock is kept.
+        # Where what the driver learns about the console clock is kept...
         self._clock_path = clock_state_path(config_dict)
+        # ...and how often the engine asks for the console's time, and how
+        # long a LOOP batch runs (the evening decision's slot opens early
+        # enough for one check to fall in it: _decision_opens).  Read as
+        # weewx.engine's StdTimeSynch and StdArchive read them.
+        self.clock_check = to_int(config_dict.get('StdTimeSynch', {}).get('clock_check', 14400))
+        archive_dict = config_dict.get('StdArchive', {})
+        self.engine_archive_interval = to_int(archive_dict.get('archive_interval', 300))
+        self.engine_archive_delay = to_int(archive_dict.get('archive_delay', 15))
+        self.record_generation = archive_dict.get('record_generation', 'hardware').lower()
 
         self.max_loop_gust = 0.0
         self.max_loop_gustdir = None

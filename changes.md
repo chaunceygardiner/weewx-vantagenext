@@ -1,6 +1,19 @@
 # weewx-vantagenext change history
 
-## 3.1 UNRELEASED
+## 3.2 UNRELEASED
+- The day's clock decision moves from just after midnight to the evening.  The
+  jump for the coming midnight is chosen on the first precise reading from six
+  in the evening -- or from earlier, so that one clock_check falls before half
+  past eleven, or before a time change window that evening -- and written a
+  few hours before the console uses it instead of a day before.  The clock's
+  distance from center moves only at
+  midnight, so steady steering is unchanged; a correction after a restart, a
+  clock found moved or a clock set lands a night sooner.  The console's jump is
+  read before every reading, morning and evening, so a write not read back is
+  resolved before the next reading is judged.  Nothing to configure; the saved
+  clock state carries over.
+
+## 3.1 2026-10-09
 - No read waits less than 4.5 seconds for the console; a `timeout` under that
   is raised to it, and the log says so at startup.  A Davis console sends no
   LOOP packets from its own midnight

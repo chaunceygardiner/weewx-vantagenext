@@ -382,7 +382,7 @@ class TestConstants:
                 'no more than %g second from the jump' % VantageNext.JUMP_SWING,
                 'the last %d days of them' % VantageNext.CLOCK_LEARN_DAYS,
                 'span half a day and a midnight',
-                'the first after noon',
+                'the first after six in the evening',
                 'cannot explain by %g seconds' % VantageNext.CLOCK_MODEL_BREAK,
                 'drifts more than %g seconds a day' % VantageNext.CLOCK_MAX_DRIFT_RATE,
                 'outside \u2212%g to +%g seconds' % (-vantagenext.JUMP_MIN, vantagenext.JUMP_MAX),
@@ -400,7 +400,7 @@ class TestConstants:
         ):
             assert phrase in page, phrase
         assert VantageNext.CLOCK_JUMP_WINDOW == 600  # "the first ten minutes of the day"
-        assert VantageNext.CLOCK_MIN_SPAN == 12 * 3600 and VantageNext.CLOCK_LEARNING_HOUR == 12
+        assert VantageNext.CLOCK_MIN_SPAN == 12 * 3600 and VantageNext.CLOCK_DECISION_OPENS == 18 * 3600
         assert VantageNext.JUMP_NO_WRITE_AFTER == 23.5 * 3600
 
     def test_the_batch_size_is_the_drivers(self):
