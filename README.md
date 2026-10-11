@@ -28,9 +28,9 @@ data for a minute or so.  It also supports the Davis sonic anemometer, which the
 driver cannot select.
 
 The built-in Vantage driver is excellent and well supported.  But it keeps the console clock
-by setting it, and every clock set costs the console a minute or so of its transmitter's
-data — on every console measured, every time, whether anything else is wrong or not.  This driver
-keeps the clock without that cost, and solves the specific problems below.
+by setting it, and that cost is paid on every console measured, every time, whether anything
+else is wrong or not.  This driver keeps the clock without it, and solves the specific
+problems below.
 
 > **`weectl device --set-wind-cup` takes different codes with this driver.**  WeeWX's
 > hardware guide documents `0` (small) and `1` (large), which are the built-in driver's
@@ -61,10 +61,11 @@ keeps the clock without that cost, and solves the specific problems below.
   memory, so its error is a daily sawtooth.  The driver learns how fast the console drifts,
   keeps the sawtooth centered on zero, and does it by rewriting that midnight jump — which
   costs the console nothing — instead of setting the clock, which costs it a minute of data
-  every time.  There is nothing to configure.  Clock steering is not yet supported on a
-  WeatherLinkIP: its clock is still set, as before, and so is the clock of a console the driver
-  cannot steer, or one lost to a power failure.  A WeatherLinkIP is being tested, and clock
-  steering may be supported in a future release.  The manual
+  every time.  There is nothing to configure.  A WeatherLinkIP is not steered, and will not
+  be: the logger holds every answer for half a second or more, too slow to read the
+  console's clock to the quarter second steering needs.  Its clock is still set, as before,
+  and so is the clock of a console the driver cannot steer, or one lost to a power failure.
+  The manual
   lists the consoles it has been seen on
   ([Which consoles](https://chaunceygardiner.github.io/weewx-vantagenext/clock.html#which-consoles)).
   → [Keeping the console clock](https://chaunceygardiner.github.io/weewx-vantagenext/clock.html)
@@ -72,7 +73,7 @@ keeps the clock without that cost, and solves the specific problems below.
 - **The Davis sonic anemometer.**  `weectl device --set-wind-cup=3` selects it; see the
   warning above.
 
-- **Sounder ISS detection.**  With `iss_id` left out of weewx.conf, the driver finds the ISS
+- **The ISS found properly.**  With `iss_id` left out of weewx.conf, the driver finds the ISS
   in the console's transmitter table considering only channels the console is listening
   to, and logs the id it settled on.  The built-in driver considers every channel, and a
   free channel below the real ISS can win.
@@ -153,7 +154,7 @@ full history is in the
 
 A hermetic pytest suite lives in the `tests` directory of the repository (not the release
 zip).  **No weather station is needed**: console I/O is simulated at the byte level, so
-the driver's real wake-up, acknowledgement, checksum and retry logic runs against scripted
+the driver's real wake-up, acknowledgment, checksum and retry logic runs against scripted
 console responses, and the suite is safe to run anywhere.  It covers the console protocol,
 packet decoding, the clock keeping (weeks of simulated days against a console that drifts,
 slews in its midnight jump, falls silent at midnight and truncates its time, as the real

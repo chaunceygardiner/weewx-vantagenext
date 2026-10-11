@@ -2,7 +2,7 @@
 title: Upgrading
 layout: default
 nav_order: 10
-description: What existing weewx-vantagenext users need to do when upgrading — the clock options retired and max_drift in 3.0, the live iss_id line in 2.3, [[dst_periods]] in 2.0, and the WeeWX 5 requirement.
+description: What existing weewx-vantagenext users need to do when upgrading — nothing for 3.2 and 3.1 beyond a clock_check warning, the clock options retired and max_drift in 3.0, the live iss_id line in 2.3, [[dst_periods]] in 2.0, and the WeeWX 5 requirement.
 ---
 
 # Upgrading
@@ -27,6 +27,16 @@ to change by hand, newest first.  Read down to the release you are coming from.
 The full history is in the
 [change history](https://github.com/chaunceygardiner/weewx-vantagenext/blob/master/changes.md).
 
+## To 3.2 and 3.1
+
+Nothing to change.  Since 3.2 the driver chooses each night's midnight jump in the evening
+rather than just after the midnight before, and reads the clock precisely at every clock
+check; a `[StdTimeSynch]` `clock_check` longer than about 23 hours, more than the driver can
+steer with, is now warned at startup, naming the limit — shorten it.  A WeatherLinkIP
+(`type = ethernet`) is not steered, and will not be: its clock is kept by setting it, as
+before, from the first clock check.  3.1 raised the LOOP read timeout's floor to 4.5 seconds
+for the console's silence at its own midnight; nothing to do for it either.
+
 ## To 3.0
 
 The driver now keeps the console clock by steering the console's own midnight jump, and
@@ -40,9 +50,10 @@ does not set it; see [Keeping the console clock](clock.md).  It needs no clock o
    it to make the clock more accurate.  It is a backstop only now, and too small a value
    forces clock sets that are not needed.
 
-For about a day after the upgrade (half a day to a day and a half, depending on the hour WeeWX
-restarts) the driver is learning the console's drift and changes nothing; from then on it
-writes a new midnight jump to the console when the clock needs one.  It keeps what it learns in `vantagenext/clock.json` in the archive directory.
+For about a day after the upgrade — from under a day to a day and three quarters, depending
+on the hour WeeWX restarts — the driver is learning the console's drift and changes nothing;
+from then on it writes a new midnight jump to the console, in the evening, when the clock
+needs one.  It keeps what it learns in `vantagenext/clock.json` in the archive directory.
 
 Expect the `Clock error` lines WeeWX logs to read about half a second higher than they did:
 they are no longer half a second slow.  Expect, too, a clock that is deliberately *fast*
@@ -51,8 +62,8 @@ after midnight and *slow* before it: the driver centers its daily sawtooth on ze
 `weectl device --set-time` now steps the clock to that center rather than to the computer's
 time, and may decline to set it at all; it says which.
 
-On a WeatherLinkIP (`type = ethernet`) clock steering is not yet supported: its clock is kept
-by setting it, as before, from the first clock check.
+A console connected over ethernet (`type = ethernet`) is not steered: its clock is kept by
+setting it, as before, from the first clock check.
 
 ## To 2.3
 

@@ -530,7 +530,7 @@ class TestKeepClock:
         acted = 0
         for phase in PHASES:
             clock = FakeClock(AFTERNOON + phase)
-            console = ClockConsole(clock, 1.60, io_secs=0.5)
+            console = ClockConsole(clock, 1.60, reply_secs=0.75)
             clock_station(clock, console).getTime()
             acted += len(console.sets)
             assert abs(console.error) <= 1.60 + 1e-6, (phase, console.error)
@@ -539,17 +539,28 @@ class TestKeepClock:
     def test_coarse_reading_inside_threshold_is_left_alone(self):
         for phase in PHASES:
             clock = FakeClock(AFTERNOON + phase)
-            console = ClockConsole(clock, 1.15, io_secs=0.5)
+            console = ClockConsole(clock, 1.15, reply_secs=0.75)
             clock_station(clock, console).getTime()
             assert console.sets == [], phase
 
     def test_coarse_step_goes_to_the_center(self):
+        # A coarse reading is good to half a second and says nothing about
+        # where in its second the console is, so the whole second the set
+        # names is the wrong one now and then: from 2.40 the step of -2
+        # lands at 0.4, or a whole second either side of it -- never
+        # further out than it started.  (Through a WeatherLinkIP, as
+        # measured: the answer lands about three quarters of a second after
+        # the console stamps it.)
+        landings = set()
         for phase in PHASES:
             clock = FakeClock(AFTERNOON + phase)
-            console = ClockConsole(clock, 2.40, io_secs=0.5)
+            console = ClockConsole(clock, 2.40, reply_secs=0.75)
             clock_station(clock, console).getTime()
             assert len(console.sets) == 1, phase
-            assert abs(console.error) <= 1.0, (phase, console.error)
+            assert abs(console.error - 0.4) <= 1.0 + 1e-6, (phase, console.error)
+            assert abs(console.error) < 2.40, (phase, console.error)
+            landings.add(round(console.error, 1))
+        assert 0.4 in landings
 
     def test_unforced_sets_are_rate_limited(self):
         clock = FakeClock(AFTERNOON)
@@ -1444,6 +1455,20 @@ class TestInit:
         monkeypatch.setattr(VantageNext, '_port_factory', staticmethod(lambda vp_dict: port))
         station = VantageNext(iss_id='2', **connection)
         assert station._ethernet is ethernet
+        # GETTIME's time on the wire: eight bytes of ten bits at the port's
+        # rate, 19200 for a WeatherLinkIP's serial side and by default.
+        assert station._gettime_wire_secs == pytest.approx(8 * 10 / 19200)
+
+    def test_the_wire_time_follows_the_ports_baudrate(self, monkeypatch):
+        port = ScriptedWrapper([WAKE, ACK, b'\x10'] + setup_reads()[1:])
+        port.baudrate = 9600
+        monkeypatch.setattr(VantageNext, '_port_factory', staticmethod(lambda vp_dict: port))
+        station = VantageNext(type='serial', port='/dev/vantage', baudrate='9600', iss_id='2')
+        assert station._gettime_wire_secs == pytest.approx(8 * 10 / 9600)
+
+    def test_a_serial_port_refuses_a_baudrate_that_is_not_positive(self):
+        with pytest.raises(weewx.ViolatedPrecondition):
+            vantagenext.SerialWrapper('/dev/null', 0, 4, 1.2, 0.5)
 
     def test_the_retired_clock_options_are_obsolete_and_ignored(self, monkeypatch, caplog):
         port = ScriptedWrapper([WAKE, ACK, b'\x10'] + setup_reads()[1:])

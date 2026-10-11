@@ -236,11 +236,14 @@ def off_center(console, drift):
 
 
 def make(tmp_path, drift, jump, c0=0.0, start=START, **kw):
-    # io_secs: the fleet's serial links (the two polls either side of a second
-    # boundary are 0.018-0.03 s apart in their clock.json); every check reads
-    # precisely, and a finer link only costs more polls a reading.
+    # A serial link as the fleet's: a command's eight bytes take 4 ms to
+    # reach the console at 19200 baud and the answer 5 ms to come back, so
+    # a wakeup and a GETTIME cost about 17 ms (the two polls either side of
+    # a second boundary are 0.018-0.03 s apart in the fleet's clock.json).
+    # Every check reads precisely; a finer link only costs more polls.
     clock = FakeClock(start)
-    kw.setdefault('io_secs', 0.012)
+    kw.setdefault('io_secs', 0.004)
+    kw.setdefault('reply_secs', 0.005)
     console = SteeredConsole(clock, ideal(start, drift) + c0, drift, jump, **kw)
     station = clock_station(clock, console, _clock=None)
     station._clock_path = str(tmp_path / 'vantagenext' / 'clock.json')
@@ -298,10 +301,14 @@ def test_every_console_is_steered_within_the_band_and_never_set(tmp_path, name, 
     # (plus what a drift learned to a few hundredths can leave).
     late = [e - ideal(t, drift) for t, e in record if t > START + 5 * 86400]
     assert max(abs(c) for c in late) <= VantageNext.JUMP_BAND + 0.1, name
-    # A write every other night at most, on average (a swing back can come
-    # the next night), and only when it changes the jump.
+    # A write about every other night (a console whose drift falls between
+    # two quarter-second jumps alternates them, and a swing back can come
+    # the next night), never nightly, and only when it changes the jump.
+    # The count is not exact: a night whose reading falls within a few
+    # milliseconds of the band's edge decides either way, so a change of
+    # that size anywhere in the timing moves a count by a night or two.
     writes = [j for unused, j in console.jump_writes]
-    assert len(writes) <= (45 + 1) // 2
+    assert len(writes) <= 45 // 2 + 2
     assert all(a != b for a, b in zip([jump] + writes, writes))
 
 
@@ -617,8 +624,8 @@ def test_an_inconsistent_jump_pair_falls_back_at_once(tmp_path):
 def test_a_link_too_slow_for_a_precise_reading_is_left_to_the_backstop(tmp_path):
     # Never seen on serial (readings take a few tens of ms), so not designed
     # for: nothing is decided or written, and WeeWX's max_drift backstop
-    # keeps the clock.
-    station, console, clock = make(tmp_path, -3.31, 2.50, 0.0, io_secs=0.2)
+    # keeps the clock.  (Slow as a WeatherLinkIP is: the answer lands late.)
+    station, console, clock = make(tmp_path, -3.31, 2.50, 0.0, reply_secs=0.75)
     record = []
     run_days(station, console, clock, 10, record)
     assert station._clock.state == ClockState.LEARNING
@@ -926,7 +933,10 @@ def test_fallback_with_no_jump_in_memory_learns_the_drift_and_the_jump(tmp_path)
 
 
 def test_fallback_over_ethernet_learns_the_drift_from_coarse_readings(tmp_path):
-    station, console, clock = make(tmp_path, -3.31, 4.00, 0.0, io_secs=0.2)
+    # A WeatherLinkIP as measured (2026-10-10): the command reaches the
+    # console at once, its answer lands about three quarters of a second
+    # later -- never a precise reading.
+    station, console, clock = make(tmp_path, -3.31, 4.00, 0.0, reply_secs=0.75)
     station._ethernet = True
     run_days(station, console, clock, 14)
     state = station._clock
@@ -1196,6 +1206,33 @@ def test_an_ethernet_console_is_kept_by_setting_it_from_the_first_check(tmp_path
     assert again._clock.fallback_reason == VantageNext.ETHERNET_REASON
 
 
+def test_a_reading_is_stamped_when_the_time_is_asked_for_not_when_the_answer_lands(tmp_path):
+    # Through a WeatherLinkIP the console's answer lands about three quarters
+    # of a second after the console stamped it.  Stamped on arrival, every
+    # reading read the console that much slow; stamped at the send, the
+    # reading carries the console's truncation and nothing else.
+    station, console, clock = make(tmp_path, -3.39, 2.50, 0.0, reply_secs=0.75)
+    console_ts, now = station._poll_console()
+    # The stamp is the send plus the command's wire time -- eight bytes of
+    # ten bits at 19200 baud, written here as the physics, not the driver's
+    # constant -- and nowhere near the arrival.  (The fake charges io_secs
+    # before the console sees a write, so the send was that much before
+    # gettime_asked_at.)
+    sent = console.gettime_asked_at - console.io_secs
+    assert now == pytest.approx(sent + 8 * 10 / 19200, abs=1e-6)
+    assert now < console.gettime_asked_at + 0.5 < clock.t
+    # Over many readings at every phase of the second, the coarse estimate
+    # (whole seconds + 0.5) averages to the true error, not 0.75 s below it.
+    errors = []
+    for unused in range(40):
+        clock.sleep(0.371)
+        console.tick()
+        console_ts, now = station._poll_console()
+        errors.append(console_ts + 0.5 - now - console.error)
+    assert abs(sum(errors) / len(errors)) < 0.08
+    assert max(abs(e) for e in errors) < 0.55
+
+
 def test_a_console_moved_off_ethernet_is_steered_again(tmp_path, caplog):
     station, console, clock = make(tmp_path, -3.39, 3.25)
     station._ethernet = True
@@ -1208,6 +1245,52 @@ def test_a_console_moved_off_ethernet_is_steered_again(tmp_path, caplog):
     assert 'no longer connected over ethernet' in caplog.text
     run_days(serial, console, clock, 4)
     assert serial._clock.state == ClockState.STEERING
+
+
+def test_a_console_moved_off_ethernet_with_a_3_0_state_file_is_steered_again(tmp_path, caplog):
+    # 3.0 and 3.1 saved the ethernet reason with a different ending.  The
+    # reason is recognized by its opening words, so their state files are
+    # read as this release's own: moved off ethernet, the console relearns.
+    station, console, clock = make(tmp_path, -3.39, 3.25)
+    station._ethernet = True
+    run_days(station, console, clock, 2)
+    assert station._clock.state == ClockState.FALLBACK
+    with open(station._clock_path, encoding='utf-8') as f:
+        saved = json.load(f)
+    assert saved['fallback_reason'] == VantageNext.ETHERNET_REASON
+    saved['fallback_reason'] = ("the console is connected over ethernet (a WeatherLinkIP), which "
+                                "waits tcp_send_delay after every command: too slow to read its "
+                                "clock precisely enough to steer it")
+    with open(station._clock_path, 'w', encoding='utf-8') as f:
+        json.dump(saved, f)
+    serial = restart(station, console, clock)
+    with caplog.at_level('INFO'):
+        serial.getTime()
+    assert serial._clock.state == ClockState.LEARNING
+    assert 'no longer connected over ethernet' in caplog.text
+
+
+def test_a_console_still_on_ethernet_with_a_3_0_state_file_gets_this_releases_reason(tmp_path, caplog):
+    # Same old state file, console still on ethernet: the same reason, in
+    # this release's words, in the log and the state file.
+    station, console, clock = make(tmp_path, -3.39, 3.25)
+    station._ethernet = True
+    run_days(station, console, clock, 2)
+    old_text = VantageNext.ETHERNET_REASON_MARK + " (a WeatherLinkIP), which waits tcp_send_delay"
+    with open(station._clock_path, encoding='utf-8') as f:
+        saved = json.load(f)
+    saved['fallback_reason'] = old_text
+    with open(station._clock_path, 'w', encoding='utf-8') as f:
+        json.dump(saved, f)
+    again = restart(station, console, clock)
+    again._ethernet = True
+    with caplog.at_level('INFO'):
+        again.getTime()
+    assert again._clock.state == ClockState.FALLBACK
+    assert again._clock.fallback_reason == VantageNext.ETHERNET_REASON
+    assert VantageNext.ETHERNET_REASON in caplog.text and 'waits tcp_send_delay' not in caplog.text
+    with open(station._clock_path, encoding='utf-8') as f:
+        assert json.load(f)['fallback_reason'] == VantageNext.ETHERNET_REASON
 
 
 # ===============================================================================

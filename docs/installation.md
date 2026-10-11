@@ -136,7 +136,8 @@ If those lines are missing, WeeWX is still running another driver: check `statio
 
 One section, `[VantageNext]`, and nothing else: no services, no reports, no database.
 Four options are written live — `type`, `port`, `host` and `driver` — and two are written
-commented out, each showing the driver's own default: `loop_request` and `iss_id`.  The
+commented out: `loop_request`, showing the driver's own default, and `iss_id`, showing an
+example of the form, since left out the driver finds the ISS itself.  The
 options hardly anyone changes are not written at all.  [Configuration](configuration.md)
 covers every option, written or not.
 

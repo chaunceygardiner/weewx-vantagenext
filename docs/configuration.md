@@ -22,8 +22,8 @@ can be left alone.
 
 ## Options shown commented out
 
-The installer writes two options to `weewx.conf` **commented out**, with the driver's own
-default shown:
+The installer writes two options to `weewx.conf` **commented out**, one showing the driver's
+own default and the other an example of the form:
 
 ```
     # The type of LOOP packet to request: 1 = LOOP1; 2 = LOOP2; 3 = both
@@ -46,7 +46,7 @@ commented, and they go on working as they did.
 
 | Option | Default | Meaning |
 |---|---|---|
-| `type` | `serial` | How the console is connected: `serial` (serial or USB) or `ethernet` (a WeatherLinkIP or a serial-to-ethernet bridge).  Clock steering is not yet supported on a WeatherLinkIP: its clock is kept by setting it.  See [Keeping the console clock](clock.md#when-the-driver-falls-back-to-setting-the-clock). |
+| `type` | `serial` | How the console is connected: `serial` (serial or USB) or `ethernet` (a WeatherLinkIP or a serial-to-ethernet bridge).  A console connected over ethernet is not steered — a WeatherLinkIP never will be — and its clock is kept by setting it.  See [Keeping the console clock](clock.md#when-the-driver-falls-back-to-setting-the-clock). |
 | `port` | none | The serial port, for example `/dev/ttyUSB0`.  Required when `type = serial`. |
 | `host` | none | The console's IP address or hostname.  Required when `type = ethernet`. |
 | `baudrate` | `19200` | Serial baud rate.  It must match the console's own setting. |
@@ -57,7 +57,7 @@ commented, and they go on working as they did.
 | `model_type` | `2` | `1` = Vantage Pro, `2` = Vantage Pro2.  Only the owner of an original Vantage Pro sets it: a Vue is detected, whatever this says. |
 | `timeout` | `4.5` | Seconds to wait for the console to answer before giving up on a read.  A value under 4.5 is raised to 4.5, and the log says so at startup (3.1): the console sends nothing for about three seconds after its own midnight, and the old default of four gave up on that silence just as it ended; see [the recovery page](recovery.md#the-consoles-midnight). |
 | `wait_before_retry` | `1.2` | Seconds to wait before trying a failed exchange again. |
-| `command_delay` | `0.5` | Seconds to wait after sending a command before looking for its acknowledgement. |
+| `command_delay` | `0.5` | Seconds to wait after sending a command before looking for its acknowledgment. |
 | `max_tries` | `4` | How many times to try an exchange before giving up on it. |
 | `driver` | none | Always `user.vantagenext`.  It is how WeeWX finds this driver. |
 
@@ -103,7 +103,9 @@ The driver keeps the console clock with no options of its own: it reads the cons
 midnight jump from the console, learns how fast the clock drifts, and keeps it centered by
 rewriting the jump.  [Keeping the console clock](clock.md) explains how.
 
-Two options in WeeWX's own `[StdTimeSynch]` section still matter:
+Two options in WeeWX's own `[StdTimeSynch]` section still matter — and the driver reads
+`archive_interval`, `archive_delay` and `record_generation` from `[StdArchive]` to size the
+decision slot the first of them must land a check in:
 
 | Option | WeeWX default | What it means to this driver |
 |---|---|---|

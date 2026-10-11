@@ -186,17 +186,28 @@ class ClockConsole(vantagenext.BaseWrapper):
     """A console that keeps time the way the Envoys were measured to: GETTIME
     answers in whole seconds, truncated; SETTIME replaces the whole second and
     the sub-second tick carries on regardless.  `error` is console minus host.
-    Every write costs io_secs of the FakeClock, which is what makes a serial
-    line (ms) differ from a WeatherLinkIP (tcp_send_delay on every write).
+    Every write costs io_secs of the FakeClock before the console sees it
+    (the command's time on the wire, 4 ms for GETTIME at 19200, or more on a
+    link that buffers the command), and a
+    GETTIME answer takes reply_secs more to land: ~5 ms on a serial line,
+    ~0.75 s through a WeatherLinkIP, whose delay is on the reply (measured
+    2026-10-10), so a reading stamped on arrival read the console about
+    that much slow.  Only the GETTIME answer models the hold: a real
+    WeatherLinkIP holds every answer, but no decision in the driver depends
+    on how late the other ACKs land.
 
     The driver's real wakeup / ACK / CRC logic runs against it."""
 
     def __init__(self, clock, error, io_secs=0.003, lose_set_acks=0, ignore_sets=False,
-                 mute_after_set=False):
+                 mute_after_set=False, reply_secs=0.0):
         super().__init__(wait_before_retry=0.0, command_delay=0.0)
         self.clock = clock
         self.error = error
         self.io_secs = io_secs
+        # Seconds between the console stamping a GETTIME answer and the host
+        # reading it: ~0.005 on a serial line, ~0.75 through a WeatherLinkIP.
+        self.reply_secs = reply_secs
+        self.gettime_asked_at = None       # host time the last GETTIME reached the console
         self.lose_set_acks = lose_set_acks
         self.ignore_sets = ignore_sets
         # Once set, answer no more GETTIMEs: the read-back fails.
@@ -240,9 +251,11 @@ class ClockConsole(vantagenext.BaseWrapper):
                     or (self.fail_gettimes_from is not None and self.gettimes > self.fail_gettimes_from)):
                 self.pending = [weewx.WeeWxIOError('no answer')]
                 return
+            self.gettime_asked_at = self.clock.t
             dt = datetime.datetime.fromtimestamp(math.floor(self.console_time()))
             self.pending = [ACK, with_crc(struct.pack(
                 '<bbbbbB', dt.second, dt.minute, dt.hour, dt.day, dt.month, dt.year - 1900))]
+            self.clock.t += self.reply_secs     # the answer is on its way
         elif data == b'SETTIME\n':
             self.awaiting_time = True
             self.pending = [ACK]
@@ -288,8 +301,8 @@ class SteeredConsole(ClockConsole):
     EEBWR data writes are refused (NAK), storing nothing.  fail_readbacks:
     that many EEPROM reads straight after a write that landed fail.
     lose_write_acks: that many EEBWR data writes land, but their ACK is
-    lost.  slow_hours: (from, to) console hours in which every exchange is
-    slow enough that no reading is precise."""
+    lost.  slow_hours: (from, to) console hours in which every GETTIME answer
+    lands too late for a reading to be precise."""
 
     def __init__(self, clock, error, drift, jump, garble_writes=0,
                  pair=None, nak_writes=0, fail_readbacks=0, slow_hours=None, lose_write_acks=0,
@@ -309,8 +322,8 @@ class SteeredConsole(ClockConsole):
         self.fail_readbacks = fail_readbacks
         self.failing_readbacks = 0
         self.slow_hours = slow_hours
+        self.fast_reply = self.reply_secs       # the link's own, outside the slow hours
         self.lose_write_acks = lose_write_acks
-        self.fast_io = self.io_secs
 
     def held_jump(self):
         return vantagenext.jump_decode(tuple(self.eeprom))
@@ -388,7 +401,7 @@ class SteeredConsole(ClockConsole):
             return
         if self.slow_hours is not None:
             hour = datetime.datetime.fromtimestamp(self.console_time()).hour
-            self.io_secs = 0.2 if self.slow_hours[0] <= hour < self.slow_hours[1] else self.fast_io
+            self.reply_secs = 0.75 if self.slow_hours[0] <= hour < self.slow_hours[1] else self.fast_reply
         if self.awaiting_eeprom:
             self.awaiting_eeprom = False
             self.clock.t += self.io_secs

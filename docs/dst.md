@@ -72,7 +72,9 @@ after one.
 
 ## Inside a window
 
-Three things change, and only inside a window:
+Three things change inside a window — and one thing beside it: a window that falls in the
+evening, in a zone whose clocks change at midnight as Chile's do, moves that day's jump decision earlier so
+that it is made before the window opens ([Keeping the console clock](clock.md)).  Inside a window:
 
 - **The console clock is not set**, nor its midnight jump decided or rewritten.  Not by the
   driver's own clock keeping, not by WeeWX's `max_drift` backstop, and not by

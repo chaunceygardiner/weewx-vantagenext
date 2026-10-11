@@ -17,14 +17,14 @@ VantageNext began as a copy of WeeWX's Vantage driver and is kept comparable wit
 for line, so that fixes can travel in both directions.  This page is the whole list of
 where the two differ.  "The built-in driver" means the one in WeeWX 5.5.
 
-Anything not listed here is the same: the LOOP and archive decoding, the hardware catch-up,
-the loop-gust bookkeeping, the units, the observation names.
+Anything not listed here is the same: the LOOP and archive decoding, bar the two LOOP2 fields
+below, the hardware catch-up, the loop-gust bookkeeping, the units, the observation names.
 
 ## Behavior
 
 | | Built-in driver | This driver |
 |---|---|---|
-| **Setting the clock** | When the error passes `max_drift`, sets the console to the computer's time plus a fixed 0.75 seconds. | Never, in normal running: keeps the clock's daily sawtooth centered on zero by rewriting the console's own midnight jump, which costs no reception.  It learns the console's drift itself.  Clock steering is not yet supported on a WeatherLinkIP: it, and a console the driver cannot steer, are set as before.  See [Keeping the console clock](clock.md). |
+| **Setting the clock** | When the error passes `max_drift`, sets the console to the computer's time plus a fixed 0.75 seconds. | Never, in normal running: keeps the clock's daily sawtooth centered on zero by rewriting the console's own midnight jump, which costs no reception.  It learns the console's drift itself.  A WeatherLinkIP is not steered, and will not be: it, and a console the driver cannot steer, are set as before.  See [Keeping the console clock](clock.md). |
 | **The clock error WeeWX logs** | The console's truncated reading: half a second slow, on average. | Corrected for the truncation. |
 | **Daylight-saving time changes** | No special handling. | The clock is not set, and misread times are corrected, inside a window around each change.  See [Daylight-saving time changes](dst.md). |
 | **A truncated LOOP packet** (serial and USB) | Counts against the batch; enough errors and the error reaches WeeWX, which restarts the driver after 60 seconds. | The batch is dropped and a new one started at once.  See [Read errors and recovery](recovery.md). |
@@ -34,6 +34,7 @@ the loop-gust bookkeeping, the units, the observation names.
 | **Rain in a LOOP packet** | Day-rain subtraction, inline. | `weewx.wxformulas.calculate_delta`; a momentary dashed day-rain value neither crashes the driver nor loses rain. |
 | **The year 2028** | The console's year byte is packed signed, which holds no more than 127: from 2028-01-01 every clock set raises an error that WeeWX does not catch, and the console's year reads as 1772. | Unsigned (3.0). |
 | **Startup logging** | Quiet. | The options in force, the time change windows and the ISS id, at INFO. |
+| **The console's midnight** | The console is silent for about four seconds at its own midnight, and a four-second read timeout logs a read error for it nightly. | The read timeout's floor is 4.5 seconds, and a `LOOP waited ... s` line records each night's wait (3.1).  See [The console's midnight](recovery.md#the-consoles-midnight). |
 
 ## Decoding
 
@@ -59,7 +60,8 @@ the loop-gust bookkeeping, the units, the observation names.
 | | Built-in driver | This driver |
 |---|---|---|
 | **Section of `weewx.conf`** | `[Vantage]` | `[VantageNext]` |
-| **`loop_batch`, `max_batch_errors`** | How large a LOOP batch is, and how many errors one may have. | Not read: the batch is 200, and errors are [handled differently](recovery.md). |
+| **`loop_batch`, `max_batch_errors`** | How large a LOOP batch is, and how many errors one may have. | Not read: the batch is 200 at most, cut at each archive boundary, and errors are [handled differently](recovery.md). |
+| **`timeout`** | Default 4 seconds; any value is used. | Default 4.5 seconds, and a smaller value is raised to 4.5 and logged at startup: the console is silent for about four seconds at its own midnight (3.1).  See [The console's midnight](recovery.md#the-consoles-midnight). |
 
 ## A utility
 

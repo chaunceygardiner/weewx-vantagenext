@@ -89,6 +89,11 @@ class ShortReadIOError(weewx.WeeWxIOError):
 
 class BaseWrapper:
     """Base class for (Serial|Ethernet)Wrapper"""
+    # The rate of the console's serial side: GETTIME's time on the wire comes
+    # from it.  SerialWrapper replaces it with the configured baudrate; a
+    # WeatherLinkIP's serial side runs at this rate.
+    baudrate = 19200
+
 
     def __init__(self, wait_before_retry, command_delay, timeout=MIN_READ_TIMEOUT):
 
@@ -304,6 +309,8 @@ class SerialWrapper(BaseWrapper):
         super().__init__(wait_before_retry=wait_before_retry,
                                             command_delay=command_delay, timeout=timeout)
         self.port = port
+        if baudrate <= 0:
+            raise weewx.ViolatedPrecondition("Invalid baudrate %r" % baudrate)
         self.baudrate = baudrate
 
     @guard_termios
@@ -612,6 +619,12 @@ class ClockState:
             # was named for it; now every reading does, and the file carries
             # over under the new name.
             d = dict(d, reading_day=d['learning_day'])
+        # 3.0 and 3.1 worded the ethernet reason differently: the same
+        # reason, in this release's words, so it compares equal everywhere
+        # and reads right from weectl --info.
+        reason = d.get('fallback_reason')
+        if isinstance(reason, str) and reason.startswith(VantageNext.ETHERNET_REASON_MARK):
+            d = dict(d, fallback_reason=VantageNext.ETHERNET_REASON)
         state = cls(None, 0)
         for key in vars(state):
             if key not in d:
@@ -1064,6 +1077,8 @@ class VantageNext(weewx.drivers.AbstractDevice):
 
         # Open it up:
         self.port.openPort()
+        # GETTIME's time on the wire, at the rate the port was opened with.
+        self._gettime_wire_secs = VantageNext.GETTIME_BYTES * 10.0 / self.port.baudrate
 
         # Read the EEPROM and fill in properties in this instance
         self._setup()
@@ -1492,8 +1507,23 @@ class VantageNext(weewx.drivers.AbstractDevice):
     #   4. GETTIME answers in whole seconds, truncated.  Polling it until the
     #      second changes gives the error to half the gap between the two
     #      readings either side of the change (_measure_clock_error): a
-    #      PRECISE reading, a few ms on a serial line.  A connection too slow
+    #      PRECISE reading, a hundredth of a second or so on a serial line.  A connection too slow
     #      for that (a WeatherLinkIP) only ever gets a COARSE one, +-0.5 s.
+    #      A reading is stamped with the host's time when the command's last
+    #      byte reached the console (3.2): the send, plus GETTIME's eight
+    #      bytes at the port's baud rate (4 ms at 19200).  That is when the
+    #      console reads its clock; what becomes of the answer afterwards
+    #      does not matter.  On a serial line the answer is back 5 ms later,
+    #      so send, midpoint and arrival all agree to a few ms; through a
+    #      WeatherLinkIP it lands about three quarters of a second later
+    #      whatever tcp_send_delay is (measured 2026-10-10 at 0.5 and 0.05),
+    #      and stamped on arrival every reading read such a console about
+    #      three quarters of a second slow.  That the WeatherLinkIP holds the
+    #      ANSWER and not the
+    #      command was measured too (2026-10-10): the console emits GETTIME's
+    #      ACK at once and its eight data bytes 5 ms later, and through the
+    #      logger all nine arrived in one piece, 0.74-0.82 s after the send,
+    #      as did the answers to two commands sent 0.15 s apart.
     #
     # 1 and 2 make the error a sawtooth: it falls by |drift| over the day and
     # rises by the jump at midnight.  The driver keeps it CENTERED on zero,
@@ -1513,8 +1543,8 @@ class VantageNext(weewx.drivers.AbstractDevice):
     # learned since -- a relearn, a set, a sharper drift -- goes into that
     # night's jump instead of waiting a day.  The band is narrow, so the
     # jump settles on the two quarter-seconds either side of the drift, held
-    # a night or a few at a time: a write every two days at most, on
-    # average.  The drift is learned (1): the slope of the console's precise
+    # a night or a few at a time: a write about every other night at most,
+    # on average.  The drift is learned (1): the slope of the console's precise
     # readings over CLOCK_LEARN_DAYS, with the jumps and sets it knows of
     # taken out (fit_drift).  The console makes
     # the jump it holds -- every console measured, every midnight -- so a
@@ -1631,6 +1661,12 @@ class VantageNext(weewx.drivers.AbstractDevice):
     #                               the jump is not valid.
     #     test_a_console_moved_off_ethernet_is_steered_again
     #     test_a_console_moved_off_ethernet_with_no_valid_jump_says_why_it_falls_back
+    #   saved by 3.0/3.1 on         the same reason in this release's words
+    #   ethernet, in their words    (from_dict), then as the two rows above:
+    #                               FALLBACK still on ethernet, LEARNING
+    #                               afresh off it.
+    #     test_a_console_still_on_ethernet_with_a_3_0_state_file_gets_this_releases_reason
+    #     test_a_console_moved_off_ethernet_with_a_3_0_state_file_is_steered_again
     #
     # AT A CHECK (getTime, every clock_check).
     #   the console does not        WeeWxIOError, in any state, as a check
@@ -1814,7 +1850,17 @@ class VantageNext(weewx.drivers.AbstractDevice):
     #                                     error; on a coarse one, to the
     #                                     center, and only when beyond the
     #                                     threshold whatever the dropped
-    #                                     fraction was.
+    #                                     fraction was.  A coarse step names
+    #                                     the whole second the clock is in
+    #                                     from a reading good to half a
+    #                                     second, so now and then it lands a
+    #                                     whole second off its target, either
+    #                                     way -- never further out than it
+    #                                     started, but it can be left past
+    #                                     the threshold, to be stepped again
+    #                                     at the next check the holdoff
+    #                                     allows (two sets for one correction).
+    #                                     TestKeepClock.test_coarse_step_goes_to_the_center
     #   forced (setTime)                  step to the center.
     #
     # Its state is two timestamps, each an earliest time for something.
@@ -1847,7 +1893,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
     # the clock this close to center...  A quarter-second jump can land the
     # clock no closer than 0.125 s, and a console whose drift falls midway
     # between two quarter-seconds creeps 0.125 s a night on either: this
-    # leaves it room for a night and a half, so it switches every other night
+    # leaves it room for a night and a half, so it switches about every other night
     # rather than every night.  Writes cost no reception, and a night's jump
     # is made to a few hundredths of a second.
     JUMP_BAND = 0.19
@@ -1934,9 +1980,13 @@ class VantageNext(weewx.drivers.AbstractDevice):
     # Connected over ethernet (a WeatherLinkIP): the clock is kept by setting
     # it, never steered.
     _ethernet = False
-    ETHERNET_REASON = ("the console is connected over ethernet (a WeatherLinkIP), which waits "
-                       "tcp_send_delay after every command: too slow to read its clock precisely "
-                       "enough to steer it")
+    # The reason is saved in clock.json; 3.0 and 3.1 wrote it with a different
+    # ending, and ClockState.from_dict maps a saved reason that opens with
+    # the mark to this sentence, so equality is all any comparison needs.
+    ETHERNET_REASON_MARK = "the console is connected over ethernet"
+    ETHERNET_REASON = (ETHERNET_REASON_MARK + " (a WeatherLinkIP), which holds every answer "
+                       "for half a second or more: too slow to read its clock precisely enough "
+                       "to steer it")
 
     @staticmethod
     def _now():
@@ -2041,11 +2091,17 @@ class VantageNext(weewx.drivers.AbstractDevice):
                 continue
         raise weewx.RetriesExceeded("Max retries exceeded while writing the midnight jump")
 
+    # How long GETTIME takes to reach the console: eight bytes, ten bits
+    # each, at the port's baud rate (set from the port in __init__).
+    GETTIME_BYTES = len(b'GETTIME\n')
+    _gettime_wire_secs = GETTIME_BYTES * 10.0 / BaseWrapper.baudrate
+
     def _poll_console(self):
         """One GETTIME.  Returns the console's time (whole seconds) and the
-        host's time on reading it."""
-        console_ts = self.getConsoleTime().timestamp()
-        return console_ts, self._now()
+        host's time when the command reached it (not when the answer
+        arrived: see _read_console_time)."""
+        console_time, read_ts = self._read_console_time()
+        return console_time.timestamp(), read_ts
 
     def _measure_clock_error(self, first=None, coarse_on_failure=False):
         """Poll GETTIME until the console's second changes.  Returns
@@ -2764,13 +2820,23 @@ class VantageNext(weewx.drivers.AbstractDevice):
     def getConsoleTime(self):
         """Return the time on the console, corrected for a possible one-hour DST
         misinterpretation when inside a time change window."""
+        return self._read_console_time()[0]
+
+    def _read_console_time(self):
+        """One GETTIME.  Returns the console's time (a datetime, corrected as
+        getConsoleTime's) and the host's time when the command reached the
+        console: the send plus the command's time on the wire.  That is the
+        moment the console reads its clock, so it is what a reading is
+        stamped with, however long the answer then takes to land (see
+        "Keeping the console clock", 4)."""
 
         # Try up to max_tries times:
         for unused_count in range(self.max_tries):
             try:
                 # Wake up the console...
                 self.port.wakeup_console(max_tries=self.max_tries)
-                # ... request the time...
+                # ... request the time, noting when it reaches the console...
+                read_ts = self._now() + self._gettime_wire_secs
                 self.port.send_data(b'GETTIME\n')
                 # ... get the binary data. No prompt, only one try:
                 _buffer = self.port.get_data_with_crc16(8, max_tries=1)
@@ -2786,7 +2852,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
                 adjusted_date_time = datetime.datetime.fromtimestamp(adjusted_time)
                 was_returning = datetime.datetime(yr + 1900, mon, day, hr, minute, sec)
                 log.debug('was returning(%s): %r, now returning(%s): %r' % (type(was_returning), was_returning, type(adjusted_date_time), adjusted_date_time))
-                return adjusted_date_time
+                return adjusted_date_time, read_ts
 
             except weewx.WeeWxIOError:
                 # Caught an error. Keep retrying...

@@ -45,8 +45,9 @@ small here, not large.
 
 The reason is in the console, not the driver.  Newer firmware keeps the wind cup type in
 two bits of EEPROM address `0xC3`, with three possible values, rather than in the single
-bit at `0x2B` that the built-in driver writes, and it does not keep that bit in step: consoles
-on 3.83 and 3.88 set to *other* at `0xC3` still hold *large* at `0x2B`.  The third value is
+bit at `0x2B` that the built-in driver writes, and it does not keep that bit in step: the
+seven Envoys this driver was measured on, firmware 3.83 and 3.88, set to *other* at `0xC3`,
+all hold *large* at `0x2B`.  The third value is
 what makes the sonic anemometer selectable.
 
 Older firmware has only the bit at `0x2B`, so this driver uses whichever location the
@@ -82,7 +83,8 @@ Wind cup type set to 3 (other).
 
 `weectl device --info` reports the current setting as `small`, `large` or `other`, read
 from wherever the console keeps it.  `unknown` means `0xC3` holds no type yet: on a Vantage
-Pro2, set one.
+Pro2, set one.  `<Unavailable>` means the console did not answer the firmware query the
+location is chosen by.
 Check the wind speeds after changing it.
 
 ## The Davis sonic anemometer

@@ -19,7 +19,7 @@ restart the driver.  This driver's aim is never to let one get that far.
 
 ## When read errors happen
 
-Seven consoles, 34 days, 282 truncated reads — and every one of them is accounted for:
+Seven consoles, 34 days in August and September 2026, 282 truncated reads — and every one of them is accounted for:
 
 | When | Share | |
 |---|---|---|
@@ -47,8 +47,9 @@ Truncated reads are the visible side of something the archive records more preci
 Every archive record carries `rxCheckPercent`: how many of the ISS's packets the console
 received in that interval, against the number it should have.  A sound link runs at
 98 to 100 percent, record after record, so a single low record is easy to spot — and on
-these consoles it means one of two things: a **clock set**, which costs the console about a
-minute of its transmitter's packets every time, or **midnight**, when for two years about one
+these consoles it means one of two things: a **clock set** — the `max_drift` backstop's, or on
+a console the driver keeps by setting — which costs the console about a minute of its
+transmitter's packets every time, or **midnight**, when for two years about one
 night in fifteen the console lost its transmitter for a few minutes — whether it still does,
 now that the archive download comes later after midnight, is [not yet settled](clock.md#midnight).
 Both, and how we know the packets really are lost, are in
@@ -56,9 +57,10 @@ Both, and how we know the packets really are lost, are in
 
 ## How LOOP data is read
 
-The driver asks the console for LOOP packets in batches of 200 — a console will not supply
-an unlimited run — which at one packet every two seconds is a new batch every six or seven
-minutes.  Each packet is 99 bytes ending in a checksum.
+The driver asks the console for LOOP packets in batches of 200 at most — a console will not
+supply an unlimited run — but WeeWX ends each batch at the archive boundary, `archive_delay`
+after the interval turns, and the driver asks for a fresh one then: with a five-minute interval,
+a new batch every five and a quarter minutes.  Each packet is 99 bytes ending in a checksum.
 
 ## A truncated read
 
@@ -91,14 +93,15 @@ INFO user.vantagenext: genDavisLoopPackets: repeated bad read.
 ## The console's midnight
 
 A Vantage console stops sending LOOP packets at its own midnight and starts again about three
-seconds later, on its own, with no command from the computer.  That is the whole of it, and it
-is enough to produce the commonest line in a healthy station's log.
+seconds later, on its own, with no command from the computer.  That is the whole of it, and
+before 3.1 it was enough to produce the commonest line in a healthy station's log.
 
 The console sends a LOOP packet every two seconds, on a schedule it keeps itself: whatever
 moment the driver asks for a batch, within seconds the packets are back on the console's own
 grid, about a tenth of a second past each of its odd seconds.  So the last packet before the
 console's midnight comes at about 0.9 seconds before it, every night, and the first one after
-comes at about 3.2 seconds past it, every night.  Sixteen console midnights on a Vantage Pro2,
+comes at about 3.2 seconds past it, every night.  Sixteen console midnights on a Vantage Pro2 in
+October 2026,
 made one after another by setting its clock to 23:57 and streaming across each, put the gap at
 4.13 to 4.19 seconds, with one of 3.90 — and seven Envoys at one site log their midnight
 truncated read at 3.06 seconds after their own midnight, which is the four-second `timeout`
@@ -127,15 +130,19 @@ INFO user.vantagenext: LOOP waited 4.17 s for the console's first packet after i
 ```
 
 One line a night, and the number in it is the one the timeout is judged against.  Expect
-about 4.2 seconds.  A console that one night needs longer than 4.5 seconds gets the
+about 4.2 seconds.  On the eight consoles that ran 3.1 through its first night, 2026-10-09,
+every one logged the wait, between 3.3 and 4.2 seconds, and none a truncated read — at
+midnight or at any hour of the day after.  One night settles nothing; whether the truncated
+read is gone for good is a question for the weeks ahead.  A console that one night needs longer than 4.5 seconds gets the
 `got 0` line instead, exactly as before 3.1, and the `LOOP waited` line is missing that night
 — the two together say by how much the console overran.  If that happens on more than the odd
 night, [report it](https://github.com/chaunceygardiner/weewx-vantagenext/issues) with the
 lines; the figure was chosen from a console that never came within a quarter of a second of
 it.
 
-The line is placed by the computer's clock, which assumes the console's is within ten seconds
-of it, as it is on any console the driver keeps; and it is measured from the day's real
+The line is placed by the computer's clock — a read begun within fifteen seconds before the
+computer's midnight or twenty-five after it counts — which assumes the console's clock is close
+to it, as it is on any console the driver keeps; and it is measured from the day's real
 boundaries, so on a time-change night it falls where the day actually turns, even in a zone
 whose change is at midnight.
 

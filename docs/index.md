@@ -52,9 +52,10 @@ keeps the clock without that cost, and solves the specific problems below.
   a daily sawtooth.  The driver learns the console's drift and keeps that sawtooth centered
   on zero by rewriting the jump, which costs nothing, rather than setting the clock, which
   costs the console a minute of its transmitter's data every time.  There is nothing to
-  configure.  Clock steering is not yet supported on a WeatherLinkIP, which is set as before;
-  so are a console the driver cannot steer and a clock lost to a power failure.  A WeatherLinkIP
-  is being tested, and clock steering may be supported in a future release.  See [Keeping the console clock](clock.md).
+  configure.  A WeatherLinkIP is not steered, and will not be: the logger holds every
+  answer for half a second or more, too slow to read the console's clock to the quarter
+  second steering needs.  It is set as before; so are a console the driver cannot steer and
+  a clock lost to a power failure.  See [Keeping the console clock](clock.md).
 - **The Davis sonic anemometer.**  Newer console firmware keeps the wind cup type in a
   place, and with a third value, that the built-in driver does not write.
   `weectl device --set-wind-cup=3` selects it here; on older firmware the driver uses the
