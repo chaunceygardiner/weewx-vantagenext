@@ -25,7 +25,7 @@ Seven consoles, 34 days in August and September 2026, 282 truncated reads — an
 |---|---|---|
 | In the minutes after a clock set | 62% | Three clock sets in four were followed by them: typically four in a row, the first about five seconds after the set, the last half a minute later — and once, 36 of them over more than three minutes.  Measured before 3.0, which [no longer sets the clock](clock.md) in normal running, so this cause is gone — except on a console the driver keeps by setting, a WeatherLinkIP or one it cannot steer, after each set. |
 | Two to four seconds after midnight | 35% | One, as the console rolled its day over — the same moment its [daily clock jump](clock.md#how-a-consoles-clock-works) begins.  On some consoles most nights, on others rarely, on one never.  Measured before 3.1, which [waits out that silence](#the-consoles-midnight), so this cause is gone too. |
-| Two to four minutes after midnight | 3% | Eight of them, on four consoles — most on nights the console had also [lost its transmitter at midnight](#what-it-costs-in-reception), and busy reacquiring it.  Whether these continue is not yet known: they go with that loss, which has come [less often](clock.md#midnight) since the archive download moved later after midnight, on too few nights yet to say. |
+| Two to four minutes after midnight | 3% | Eight of them, on four consoles — most on nights the console had also [lost its transmitter at midnight](#what-it-costs-in-reception), and busy reacquiring it.  That loss [continues](clock.md#midnight); whether these do is not yet known — four consoles lost their transmitter on the night into 11 October 2026, with 3.1's longer read, and none of them logged one. |
 | At any other time | none | |
 
 In 277 of the 282 the console sent nothing at all; in the other five, part of a packet.
@@ -37,7 +37,8 @@ still set the clock.  That is why it no longer does — it
 [waits out the console's midnight silence](#the-consoles-midnight) as well.  Of the three
 causes in the table, at most the smallest is left on a console the driver steers: the
 occasional read, about one night a month, when the console has lost its transmitter at
-midnight and is busy reacquiring it — if that loss [continues](clock.md#midnight) at all.  (A
+midnight and is busy reacquiring it.  That loss [continues](clock.md#midnight); whether these
+reads still come with it is not yet known.  (A
 console the driver [keeps by setting](clock.md) still has the first cause, after each set.)
 That is what makes a truncated read at any *other* time worth a look.
 
@@ -49,9 +50,9 @@ received in that interval, against the number it should have.  A sound link runs
 98 to 100 percent, record after record, so a single low record is easy to spot — and on
 these consoles it means one of two things: a **clock set** — the `max_drift` backstop's, or on
 a console the driver keeps by setting — which costs the console about a minute of its
-transmitter's packets every time, or **midnight**, when for two years about one
-night in fifteen the console lost its transmitter for a few minutes — whether it still does,
-now that the archive download comes later after midnight, is [not yet settled](clock.md#midnight).
+transmitter's packets every time, or **midnight**, when about one night in fifteen the
+console loses its transmitter for a few minutes — as it did for two years, and
+[still does](clock.md#midnight) with the archive download moved later after midnight.
 Both, and how we know the packets really are lost, are in
 [What a clock set costs](clock.md#what-a-clock-set-costs).
 
@@ -130,10 +131,12 @@ INFO user.vantagenext: LOOP waited 4.17 s for the console's first packet after i
 ```
 
 One line a night, and the number in it is the one the timeout is judged against.  Expect
-about 4.2 seconds.  On the eight consoles that ran 3.1 through its first night, 2026-10-09,
-every one logged the wait, between 3.3 and 4.2 seconds, and none a truncated read — at
-midnight or at any hour of the day after.  One night settles nothing; whether the truncated
-read is gone for good is a question for the weeks ahead.  A console that one night needs longer than 4.5 seconds gets the
+3.3 to 4.2 seconds, the range on the eight consoles that ran 3.1's read through its first two
+nights, 9 and 10 October 2026.  None of them logged a truncated read either night, at midnight
+or at any hour of the days after; every one logged its wait, except one console on the second
+night, which logged neither line.  Two nights settle nothing; whether the truncated read is
+gone for good is a question for the weeks ahead.  A console that one night needs longer than
+4.5 seconds gets the
 `got 0` line instead, exactly as before 3.1, and the `LOOP waited` line is missing that night
 — the two together say by how much the console overran.  If that happens on more than the odd
 night, [report it](https://github.com/chaunceygardiner/weewx-vantagenext/issues) with the
@@ -202,10 +205,10 @@ ERROR user.vantagenext: DMPAFT max tries (4) exceeded.
 
 | What you see | What it is |
 |---|---|
-| `LOOP waited 4.17 s for the console's first packet after its midnight` | Routine, once a night: the console's [midnight silence](#the-consoles-midnight), waited out.  Expect about 4.2 seconds. |
+| `LOOP waited 4.17 s for the console's first packet after its midnight` | Routine, once a night: the console's [midnight silence](#the-consoles-midnight), waited out.  Expect 3.3 to 4.2 seconds. |
 | `get_packet: Expected 99 chars; got 0` a few seconds after midnight | Routine before 3.1, on about half of all nights: the four-second timeout running out a few tenths before the console's [midnight silence](#the-consoles-midnight) ended.  Since 3.1 no read waits less than 4.5 seconds, so this means the console overran that, and the `LOOP waited` line is missing that night. |
 | The same, two to four minutes after midnight, now and then | Routine and rare: the console reacquiring its transmitter after the [midnight reception loss](#what-it-costs-in-reception). |
-| `rxCheckPercent` low in the record for five past midnight, normal either side | The [midnight reception loss](#what-it-costs-in-reception): about one night in fifteen for two years, and [not yet known](clock.md#midnight) whether it continues with the archive download coming later. |
+| `rxCheckPercent` low in the record for five past midnight, normal either side | The [midnight reception loss](#what-it-costs-in-reception): about one night in fifteen, for two years and [still](clock.md#midnight). |
 | A run of them starting a few seconds after a `Clock stepped` line | Routine: clock sets disturb the stream, which is why the driver [no longer makes them](clock.md) except as a backstop, or on a console it cannot steer. |
 | The same at other times of day, now and then | Worth a look, not yet a fault.  See the next row. |
 | Truncated reads through the day, a few packets apart, with no clock set before them | A marginal link: the USB cable, a hub, the data logger's seating, power to the console.  On a WeatherLinkIP, the network. |
