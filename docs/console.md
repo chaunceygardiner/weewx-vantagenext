@@ -106,8 +106,9 @@ With the built-in driver this sets the console to the computer's time.  Here it 
 console, by whole seconds, to the *center of its daily drift* — which, for a console that
 loses time, is deliberately ahead of the computer's time after midnight and behind it
 before — and it may decline to do anything at all.  It prints what it did.  See
-[Setting the clock by hand](clock.md#setting-the-clock-by-hand).  A console the driver is
-steering never needs it: it is for one whose clock was lost.
+[Setting the clock by hand](clock.md#setting-the-clock-by-hand).  It is for a clock that is
+off center: once when the driver is installed (see [Installation](installation.md#install)),
+and for one whose clock was lost.  A console the driver has brought to center never needs it.
 
 ## `--info`
 

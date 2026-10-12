@@ -1829,8 +1829,9 @@ class VantageNext(weewx.drivers.AbstractDevice):
     #
     # setTime, which StdTimeSynch calls when the error exceeds max_drift (and
     # weectl device --set-time), steps the clock whole seconds to the center
-    # in any state: the backstop for a console whose time was lost.  The step
-    # is recorded, so the fit stays whole.
+    # in any state: the backstop for a console whose time was lost, or one so
+    # far off center at the start that max_drift reaches it before steering
+    # brings it in.  The step is recorded, so the fit stays whole.
     #
     # FALLBACK's rule.  The decision (clock_step) is a pure function
     # of the off-center distance, looking half a day's creep ahead
@@ -4411,13 +4412,16 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
         # --set-time reads it to center on the drift the driver learned, and
         # writes it to record its step in the state's moves, the sets the
         # driver subtracts from its readings before fitting the drift.  With
-        # no file there is no drift to center on and nothing to record the
-        # step against.  When the step cannot be recorded (no file, or no
-        # permission to replace it), weewxd's first precise reading is off by
-        # it: more than CLOCK_MODEL_BREAK and the driver learns the drift
-        # afresh; one second or so, and it is taken into the drift and
-        # steered back out.  A console being steered never needs --set-time;
-        # it is for one whose clock was lost.
+        # no file it centers on the drift the console's jump implies, as
+        # LEARNING starts, and there is nothing to record: weewxd learns the
+        # console from scratch, beginning after the step.  When a file exists
+        # but cannot be replaced, the step is not recorded and weewxd's first
+        # precise reading is off by it: more than CLOCK_MODEL_BREAK and the
+        # driver learns the drift afresh; one second or so, and it is taken
+        # into the drift and steered back out.  A console steering has
+        # centered never needs --set-time; it is for one that starts off
+        # center (steering brings it in at most JUMP_SWING a night) or whose
+        # clock was lost.
         if options.info:
             self.show_info(station, clock_path=clock_state_path(config_dict))
         if options.current:

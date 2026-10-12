@@ -69,7 +69,26 @@ and changes nothing.  It has no other dependencies.
    See [Switching from the built-in driver](#switching-from-the-built-in-driver) if
    `weewx.conf` already has a working `[Vantage]` section — nearly everyone's does.
 
-1. Restart WeeWX.
+1. Center the console's clock, once.  Stop WeeWX — only one program can hold the port — and
+   run:
+
+   ```
+   weectl device --set-time
+   ```
+
+   The driver keeps the clock without setting it, so a clock that starts off center is
+   brought in by about a second a night ([A clock that starts off
+   center](clock.md#a-clock-that-starts-off-center)), and a console that has run under the
+   built-in driver may be anything up to `max_drift`, 5 seconds, from the computer's time.
+   This one set brings it close to center now, and steering takes out the rest.  It prints
+   what it did, which may be nothing, if the clock is already within half a second of
+   center.  If it says the clock was not set for another reason — near midnight, or in a time
+   change window — run it again later ([what it can say, and
+   when](clock.md#setting-the-clock-by-hand)).  If your account cannot open the port, run it
+   with `sudo`: before WeeWX has run the driver there is no state file for it to write.  A
+   WeatherLinkIP does not need it: its clock is kept by setting it anyway.
+
+1. Start WeeWX.
 
 ## Switching from the built-in driver
 
@@ -85,8 +104,12 @@ The two drivers read their settings from different sections — `[Vantage]` and
   option names and meanings are the same.
 - **Leave everything else commented out**, as the installer wrote it.  See
   [the commented-out convention](configuration.md#options-shown-commented-out).
-- **The console clock needs nothing.**  The driver reads the console's midnight jump and
-  learns its drift by itself; see [Keeping the console clock](clock.md).
+- **The console clock needs no options.**  The driver reads the console's midnight jump and
+  learns its drift by itself; see [Keeping the console clock](clock.md).  It does want the
+  one `weectl device --set-time` in the steps above: the built-in driver leaves the clock
+  wherever it is within `max_drift` of the computer's time, and this driver, which never sets
+  a clock it steers short of the `max_drift` backstop, would take about a night per second to
+  bring it in.
 
 The `[Vantage]` section can stay where it is.  Nothing reads it while `station_type` is
 `VantageNext`, and it is what you go back to if you ever switch back.
@@ -148,7 +171,8 @@ unless `type = ethernet`.
 
 Run the same `weectl extension install` command, then restart WeeWX.  An upgrade never
 rewrites your `[VantageNext]` section, so check [Upgrading](upgrading.md) for anything a
-release asks you to change by hand.
+release asks you to change by hand.  From 2.x, stop WeeWX instead, install, center the clock
+once with `weectl device --set-time`, and then start it: see [To 3.0](upgrading.md#to-30).
 
 ## Uninstalling
 

@@ -60,7 +60,10 @@ they are no longer half a second slow.  Expect, too, a clock that is deliberatel
 after midnight and *slow* before it: the driver centers its daily sawtooth on zero.
 
 `weectl device --set-time` now steps the clock to that center rather than to the computer's
-time, and may decline to set it at all; it says which.
+time, and may decline to set it at all; it says which.  Run it once, with WeeWX stopped, after
+installing and before starting WeeWX: a clock that starts off center is otherwise brought
+in by steering alone, about a second a night
+([A clock that starts off center](clock.md#a-clock-that-starts-off-center)).
 
 A console connected over ethernet (`type = ethernet`) is not steered: its clock is kept by
 setting it, as before, from the first clock check.
