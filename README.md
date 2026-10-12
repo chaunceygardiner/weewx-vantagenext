@@ -61,9 +61,9 @@ problems below.
   memory, so its error is a daily sawtooth.  The driver learns how fast the console drifts,
   keeps the sawtooth centered on zero, and does it by rewriting that midnight jump — which
   costs the console nothing — instead of setting the clock, which costs it a minute of data
-  every time.  There is nothing to configure.  A WeatherLinkIP is not steered, and will not
-  be: the logger holds every answer for half a second or more, too slow to read the
-  console's clock to the quarter second steering needs.  Its clock is still set, as before,
+  every time.  There is nothing to configure.  A WeatherLinkIP is not steered: the logger
+  holds every answer for half a second or more, too slow to read the console's clock to the
+  quarter second steering needs.  Its clock is still set, as before,
   and so is the clock of a console the driver cannot steer, or one lost to a power failure.
   The manual
   lists the consoles it has been seen on

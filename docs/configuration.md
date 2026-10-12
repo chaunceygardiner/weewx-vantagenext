@@ -46,7 +46,7 @@ commented, and they go on working as they did.
 
 | Option | Default | Meaning |
 |---|---|---|
-| `type` | `serial` | How the console is connected: `serial` (serial or USB) or `ethernet` (a WeatherLinkIP or a serial-to-ethernet bridge).  A console connected over ethernet is not steered — a WeatherLinkIP never will be — and its clock is kept by setting it.  See [Keeping the console clock](clock.md#when-the-driver-falls-back-to-setting-the-clock). |
+| `type` | `serial` | How the console is connected: `serial` (serial or USB) or `ethernet` (a WeatherLinkIP or a serial-to-ethernet bridge).  A console connected over ethernet is not steered, and its clock is kept by setting it.  See [Keeping the console clock](clock.md#when-the-driver-falls-back-to-setting-the-clock). |
 | `port` | none | The serial port, for example `/dev/ttyUSB0`.  Required when `type = serial`. |
 | `host` | none | The console's IP address or hostname.  Required when `type = ethernet`. |
 | `baudrate` | `19200` | Serial baud rate.  It must match the console's own setting. |
