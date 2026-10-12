@@ -372,56 +372,6 @@ class TestLogMessages:
 # Numbers the manual quotes
 # ---------------------------------------------------------------------------
 
-NIGHT_WORDS = {'none': 0, 'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5, 'six': 6,
-               'seven': 7, 'eight': 8}
-
-
-def steer_to_center(off, drift):
-    """The nights of steering a clock off center by `off` seconds takes to
-    come within JUMP_BAND of it, as (jump, off center after that midnight)
-    each: the driver's choose_jump each evening, then the midnight moving the
-    clock by the drift plus the jump chosen.  The console starts out holding
-    the quarter-second nearest its drift, as a settled one does.  Any other
-    jump is kept only when it lands the clock in the band, so it can make the
-    count shorter, never longer."""
-    jump = vantagenext.round_to_quarter(-drift)
-    nights = []
-    for unused_night in range(12):
-        # (The tolerance: a landing choose_jump judged exactly on the band's
-        # edge, and so kept, must not count as outside it by a rounding.)
-        if abs(off) <= VantageNext.JUMP_BAND + 1e-9:
-            return nights
-        jump = vantagenext.choose_jump(off, drift, jump)
-        off += drift + jump
-        nights.append((jump, off))
-    raise AssertionError('not centered in 12 nights: drift %g' % drift)
-
-
-def off_center_table():
-    """clock.md's table of nights to center, as (low, high, {nights}) rows,
-    each row's range starting where the one before it ended."""
-    section = pages()['clock.md'].split('## A clock that starts off center', 1)[1]
-    section = section.split('\n## ', 1)[0]
-    rows = []
-    for under, a, b, nights in re.findall(
-            r'^\| (under )?([\d.]+)(?: to ([\d.]+))?(?: seconds)? \| ([a-z ]+) \|$',
-            section, re.M):
-        low, high = (0.0, float(a)) if under else (float(a), float(b))
-        words = nights.split()
-        if len(words) == 1:
-            stated = {NIGHT_WORDS[words[0]]}
-        elif words[1] == 'or':
-            stated = {NIGHT_WORDS[words[0]], NIGHT_WORDS[words[2]]}
-        else:
-            assert words[1] == 'to', nights
-            stated = set(range(NIGHT_WORDS[words[0]], NIGHT_WORDS[words[2]] + 1))
-        rows.append((low, high, stated))
-    assert len(rows) >= 6 and rows[0][0] == 0.0, rows
-    for before, after in zip(rows, rows[1:]):
-        assert before[1] == after[0], (before, after)
-    return rows
-
-
 class TestConstants:
 
     def test_the_clock_pages_numbers_are_the_drivers(self):
@@ -429,7 +379,8 @@ class TestConstants:
         for phrase in (
                 # Steering.
                 'Within %g seconds of center:** it leaves the jump alone' % VantageNext.JUMP_BAND,
-                'no more than %g second from the jump' % VantageNext.JUMP_SWING,
+                "however far off it is, within the console's \u2212%g to +%g seconds" % (
+                    -vantagenext.JUMP_MIN, vantagenext.JUMP_MAX),
                 'the last %d days of them' % VantageNext.CLOCK_LEARN_DAYS,
                 'span half a day and a midnight',
                 'the first after six in the evening',
@@ -453,39 +404,38 @@ class TestConstants:
         assert VantageNext.CLOCK_MIN_SPAN == 12 * 3600 and VantageNext.CLOCK_DECISION_OPENS == 18 * 3600
         assert VantageNext.JUMP_NO_WRITE_AFTER == 23.5 * 3600
 
-    def test_the_off_center_table_is_what_steering_does(self):
-        # Every row, sampled through its range on both sides of center, for
-        # every drift the page names, gives exactly the nights the row states:
-        # none outside them, and each one stated seen at least once.
-        drifts = [-d / 100.0 for d in range(150, 451)]
-        for low, high, stated in off_center_table():
-            samples = max(5, round((high - low) / 0.02))
-            seen = set()
-            for i in range(samples):
-                off = low + (i + 0.5) * (high - low) / samples
-                for drift in drifts:
-                    seen.add(len(steer_to_center(off, drift)))
-                    seen.add(len(steer_to_center(-off, drift)))
-            assert seen == stated, (low, high, sorted(seen), sorted(stated))
-        page = ' '.join(pages()['clock.md'].split())
-        assert 'every drift from %g to %g seconds a day' % (-drifts[0], -drifts[-1]) in page
-        # "Between three quarters of a second and a second" a night: how far
-        # the jump choose_jump picks for a clock far off center, fast or slow,
-        # lies from the drift-canceling one.
-        for off in (5.0, -5.0):
-            swings = [abs(-drift - vantagenext.choose_jump(off, drift, vantagenext.round_to_quarter(-drift)))
-                      for drift in drifts]
-            assert 0.75 < min(swings) and abs(max(swings) - 1.0) < 1e-9, (off, min(swings), max(swings))
-        assert 'between three quarters of a second and a second closer' in page
-
     def test_the_off_center_example_is_what_steering_does(self):
         drift, start = -3.66, 2.30
-        jumps, offs = zip(*steer_to_center(start, drift))
-        assert jumps == (2.75, 2.75, 3.25), jumps
+        jump = vantagenext.choose_jump(start, drift, vantagenext.round_to_quarter(-drift))
+        landed = start + drift + jump
+        assert abs(landed) <= VantageNext.JUMP_BAND, landed
         page = ' '.join(pages()['clock.md'].split())
-        assert ('each night takes %.2f seconds out: %+.2f, then %+.2f, then %+.2f, and on the third '
-                'night a jump of %.2f lands it at %+.2f' % (
-                    -drift - jumps[0], start, offs[0], offs[1], jumps[2], offs[2])) in page
+        assert ('first decision gets a jump of %.2f seconds, not the %.2f that would only cancel '
+                'its drift, and that midnight lands it at %+.2f' % (jump, -drift, landed)
+                ).replace('-', '\u2212') in page
+        assert ("The next evening's decision goes back to %.2f, the quarter-second nearest its drift"
+                % vantagenext.round_to_quarter(-drift)) in page
+
+    def test_one_night_brings_in_any_clock_one_jump_can_reach(self):
+        # "The first decision brings it in, in one night", for every drift a
+        # console could have, losing or gaining, at every distance a jump
+        # within JUMP_MIN..JUMP_MAX can make up; and a clock beyond that reach
+        # is past WeeWX's default max_drift at the widest of its day, for any
+        # console that drifts less than the page says.
+        max_drift, under = 5, 6
+        page = ' '.join(pages()['clock.md'].split())
+        assert 'default `max_drift` of %d' % max_drift in page
+        assert 'any console that drifts less than %d seconds a day' % under in page
+        for d in range(-under * 100 + 1, under * 100):
+            drift = d / 100.0
+            held = vantagenext.round_to_quarter(-drift)
+            low, high = -drift - vantagenext.JUMP_MAX, -drift - vantagenext.JUMP_MIN
+            for i in range(41):
+                off = low + (high - low) * i / 40.0
+                landed = off + drift + vantagenext.choose_jump(off, drift, held)
+                assert abs(landed) <= VantageNext.JUMP_BAND + 1e-9, (drift, off, landed)
+            for off in (low, high):
+                assert abs(off) + abs(drift) / 2 > max_drift, (drift, off)
 
     def test_the_batch_size_is_the_drivers(self):
         source = read('bin', 'user', 'vantagenext.py')

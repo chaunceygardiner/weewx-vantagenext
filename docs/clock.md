@@ -159,9 +159,8 @@ from under a day to a day and three quarters from the start.
 tonight's jump — a few hours off — would leave the clock:
 
 - **Within 0.19 seconds of center:** it leaves the jump alone.
-- **Further out:** it writes the quarter-second jump that brings the clock back, no more than
-  1 second from the jump that would only cancel the drift.  A clock too far off center for one
-  night's jump to bring back is brought in over several nights
+- **Further out:** it writes the quarter-second jump that brings the clock back, however far
+  off it is, within the console's −8 to +8 seconds
   ([below](#a-clock-that-starts-off-center)).  On the day of a time change it allows for the
   day's real length, 23 or 25 hours:
   for a console that loses 3.3 seconds a day, an hour's drift is a seventh of a second.
@@ -235,57 +234,38 @@ left off.
 ## A clock that starts off center
 
 The driver never sets a clock it is steering, short of the `max_drift` backstop, so a console
-that comes to it off center is brought in by the jump alone.  That is the case for nearly
-every console the driver meets for the first time: WeeWX's built-in driver lets the clock
-wander up to `max_drift`, 5 seconds, from the computer's time, and centers nothing.
+that comes to it off center is brought in by the jump.  That is the case for nearly every
+console the driver meets for the first time: WeeWX's built-in driver lets the clock wander up
+to `max_drift`, 5 seconds, from the computer's time, and centers nothing.
 
-**Each night takes the clock between three quarters of a second and a second closer to
-center.**  A night's jump may be at most 1 second from the jump that would only cancel the
-drift, and it moves in quarter-seconds, so how much of that second a night can use depends on
-where the console's drift falls between two quarter-seconds.  The last night takes what is
-left, and lands the clock in the band around center that steering keeps.  Before the first
-of those nights comes the learning: the first decision is made from under a day to a day and
-three quarters after WeeWX starts.  While it learns, the console keeps the jump it came with,
-so each midnight moves the clock by however far that jump is from the console's real drift:
-nothing to speak of for a console whose jump matches its drift, 0.61 seconds a night for the
-one in the figure above.
-
-So it takes roughly a night of steering for every second the clock is off center at the first
-decision.  Worked through the driver's own rule for every drift from 1.5 to 4.5 seconds a
-day, either side of center:
-
-| Off center at the first decision | Nights of steering |
-|---|---|
-| under 0.19 seconds | none |
-| 0.19 to 0.95 | one |
-| 0.95 to 1.2 | one or two |
-| 1.2 to 1.7 | two |
-| 1.7 to 2.2 | two or three |
-| 2.2 to 2.45 | three |
-| 2.45 to 3.2 | three or four |
-| 3.2 to 4.2 | four to six |
+**The first decision brings it in, in one night.**  It writes the quarter-second jump that
+lands the clock nearest center, however far off it is, and that midnight puts it in the band
+steering keeps.  The distance comes from a precise reading, good to a few hundredths of a
+second, of where the clock is, so a jump several seconds from the drift is as safe as one a
+quarter-second from it.  The
+first decision is made from under a day to a day and three quarters after WeeWX starts.  While
+it learns, the console keeps the jump it came with, so each midnight moves the clock by however
+far that jump is from the console's real drift: nothing to speak of for a console whose jump
+matches its drift, 0.61 seconds a night for the one in the figure above.
 
 For example, a console that loses 3.66 seconds a day and is 2.3 seconds fast of center at its
-first decision.  The jump that would only cancel its drift is 3.66 seconds; the smallest a
-night may use is 2.75, the first quarter-second no more than a second below that, so each
-night takes 0.91 seconds out: +2.30, then +1.39, then +0.48, and on the third night a jump of
-3.25 lands it at +0.07.
+first decision gets a jump of 1.25 seconds, not the 3.66 that would only cancel its drift, and
+that midnight lands it at −0.11.  The next evening's decision goes back to 3.75, the
+quarter-second nearest its drift.
 
-**Until then the clock's daily extremes are wider by its distance from center.**  That
-console, 2.3 seconds off center, is about 4.1 seconds fast just after midnight instead of
+A jump can be no larger than 8 seconds either way, so a clock too far off for one to make up
+takes more than one night.  With WeeWX's default `max_drift` of 5, a clock that far off is past
+it at the widest of its day, for any console that drifts less than 6 seconds a day, so the
+backstop sets it first if a clock check lands there.
+
+**Until that first night, the clock's daily extremes are wider by its distance from center.**
+That console, 2.3 seconds off center, is about 4.1 seconds fast just after midnight instead of
 1.8.  The backstop compares the clock with the computer's time at every clock check: a check
 that finds it more than `max_drift` out sets it to center at once
 ([The backstop](#the-backstop)).  So a clock off center by more than about `max_drift` less
-half its drift — 3.2 seconds, for that console — can be set by the backstop, if a clock check
-lands near its widest; one closer than that never reaches `max_drift`, is never set, and is
-steered in a night at a time.
-
-**To skip the wait, set the clock once by hand.**  Stop WeeWX, run
-`weectl device --set-time` ([below](#setting-the-clock-by-hand)), and start WeeWX again.  It
-is one clock set, about a minute of the transmitter's packets, and it brings the clock close to
-center at once, leaving steering only the rest.  It is worth doing when installing the driver,
-when switching from the built-in driver, and whenever the driver's `Clock is ... off center`
-line says more than a second.
+half its drift — 3.2 seconds, for that console — can be set by the backstop while the driver
+learns, if a clock check lands near its widest; one closer than that is never set, and the
+first decision brings it in.
 
 ## What to expect
 
@@ -293,12 +273,11 @@ line says more than a second.
   own, steered by a value that costs nothing to change.
 - **Its error stays within about half the drift of the true time, either way.**  For a console
   that loses 3 seconds a day: about 1.5 seconds fast just after midnight, about 1.5 seconds slow
-  just before it, and right around noon.  Once it has brought the clock in, steering keeps the
-  sawtooth within about a fifth of a second of center, so the extremes reach about 1.7 seconds.  That is the floor for any console that
-  drifts, and nothing can do better without setting the clock all day.
-- **A clock that starts off center comes in at about a second a night**, after the first
-  day or so of learning: [A clock that starts off center](#a-clock-that-starts-off-center).
-  One `weectl device --set-time` before WeeWX starts brings it close to center at once.
+  just before it, and right around noon.  Steering keeps the sawtooth within about a fifth of a
+  second of center, so the extremes reach about 1.7 seconds.  That is the floor for any console
+  that drifts, and nothing can do better without setting the clock all day.
+- **A clock that starts off center is brought in on the first night the driver steers**, after
+  the day or so of learning: [A clock that starts off center](#a-clock-that-starts-off-center).
 - **WeeWX's `Clock error` line will show those extremes**, every night, and that is normal: the
   error is largest on either side of midnight by design.
 - **The jump changes every day or few**, between the two quarter-seconds either side of the
@@ -312,9 +291,10 @@ line says more than a second.
   not the console's loss of its transmitter after midnight, which has gone on at about the
   rate of the two years before; moving `archive_delay` from 3 seconds to 6 did not stop it
   either.  Whether a later download still would is [not yet settled](#midnight).
-- **The backstop never fires** on a console steering has brought to center.  It is there for a
-  console whose clock something else has moved, and for one that starts so far off center that
-  the backstop reaches it first ([A clock that starts off center](#a-clock-that-starts-off-center)).
+- **The backstop never fires** on a console being steered.  It is there for a console whose
+  clock something else has moved, and for one so far off center at the start that the backstop
+  reaches it before the first decision
+  ([A clock that starts off center](#a-clock-that-starts-off-center)).
 
 ## When something changes
 
@@ -325,7 +305,7 @@ The driver recovers by itself from anything that changes the console or its cloc
 | WeeWX restarted, or the computer rebooted | Resumes from `clock.json` where it left off — including a jump it wrote just before and had not yet confirmed: found in the console, it is taken as written. |
 | `clock.json` deleted or lost | Starts learning afresh from the jump the console holds — the best starting point there is.  It costs up to a day and three quarters before the first decision, nothing more. |
 | The console replaced by another | Sees a jump in the console other than the one it last held, at startup or at the next reading, and learns the console afresh.  If a new console happens to hold the same jump, the first reading the old drift cannot explain does the same (below). |
-| The clock moved — a power loss, a set by hand, another program on the cable | A clock off by more than `max_drift` is set at once by [the backstop](#the-backstop).  Then, or for any smaller move, **a reading that the drift cannot explain by 1.5 seconds** shows the clock was moved — or, while the driver is still learning, a line that cannot explain its own readings — and the driver starts learning afresh from that reading.  How far it moved makes no difference: seconds or months.  A move the backstop did not set back is then steered out [a night at a time](#a-clock-that-starts-off-center). |
+| The clock moved — a power loss, a set by hand, another program on the cable | A clock off by more than `max_drift` is set at once by [the backstop](#the-backstop).  Then, or for any smaller move, **a reading that the drift cannot explain by 1.5 seconds** shows the clock was moved — or, while the driver is still learning, a line that cannot explain its own readings — and the driver starts learning afresh from that reading.  How far it moved makes no difference: seconds or months.  A move the backstop did not set back is steered out by the [decisions that follow](#a-clock-that-starts-off-center): the first one after the learning, if the move caused any. |
 | The jump cannot be steered — its memory holds no valid jump, writes fail, or it is a WeatherLinkIP | Falls back to keeping the clock by setting it ([below](#when-the-driver-falls-back-to-setting-the-clock)). |
 
 To make the driver start over yourself — after it has fallen back, say — stop WeeWX, delete
@@ -408,9 +388,9 @@ slow.
 
 WeeWX's `max_drift` remains as a **backstop**.  A clock further out than that — a console that
 has lost power, say — is set to the center at once, in any state, and the driver records the
-set so its learning stays whole.  Once steering has brought a console to center, it never
-fires; before that, it can set a clock that starts more than about `max_drift` less half its
-drift off center ([A clock that starts off center](#a-clock-that-starts-off-center)).  Leave it at
+set so its learning stays whole.  With a console it is steering, it never fires; before the
+first decision, it can set a clock that starts more than about `max_drift` less half its drift
+off center ([A clock that starts off center](#a-clock-that-starts-off-center)).  Leave it at
 WeeWX's default of 5: see [Configuration](configuration.md#the-clock-and-stdtimesynch).
 
 ## The clock lines in the log
@@ -518,10 +498,9 @@ time, which would put it off center — and prints what it did.  That may be not
 | `Not set: in the 600 seconds after midnight the console's daily jump may be in progress.` | Try again at ten past. |
 | `Not set: in the last 60 seconds before midnight the console's daily jump may be in progress.` | Try again at ten past. |
 
-A console the driver has brought to center never needs this.  One that is off center by more
-than a second or so — a new installation, a switch from the built-in driver — is brought close
-to center by it at once, instead of over the nights steering would take
-([A clock that starts off center](#a-clock-that-starts-off-center)).
+A console the driver is steering never needs this: one that starts off center is brought in
+by the first decision's jump ([A clock that starts off center](#a-clock-that-starts-off-center)).
+It is for one whose clock was lost.
 
 With no `clock.json` yet, it centers the clock on the console's own estimate of its drift, its
 midnight jump: close, and steering takes out the rest.  There is nothing to record, and the

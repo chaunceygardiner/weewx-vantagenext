@@ -52,14 +52,15 @@
 - A jump written but not read back now logs that "the next reading finds what
   the console holds", not "the next decision reads" it: the console's jump is
   read before every reading.
-- The manual says how long steering takes to bring in a clock that starts off
-  center: between three quarters of a second and a second a night, after the
-  first day or so of learning, so roughly a night per second, with a table.
-  The driver never sets a clock it steers, short of the max_drift backstop, and
-  the built-in driver leaves the clock anywhere within max_drift of the
-  computer's time, so the installation steps now run `weectl device
-  --set-time` once, with WeeWX stopped, before WeeWX first starts the driver;
-  so does an upgrade from 2.x.
+- A clock that starts off center is brought in on the first night the driver
+  steers.  The night's jump is the quarter-second that lands the clock nearest
+  center, anywhere in the console's -8 to +8 seconds, where 3.0 and 3.1 kept
+  it within a second of the jump that only cancels the drift and took a night
+  for every second off.  The distance it corrects comes from a precise reading,
+  good to a few hundredths of a second, of where the clock is, so the cap
+  guarded against nothing.
+  No `weectl device --set-time` is needed when installing or switching from
+  the built-in driver.
 
 ## 3.1 2026-10-09
 - No read waits less than 4.5 seconds for the console; a `timeout` under that

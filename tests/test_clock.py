@@ -57,8 +57,9 @@ def test_an_inconsistent_pair_decodes_to_none():
     (0.45, -3.13, 3.25, 2.75),      # would end +0.57: 3.13 - 0.45 -> 2.75, ending +0.07
     (-0.45, -3.13, 3.00, 3.50),     # would end -0.58: forward (3.13 + 0.45 -> 3.50)
     (0.0, -3.31, 4.00, 3.25),       # +0.69 a night: to the quarter nearest the drift
-    (2.80, -3.31, 3.25, 2.50),      # far out: at most JUMP_SWING from the drift (2.31 -> 2.50)
-    (-2.80, -3.31, 3.25, 4.25),
+    (2.80, -3.31, 3.25, 0.50),      # far out: all of it in one night (0.51 -> 0.50)
+    (-2.80, -3.31, 3.25, 6.00),     # (6.11 -> 6.00)
+    (12.0, -3.31, 3.25, -8.0),      # never past JUMP_MIN (-8.69 wanted)
     (0.0, 1.00, 0.0, -1.00),        # a console that gains: a negative jump
     (0.0, -8.60, 7.00, 8.0),        # never past JUMP_MAX (8.50 wanted)
 ])
@@ -310,6 +311,29 @@ def test_every_console_is_steered_within_the_band_and_never_set(tmp_path, name, 
     writes = [j for unused, j in console.jump_writes]
     assert len(writes) <= 45 // 2 + 2
     assert all(a != b for a, b in zip([jump] + writes, writes))
+
+
+@pytest.mark.parametrize('c0', [2.30, -2.30])
+def test_a_clock_that_starts_off_center_is_brought_in_on_the_first_night(tmp_path, c0):
+    # The spare console as it was handed to weewxd on 2026-10-09: losing
+    # 3.66 s a day, holding a 3.75 s jump, 2.3 s off center (and the same
+    # slow).  Learning leaves it alone; the first decision's write puts it
+    # in the band at that midnight, and the next evening's goes back to the
+    # jump nearest the drift, with no set and no relearn on the way.
+    drift = -3.66
+    station, console, clock = make(tmp_path, drift, 3.75, c0)
+    for unused in range(8):                            # two days, at most
+        if console.jump_writes:
+            break
+        run_days(station, console, clock, 0.25)
+    assert console.jump_writes, 'no decision wrote a jump in two days'
+    run_days(station, console, clock, 1)
+    first, back = [j for unused, j in console.jump_writes]
+    assert abs(first - 3.75) >= 2 and back == 3.75      # all of it, in one night
+    assert abs(off_center(console, drift)) <= VantageNext.JUMP_BAND + 0.05
+    assert console.sets == []
+    assert station._clock.state == ClockState.STEERING
+    assert not any('afresh' in line for unused, line in station._clock.log)
 
 
 def test_nothing_is_written_until_the_drift_is_learned(tmp_path):

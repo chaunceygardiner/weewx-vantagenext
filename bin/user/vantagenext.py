@@ -926,18 +926,16 @@ def fit_doubt(drift, jump, residuals):
 
 def choose_jump(off_center, drift, jump, day_secs=86400.0):
     """The jump to hold for the coming midnight.  Left alone while it keeps
-    the clock within JUMP_BAND of center; otherwise the quarter-second that
-    brings it nearest the center, no further than JUMP_SWING from the jump
-    that only cancels the drift, and within JUMP_MIN..JUMP_MAX.  day_secs is
-    the length of the day that midnight ends: on a time change day, 23 or 25
+    the clock within JUMP_BAND of center; otherwise the quarter-second
+    within JUMP_MIN..JUMP_MAX that brings it nearest the center, however far
+    off it is: the off-center distance comes from a precise reading, good to
+    a few hundredths of a second, of where the clock is.  day_secs is the
+    length of the day that midnight ends: on a time change day, 23 or 25
     hours, the console drifts for an hour less or more."""
     lost = drift * day_secs / 86400.0
     if abs(off_center + lost + jump) <= VantageNext.JUMP_BAND:
         return jump
-    low = math.ceil((-lost - VantageNext.JUMP_SWING) * 4 - 1e-9) / 4.0
-    high = math.floor((-lost + VantageNext.JUMP_SWING) * 4 + 1e-9) / 4.0
-    want = min(max(round_to_quarter(-lost - off_center), low), high)
-    return min(max(want, JUMP_MIN), JUMP_MAX)
+    return min(max(round_to_quarter(-lost - off_center), JUMP_MIN), JUMP_MAX)
 
 
 # ===============================================================================
@@ -1750,6 +1748,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
     #     test_chile_decides_before_its_evening_window_on_both_nights
     #     test_a_reading_that_runs_into_an_evening_window_writes_nothing
     #     test_a_write_every_two_days_at_most_whatever_the_drift
+    #     test_a_clock_that_starts_off_center_is_brought_in_on_the_first_night
     #   STEERING, a write           the bookkeeping above.
     #     test_a_write_refused_on_every_try_counts_once
     #     test_a_write_that_reads_back_wrong_is_logged
@@ -1830,8 +1829,8 @@ class VantageNext(weewx.drivers.AbstractDevice):
     # setTime, which StdTimeSynch calls when the error exceeds max_drift (and
     # weectl device --set-time), steps the clock whole seconds to the center
     # in any state: the backstop for a console whose time was lost, or one so
-    # far off center at the start that max_drift reaches it before steering
-    # brings it in.  The step is recorded, so the fit stays whole.
+    # far off center at the start that max_drift reaches it before the first
+    # decision brings it in.  The step is recorded, so the fit stays whole.
     #
     # FALLBACK's rule.  The decision (clock_step) is a pure function
     # of the off-center distance, looking half a day's creep ahead
@@ -1891,16 +1890,13 @@ class VantageNext(weewx.drivers.AbstractDevice):
     # ===========================================================================
 
     # Steering by the jump (see above).  Leave the jump alone while it keeps
-    # the clock this close to center...  A quarter-second jump can land the
+    # the clock this close to center.  A quarter-second jump can land the
     # clock no closer than 0.125 s, and a console whose drift falls midway
     # between two quarter-seconds creeps 0.125 s a night on either: this
     # leaves it room for a night and a half, so it switches about every other night
     # rather than every night.  Writes cost no reception, and a night's jump
     # is made to a few hundredths of a second.
     JUMP_BAND = 0.19
-    # ...and never choose one further than this from the jump that only
-    # cancels the drift: anything more is the backstop's to fix.
-    JUMP_SWING = 1.0
     # No jump is written from this far into the day until midnight.
     JUMP_NO_WRITE_AFTER = 23.5 * 3600
     # This many failed writes in a row mean FALLBACK.
@@ -4418,10 +4414,9 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
         # but cannot be replaced, the step is not recorded and weewxd's first
         # precise reading is off by it: more than CLOCK_MODEL_BREAK and the
         # driver learns the drift afresh; one second or so, and it is taken
-        # into the drift and steered back out.  A console steering has
-        # centered never needs --set-time; it is for one that starts off
-        # center (steering brings it in at most JUMP_SWING a night) or whose
-        # clock was lost.
+        # into the drift and steered back out.  A console being steered
+        # never needs --set-time: one that starts off center is brought in by
+        # the first decision's jump.  It is for one whose clock was lost.
         if options.info:
             self.show_info(station, clock_path=clock_state_path(config_dict))
         if options.current:
