@@ -110,8 +110,11 @@ After falling back, the driver keeps the clock by setting it, and says so in the
 | `genDavisLoopPackets: repeated bad read.` | The packet after a truncated one was truncated too. |
 | `LOOP try #...; error: ...` | A LOOP packet failed for another reason and is being retried. |
 | `LOOP max tries (...) exceeded.` followed by `genLoopPackets: Error: .... (try ...)` | Every retry failed; a new batch is being started. |
+| `... LOOP batches in a row failed; closing the port and opening it again.` | Five batches failed in a row, so the port may be dead: a dropped WeatherLinkIP connection, a USB adapter that came back as a new device.  See [the recovery page](recovery.md#any-other-error). |
+| `The port is open again.` | The reopen worked; LOOP batches go on from here. |
+| `Could not open the port again: ....  Trying again in ... seconds.` | The console, the adapter or the WeatherLinkIP is still not there.  It is tried again until it opens. |
 | `DMPAFT try #...; error: ...` / `DMPAFT max tries (...) exceeded.` | The same, while downloading archive records.  This one is handed to WeeWX. |
-| `Could not open serial port ..., sleeping 5s and trying again.` | The port was not ready at startup. |
+| `Could not open serial port ..., sleeping 5s and trying again.` | The port was not ready at startup, or when it was being opened again. |
 | `ISS ID is ...` | At startup: the ISS configured, or found in the transmitter table. |
 | `Unknown LOOP packet type ...` | The console sent a packet type the driver does not decode.  The packet is skipped. |
 | `Unknown bucket type ...` | The console's rain collector setting is not one of the three known.  Rain is not converted; check `weectl device --info`. |

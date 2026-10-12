@@ -1,14 +1,23 @@
 # weewx-vantagenext change history
 
 ## 3.2 UNRELEASED
-- A WeatherLinkIP is not steered, and will not be.  Measured on one: the logger
-  holds every answer for half a second or more whatever tcp_send_delay is set
-  to (0.5 and 0.05 tried: a wakeup took 0.500 s at both, a GETTIME 1.26 s with
-  its wakeup), so
-  the quarter of a second a precise clock reading needs is out of its reach.
-  Its clock is kept by setting it, as before.  The manual, and the driver's
-  own log line at the first clock check, say so instead of "not yet
-  supported".
+- A WeatherLinkIP is not steered.  Measured on one: the logger holds every
+  answer for half a second or more whatever tcp_send_delay is set to (0.5 and
+  0.05 tried: a wakeup took 0.500 s at both, a GETTIME 1.26 s with its wakeup),
+  so the quarter of a second a precise clock reading needs is out of its reach.
+  Its clock is kept by setting it, as before.  The manual, and the driver's own
+  log line at the first clock check, say so instead of "not yet supported".
+- After five LOOP batches in a row have failed, the driver closes the port and
+  opens it again, and a port that will not open is tried again about once a
+  minute until it does.  Until now it retried on the same port forever, which
+  never recovers one that has gone dead: a WeatherLinkIP connection the logger
+  has dropped (it serves one connection, and another program connecting to it
+  takes it from WeeWX), or a USB adapter that has come back as a new device.
+  Such a station logged errors until WeeWX was restarted.  A console that is
+  not answering is still retried for as long as it stays away, the port
+  reopened every five failed batches, and the driver still never hands a LOOP
+  error to WeeWX.  Closing a WeatherLinkIP connection the logger has
+  reset no longer leaves its socket open.
 - A clock reading is stamped with the time the request reached the console
   (the send, plus its eight bytes at the port's baud rate), not the time its
   answer arrived.  That is when the console reads its clock.  Through a

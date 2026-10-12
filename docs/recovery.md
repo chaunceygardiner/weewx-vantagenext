@@ -164,12 +164,28 @@ retried in place: the driver waits `wait_before_retry` seconds and reads again, 
 ERROR user.vantagenext: LOOP try #1; error: LOOP buffer failed CRC check
 ```
 
-If every try fails, the batch is abandoned and a new one begun, up to five times in a row
-before the count starts over:
+If every try fails, the batch is abandoned and a new one begun:
 
 ```
 ERROR user.vantagenext: LOOP max tries (4) exceeded.
 INFO user.vantagenext: genLoopPackets: Error: Max tries exceeded while getting LOOP data.. (try 1)
+```
+
+After five batches in a row have failed, the driver closes the port and opens it again.
+Retrying on the open port cannot bring back one that has gone dead: a WeatherLinkIP
+connection the logger has dropped, or a USB adapter that has come back as a new device behind
+the same name.  A WeatherLinkIP serves one connection, and another program connecting to it
+takes it from WeeWX.
+
+```
+ERROR user.vantagenext: 5 LOOP batches in a row failed; closing the port and opening it again.
+INFO user.vantagenext: The port is open again.
+```
+
+A port that will not open is tried again about once a minute until it does:
+
+```
+ERROR user.vantagenext: Could not open the port again: [Errno 111] Connection refused.  Trying again in 60 seconds.
 ```
 
 The driver does not give up on LOOP data.  A console that has truly gone away — unplugged,
@@ -187,7 +203,8 @@ INFO user.vantagenext: Could not open serial port /dev/vantage, sleeping 5s and 
 
 This is for a udev symlink such as `/dev/vantage` that is not there yet when WeeWX starts
 early in a boot.  If the second attempt fails too, WeeWX handles it as it would for any
-driver.
+driver.  The same line appears with each attempt when the driver is [opening the port
+again](#any-other-error), each attempt then taking five seconds longer.
 
 ## The archive download is different
 

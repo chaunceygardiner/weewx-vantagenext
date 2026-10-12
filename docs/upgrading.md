@@ -33,7 +33,7 @@ Nothing to change.  Since 3.2 the driver chooses each night's midnight jump in t
 rather than just after the midnight before, and reads the clock precisely at every clock
 check; a `[StdTimeSynch]` `clock_check` longer than about 23 hours, more than the driver can
 steer with, is now warned at startup, naming the limit — shorten it.  A WeatherLinkIP
-(`type = ethernet`) is not steered, and will not be: its clock is kept by setting it, as
+(`type = ethernet`) is not steered: its clock is kept by setting it, as
 before, from the first clock check.  3.1 raised the LOOP read timeout's floor to 4.5 seconds
 for the console's silence at its own midnight; nothing to do for it either.
 

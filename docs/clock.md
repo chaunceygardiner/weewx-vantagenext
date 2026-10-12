@@ -17,8 +17,8 @@ The console's clock matters because the console, not the computer, timestamps ev
 record.  Since 3.0 the driver keeps that clock **without setting it**, because every clock set
 costs the console about a minute of its transmitter's packets.  It learns how the console's
 clock behaves and steers the correction the console already makes to itself every midnight,
-which costs nothing.  There is nothing to configure.  A WeatherLinkIP is not steered, and
-will not be: its clock is kept by setting it, as before
+which costs nothing.  There is nothing to configure.  A WeatherLinkIP is not steered: its
+clock is kept by setting it, as before
 ([below](#when-the-driver-falls-back-to-setting-the-clock)).
 
 ## How a console's clock works
@@ -331,9 +331,9 @@ jump it writes.  If you run one of the consoles not yet seen,
 [the clock lines in the log](#the-clock-lines-in-the-log) will say how it is going, and a report
 in the [issues](https://github.com/chaunceygardiner/weewx-vantagenext/issues) is welcome.
 
-A WeatherLinkIP is not steered, and will not be.  The logger itself holds every answer for
-half a second or more, whatever `tcp_send_delay` is set to (measured at 0.5 and at 0.05: a
-wakeup took 0.500 s at both, and a GETTIME 1.26 s with its wakeup), so the quarter of a second a
+A WeatherLinkIP is not steered.  The logger itself holds every answer for half a second or
+more, whatever `tcp_send_delay` is set to (measured at 0.5 and at 0.05: a wakeup took 0.500 s
+at both, and a GETTIME 1.26 s with its wakeup), so the quarter of a second a
 [precise reading](#how-a-consoles-clock-works) needs is out of its reach.  Its clock is kept by
 setting it ([below](#when-the-driver-falls-back-to-setting-the-clock)).
 
@@ -344,9 +344,9 @@ clock by setting it:
 
 - **Its memory does not hold a valid jump** — the two bytes at `0x2E` are not a value and its
   check, or the value is outside −8 to +8 seconds — so the jump is not known.
-- **It is connected over ethernet** (`type = ethernet`).  A WeatherLinkIP is not steered,
-  and will not be: its logger holds every answer for half a second or more, too long to catch
-  the console's second ticking over ([Which consoles](#which-consoles)).  Its clock is kept
+- **It is connected over ethernet** (`type = ethernet`).  A WeatherLinkIP is not steered:
+  its logger holds every answer for half a second or more, too long to catch the
+  console's second ticking over ([Which consoles](#which-consoles)).  Its clock is kept
   by setting it from the first clock check.
 - **Writing the jump fails**, or the jump doesn't read back as written, twice in a row.
 

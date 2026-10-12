@@ -864,6 +864,208 @@ class TestClosePortShutdown:
             with pytest.raises(exc_class):
                 wrapper.closePort()
 
+    def test_a_socket_the_peer_has_reset_is_still_closed(self):
+        # shutdown() on a reset connection raises ENOTCONN.
+        unused_serial, ethernet = self._wrappers()
+
+        def not_connected(how):
+            raise OSError(107, 'Transport endpoint is not connected')
+        ethernet.socket.shutdown = not_connected
+        ethernet.write = self._raiser(OSError(32, 'Broken pipe'))
+        ethernet.closePort()
+        assert ethernet.socket.closed
+
+
+class _ConnectStub(_ClosableStub):
+    """A socket whose connect raises what it is given."""
+
+    def __init__(self, error):
+        super().__init__()
+        self.error = error
+
+    def settimeout(self, secs):
+        pass
+
+    def connect(self, address):
+        raise self.error
+
+
+class TestEthernetOpenPort:
+    """A socket whose connect fails is closed: the reopen loop calls openPort
+    about once a minute while the logger cannot be reached."""
+
+    def _wrapper(self, monkeypatch, error):
+        import socket
+        made = []
+
+        def make(*args):
+            made.append(_ConnectStub(error))
+            return made[-1]
+        monkeypatch.setattr(socket, 'socket', make)
+        return VantageNext._port_factory({'type': 'ethernet', 'host': '192.0.2.1'}), made
+
+    @pytest.mark.parametrize('error', [ConnectionRefusedError(111, 'Connection refused'),
+                                       TimeoutError('timed out')])
+    def test_a_failed_connect_closes_its_socket(self, monkeypatch, error):
+        wrapper, made = self._wrapper(monkeypatch, error)
+        with pytest.raises(weewx.WeeWxIOError):
+            wrapper.openPort()
+        assert len(made) == 1 and made[0].closed
+        assert not hasattr(wrapper, 'socket')
+
+    @pytest.mark.parametrize('exc_class', [Terminate, KeyboardInterrupt])
+    def test_a_shutdown_during_connect_closes_it_and_passes_through(self, monkeypatch, exc_class):
+        wrapper, made = self._wrapper(monkeypatch, exc_class('stop'))
+        with pytest.raises(exc_class):
+            wrapper.openPort()
+        assert made[0].closed
+
+
+class _ReopenPort:
+    """Records closePort and openPort; each scripted error is raised by the
+    call it is given to, in turn."""
+
+    def __init__(self, open_errors=(), close_error=None):
+        self.calls = []
+        self.open_errors = list(open_errors)
+        self.close_error = close_error
+
+    def closePort(self):
+        self.calls.append('close')
+        if self.close_error:
+            raise self.close_error
+
+    def openPort(self):
+        self.calls.append('open')
+        if self.open_errors:
+            raise self.open_errors.pop(0)
+
+
+def _play_batches(station, script):
+    """genDavisLoopPackets plays `script`, one entry per batch: a list of
+    packets (a batch that ends, as a short read ends one) or an exception (a
+    batch that fails)."""
+    batches = iter(script)
+
+    def batch(N=1):
+        item = next(batches)
+        if isinstance(item, Exception):
+            raise item
+        yield from item
+    station.genDavisLoopPackets = batch
+
+
+class TestReopenPort:
+    """Five LOOP batches failing in a row close the port and open it again,
+    until it opens: retrying on a dead port (a WeatherLinkIP connection the
+    logger has dropped) never recovers it."""
+
+    FAIL = weewx.WakeupError('Unable to wake up Vantage console')
+
+    def test_four_failed_batches_leave_the_port_alone(self):
+        station = bare_station(port=_ReopenPort())
+        _play_batches(station, [self.FAIL] * 4 + [['packet']])
+        assert next(station.genLoopPackets()) == 'packet'
+        assert station.port.calls == []
+
+    def test_five_reopen_the_port_and_the_packets_resume(self, caplog):
+        station = bare_station(port=_ReopenPort())
+        _play_batches(station, [self.FAIL] * 5 + [['packet']])
+        with caplog.at_level(logging.INFO):
+            assert next(station.genLoopPackets()) == 'packet'
+        assert station.port.calls == ['close', 'open']
+        lines = [r.getMessage() for r in caplog.records]
+        assert [line for line in lines if line.startswith('genLoopPackets')] == \
+            ['genLoopPackets: Error: Unable to wake up Vantage console. (try %d)' % n for n in range(1, 6)]
+        assert '5 LOOP batches in a row failed; closing the port and opening it again.' in lines
+        assert lines[-1] == 'The port is open again.'
+
+    def test_a_batch_that_ends_starts_the_count_over(self):
+        station = bare_station(port=_ReopenPort())
+        _play_batches(station, [self.FAIL] * 4 + [[]] + [self.FAIL] * 4 + [['packet']])
+        assert next(station.genLoopPackets()) == 'packet'
+        assert station.port.calls == []
+
+    def test_a_close_that_fails_still_opens(self):
+        station = bare_station(port=_ReopenPort(close_error=OSError(107, 'not connected')))
+        _play_batches(station, [self.FAIL] * 5 + [['packet']])
+        assert next(station.genLoopPackets()) == 'packet'
+        assert station.port.calls == ['close', 'open']
+
+    def test_a_port_that_will_not_open_is_tried_again_until_it_does(self, monkeypatch, caplog):
+        import serial
+        sleeps = []
+        monkeypatch.setattr(vantagenext.time, 'sleep', sleeps.append)
+        station = bare_station(port=_ReopenPort(open_errors=[
+            weewx.WeeWxIOError('Connection refused'), serial.SerialException('no such device')]))
+        _play_batches(station, [self.FAIL] * 5 + [['packet']])
+        with caplog.at_level(logging.INFO):
+            assert next(station.genLoopPackets()) == 'packet'
+        assert station.port.calls == ['close', 'open', 'open', 'open']
+        assert sleeps == [VantageNext.REOPEN_WAIT] * 2 == [60, 60]
+        assert 'Could not open the port again: no such device.  Trying again in 60 seconds.' in \
+            [r.getMessage() for r in caplog.records]
+
+    @pytest.mark.parametrize('exc_class', [Terminate, KeyboardInterrupt, SystemExit])
+    def test_shutdown_exceptions_pass_through(self, monkeypatch, exc_class):
+        def swallowed(secs):
+            raise AssertionError('%s was caught and the open retried' % exc_class.__name__)
+        monkeypatch.setattr(vantagenext.time, 'sleep', swallowed)
+        for where in ('open', 'close'):
+            port = _ReopenPort(open_errors=[exc_class('stop')]) if where == 'open' \
+                else _ReopenPort(close_error=exc_class('stop'))
+            station = bare_station(port=port)
+            _play_batches(station, [self.FAIL] * 5)
+            with pytest.raises(exc_class):
+                next(station.genLoopPackets())
+
+    def test_a_connection_the_logger_resets_is_opened_again(self):
+        # The real EthernetWrapper against a local server that resets the
+        # first connection, as a WeatherLinkIP does when another client
+        # connects, and answers on the second.
+        import socket
+        import threading
+        server = socket.socket()
+        server.bind(('127.0.0.1', 0))
+        server.listen(2)
+        packets = [make_loop1(outTemp=700), make_loop1(outTemp=710)]
+
+        def serve():
+            first, unused = server.accept()
+            first.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
+            first.close()                                    # an RST, not a FIN
+            second, unused = server.accept()
+            with second:
+                while True:
+                    data = second.recv(64)
+                    if not data:
+                        return
+                    if data.startswith(b'LOOP'):
+                        second.sendall(b'\x06' + b''.join(packets))
+                    elif data == b'\n':
+                        second.sendall(b'\n\r')
+        threading.Thread(target=serve, daemon=True).start()
+        port = vantagenext.EthernetWrapper(host='127.0.0.1', port=server.getsockname()[1],
+                                           timeout=2.0, tcp_send_delay=0.0,
+                                           wait_before_retry=0.0, command_delay=0)
+        port.openPort()
+        station = bare_station(port=port, max_tries=2)
+        got = []
+
+        def consume():
+            loop = station.genLoopPackets()
+            got.extend(next(loop)['outTemp'] for unused in packets)
+            loop.close()
+        consumer = threading.Thread(target=consume, daemon=True)
+        consumer.start()
+        consumer.join(timeout=10)
+        try:
+            assert not consumer.is_alive(), 'still retrying on the reset connection'
+            assert got == [pytest.approx(70.0), pytest.approx(71.0)]
+        finally:
+            port.closePort()
+            server.close()
+
 
 
 class TestMidnightGap:

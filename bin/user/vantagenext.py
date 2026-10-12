@@ -395,18 +395,27 @@ class EthernetWrapper(BaseWrapper):
 
     def openPort(self):
         import socket
+        # A socket whose connect fails is closed, not left for the garbage
+        # collector: the driver opens the port again, about once a minute, for as
+        # long as the logger cannot be reached (see _reopen_port).
+        sock = None
         try:
-            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.socket.settimeout(self.timeout)
-            self.socket.connect((self.host, self.port))
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(self.timeout)
+            sock.connect((self.host, self.port))
         except (socket.error, socket.timeout, socket.herror) as ex:
             log.error("Socket error while opening port %d to ethernet host %s.", self.port,
                       self.host)
+            if sock is not None:
+                sock.close()
             # Reraise as a weewx I/O error:
             raise weewx.WeeWxIOError(ex)
         except:
             log.error("Unable to connect to ethernet host %s on port %d.", self.host, self.port)
+            if sock is not None:
+                sock.close()
             raise
+        self.socket = sock
         log.debug("Opened up ethernet host %s on port %d. timeout=%s, tcp_send_delay=%s",
                   self.host, self.port, self.timeout, self.tcp_send_delay)
 
@@ -419,7 +428,12 @@ class EthernetWrapper(BaseWrapper):
             # A bare except here would swallow weewxd's Terminate (raised by
             # its SIGTERM handler on the main thread) and block shutdown.
             pass
-        self.socket.shutdown(socket.SHUT_RDWR)
+        try:
+            self.socket.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            # A connection the peer has reset is not connected (ENOTCONN);
+            # close the socket anyway.
+            pass
         self.socket.close()
 
     def flush_input(self):
@@ -1179,6 +1193,12 @@ class VantageNext(weewx.drivers.AbstractDevice):
         """Close the connection to the console. """
         self.port.closePort()
 
+    # LOOP batches that may fail in a row before the port is closed and
+    # opened again, and the seconds between attempts to open a port that
+    # will not open.
+    LOOP_BATCH_TRIES = 5
+    REOPEN_WAIT = 60
+
     def genLoopPackets(self):
         """Generator function that returns loop packets"""
 
@@ -1186,13 +1206,43 @@ class VantageNext(weewx.drivers.AbstractDevice):
             # Get LOOP packets in big batches This is necessary because there is
             # an undocumented limit to how many LOOP records you can request
             # on the VP (somewhere around 220).
-            for i in range(5):
+            for i in range(self.LOOP_BATCH_TRIES):
                 try:
                     for _loop_packet in self.genDavisLoopPackets(200):
                         yield _loop_packet
                     break
                 except weewx.WeeWxIOError as e:
                     log.info('genLoopPackets: Error: %s. (try %d)' % (e, i + 1))
+            else:
+                self._reopen_port()
+
+    def _reopen_port(self):
+        """Close the port and open it again, after LOOP_BATCH_TRIES batches in
+        a row have failed.  Retrying on the open port never recovers one that
+        has gone dead: a WeatherLinkIP connection the logger has dropped (it
+        serves one client, and drops the one it has for a new one), or a USB
+        adapter that has come back as a new device behind the same name.  The
+        driver does not give up on LOOP data, so a port that will not open is
+        tried again every REOPEN_WAIT seconds until it does.  Closing and
+        opening raise OSError as well as WeeWxIOError (a socket's shutdown
+        after the peer has reset it, pyserial's SerialException); weewxd's
+        Terminate is neither, and passes through."""
+        log.error("%d LOOP batches in a row failed; closing the port and opening it again.",
+                  self.LOOP_BATCH_TRIES)
+        try:
+            self.port.closePort()
+        except (weewx.WeeWxIOError, OSError):
+            pass
+        while True:
+            try:
+                self.port.openPort()
+            except (weewx.WeeWxIOError, OSError) as e:
+                log.error("Could not open the port again: %s.  Trying again in %d seconds.",
+                          e, self.REOPEN_WAIT)
+                time.sleep(self.REOPEN_WAIT)
+            else:
+                log.info("The port is open again.")
+                return
 
     def genDavisLoopPackets(self, N=1):
         """Generator function to return N loop packets from a Vantage console
