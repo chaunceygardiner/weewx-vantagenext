@@ -1266,11 +1266,12 @@ class VantageNext(weewx.drivers.AbstractDevice):
         else:
             # Request N packets of type "loop_request":
             self.port.send_data(b"LPS %d %d\n" % (self.loop_request, N))
-
         for loop in range(N):
             for count in range(self.max_tries):
                 try:
-                    loop_packet = self._get_packet()
+                    # A batch's first packet answers the command: no gap is
+                    # measured to it, nor from it (see _get_packet).
+                    loop_packet = self._get_packet(first=(loop == 0))
                     log.debug('%s: Loop packet success!' % weeutil.weeutil.timestamp_to_string(loop_packet['dateTime']))
                 except ShortReadIOError as e:
                     log.info('get_packet: %s. (%d)' % (e, self.pkt_count))
@@ -1291,16 +1292,27 @@ class VantageNext(weewx.drivers.AbstractDevice):
                 log.error("LOOP max tries (%d) exceeded.", self.max_tries)
                 raise weewx.RetriesExceeded("Max tries exceeded while getting LOOP data.")
 
-    def _get_packet(self):
+    def _get_packet(self, first=False):
         """Get a single LOOP packet
+
+        Args:
+            first(bool): True for the batch's first packet, the console's
+                answer to the LOOP command rather than a step of its cadence.
 
         Returns:
             dict: A single LOOP packet
         """
-        # Fetch a packet...
+        # Fetch a packet...  (A read that fails, here or in the checks below,
+        # leaves no arrival behind it: see _last_packet_at.)
+        previous, self._last_packet_at = self._last_packet_at, None
+        try:
+            queued = self.port.queued_bytes()
+        except (weewx.WeeWxIOError, OSError):
+            queued = None
         started = self._now()
         _buffer = self.port.read(99)
-        waited = self._now() - started
+        arrived = self._now()
+        waited = arrived - started
         # ... see if it passes the CRC test ...
         crc = crc16(_buffer)
         if crc:
@@ -1310,17 +1322,29 @@ class VantageNext(weewx.drivers.AbstractDevice):
             raise weewx.CRCError("LOOP buffer failed CRC check")
         # ... decode it ...
         loop_packet = self._unpackLoopPacket(_buffer[:95])
+        # ... note when it arrived, if that is known: only if nothing was
+        # waiting in the port when the read began, so the read returned the
+        # moment the packet's last byte came in.  Any part of it already
+        # there (WeeWX fell behind), and it arrived earlier, by however much,
+        # whatever the read took.  The gap since the packet before is then
+        # the console's own cadence, whatever WeeWX did between them.
+        gap = None
+        if queued == 0 and not first:
+            self._last_packet_at = arrived
+            if previous is not None:
+                gap = arrived - previous
         # ... and if it was the console's first after its midnight, say how
-        # long it kept us waiting: the number the read timeout is judged
-        # against, from every console, every night.
-        if waited > VantageNext.MIDNIGHT_GAP_REPORT and not self.on_bad_read:
-            # (not on_bad_read: the first packet of a batch restarted after a
-            # zero read is the console answering a command, not resuming.)
-            boundary = self._midnight_boundary(started)
+        # long the console was silent, and how long the read waited of it:
+        # the gap is what the read timeout must cover (a host that spends
+        # nothing between packets waits all of it), from every console, every
+        # night.  The read's own wait is the gap less WeeWX's time on the
+        # packet before.
+        if gap is not None and gap > VantageNext.MIDNIGHT_GAP_REPORT:
+            boundary = self._midnight_boundary(arrived)
             if boundary is not None and boundary != self._gap_logged_at:
                 self._gap_logged_at = boundary
-                log.info("LOOP waited %.2f s for the console's first packet after its midnight "
-                         "(the read timeout is %.1f s).", waited, self.port.timeout)
+                log.info("LOOP gap %.2f s across the console's midnight (the read waited %.2f s "
+                         "of its %.1f s timeout).", gap, waited, self.port.timeout)
         # ... then return it
         return loop_packet
 
@@ -2004,16 +2028,27 @@ class VantageNext(weewx.drivers.AbstractDevice):
     # Give up looking for a second boundary after this long, or this many polls.
     CLOCK_EDGE_POLL_SECS = 1.5
     CLOCK_EDGE_MAX_POLLS = 200
-    # The read that spans the console's midnight logs how long it waited, so
-    # every console reports its own gap every night and one that needs more
-    # shows up in the log beside the zero read it gets.  A read that took
-    # longer than MIDNIGHT_GAP_REPORT (the cadence is 2.0 s, at most 2.25)
-    # within MIDNIGHT_GAP_WINDOW of the local midnight (seconds before, and
-    # after; the console's clock is within seconds of the host's) is that
-    # read; it is logged once per midnight.
+    # The packet that ends the console's midnight silence logs the gap since
+    # the packet before it, so every console reports its own gap every night
+    # and one that needs more shows up in the log beside the zero read it
+    # gets.  A gap longer than MIDNIGHT_GAP_REPORT (the cadence is 2.0 s, at
+    # most 2.25) between two packets of one batch, each read as it arrived
+    # (see _last_packet_at), the second arriving within MIDNIGHT_GAP_WINDOW
+    # of the local midnight (seconds before, and after; the console's clock
+    # is within seconds of the host's), is that gap; it is logged once per
+    # midnight.  It is measured
+    # from packet to packet, not from the start of the read: the read starts
+    # only when WeeWX has finished with the packet before, so its wait is
+    # shorter on a busy host by however long that took.
     MIDNIGHT_GAP_REPORT = 3.0
     MIDNIGHT_GAP_WINDOW = (15.0, 25.0)
     _gap_logged_at = None
+    # When the batch's last packet arrived, if that is known: it was read
+    # with nothing waiting in the port when the read began, it was not the
+    # batch's first (the console's answer to the command, off its cadence),
+    # and no read has failed since.  Otherwise None.  A gap is measured only between two consecutive packets whose
+    # arrivals are both known.
+    _last_packet_at = None
 
     _next_unforced_set_ts = 0.0
     _next_poll_ts = 0.0

@@ -46,6 +46,8 @@ class FakeLoopPort:
     def __init__(self, responses):
         self.responses = list(responses)
         self.writes = []
+        self.queued = 0
+        self.calls = []
 
     def wakeup_console(self, max_tries=3):
         pass
@@ -53,7 +55,17 @@ class FakeLoopPort:
     def send_data(self, data):
         self.writes.append(data)
 
+    def queued_bytes(self):
+        # What is waiting when a read begins: `queued`, an int for every read
+        # or a list taken one per read; an exception in it is raised.
+        self.calls.append('queued_bytes')
+        q = self.queued.pop(0) if isinstance(self.queued, list) else self.queued
+        if isinstance(q, Exception):
+            raise q
+        return q
+
     def read(self, chars=1):
+        self.calls.append('read')
         item = self.responses.pop(0)
         if isinstance(item, Exception):
             raise item
@@ -1071,8 +1083,8 @@ class TestReopenPort:
 class TestMidnightGap:
     """No read waits less than MIN_READ_TIMEOUT, so the console's three-second
     silence after its own midnight (a 4.13-4.19 s gap between packets) is
-    waited out; and the read that spans it logs how long it waited, once a
-    night."""
+    waited out; and the packet that ends it logs the gap, and how long its
+    read waited, once a night."""
 
     @pytest.mark.parametrize('kind, extra', [('serial', {'port': '/dev/vantage'}),
                                              ('ethernet', {'host': '1.2.3.4'})])
@@ -1093,14 +1105,29 @@ class TestMidnightGap:
         assert lines == ["timeout 4.0 s in weewx.conf is raised to 4.5 s, the least a read can wait "
                          "for the console's first packet after its midnight."]
 
-    def test_the_first_packet_after_a_zero_read_is_not_the_gap(self, caplog):
-        # The console overran: the batch restarted, and its first packet is the
-        # console answering the new command, however long that took.
-        station = self._station((0, 0, 8), [3.1])
+    def test_a_packet_with_no_known_packet_before_it_is_not_the_end_of_a_gap(self, caplog):
+        # However long its read took.
+        station = self._station((0, 0, 8), [3.1], gap=None)
         station.port = FakeLoopPort([make_loop1(outTemp=700)])
-        station.on_bad_read = True
         with caplog.at_level(logging.INFO, logger='vantagenext'):
             station._get_packet()
+        assert self._lines(caplog) == []
+
+    def test_the_gap_inside_a_batch_is_logged_through_the_real_batch(self, caplog):
+        station = self._station((23, 59, 56), [2.0, 2.0, 4.17], gap=None)
+        station.port = FakeLoopPort([make_loop1(outTemp=700), make_loop1(outTemp=705),
+                                     make_loop1(outTemp=710)])
+        with caplog.at_level(logging.INFO, logger='vantagenext'):
+            assert len(list(station.genDavisLoopPackets(3))) == 3
+        assert self._lines(caplog) == ["LOOP gap 4.18 s across the console's midnight (the read "
+                                       "waited 4.17 s of its 4.5 s timeout)."]
+
+    def test_a_batch_first_packet_does_not_start_a_gap(self, caplog):
+        # It is the console's answer to the command, off its cadence.
+        station = self._station((23, 59, 58), [2.0, 4.17], gap=None)
+        station.port = FakeLoopPort([make_loop1(outTemp=700), make_loop1(outTemp=705)])
+        with caplog.at_level(logging.INFO, logger='vantagenext'):
+            assert len(list(station.genDavisLoopPackets(2))) == 2
         assert self._lines(caplog) == []
 
     def test_the_minimum_clears_the_longest_gap_measured_by_a_cadence_step(self):
@@ -1110,57 +1137,67 @@ class TestMidnightGap:
         assert before >= 10 + 2 and after >= 10 + 4.2             # a console up to 10 s off
 
     @staticmethod
-    def _station(hhmmss, reads, day=(2026, 10, 10)):
-        """A station at hhmmss whose successive LOOP reads take the given
-        seconds of host time; _now is asked twice per read."""
+    def _station(hhmmss, reads, day=(2026, 10, 10), gap=4.17):
+        """A station whose first LOOP read starts at hhmmss and whose
+        successive reads take the given seconds of host time (_now is asked
+        twice per read).  The batch's packet before the first read's arrived
+        `gap` seconds before that read's packet; None, it is the batch's
+        first."""
         h, m, sec = hhmmss
         t = (datetime.datetime(*day) + datetime.timedelta(hours=h, minutes=m, seconds=sec)).timestamp()
+        first_arrival = t + reads[0]
         times = []
         for secs in reads:
             times += [t, t + secs]
             t += secs + 0.01
         clock = itertools.chain(times, itertools.repeat(times[-1]))
         station = bare_station(_now=lambda: next(clock))
+        if gap is not None:
+            station._last_packet_at = first_arrival - gap
         return station
 
     @staticmethod
     def _lines(caplog):
-        return [r.getMessage() for r in caplog.records if 'LOOP waited' in r.getMessage()]
+        return [r.getMessage() for r in caplog.records if 'LOOP gap' in r.getMessage()]
 
-    @pytest.mark.parametrize('secs, hhmmss, logged', [
-        (4.17, (0, 0, 2), True),       # the read across the console's midnight
-        (2.0, (0, 0, 2), False),       # an ordinary read in the window
-        (2.25, (23, 59, 50), False),   # the slowest normal cadence
-        (4.17, (23, 59, 44), False),   # a slow read just outside the window
-        (4.17, (0, 0, 25), False),
-        (4.17, (12, 0, 0), False),     # a slow read at noon is not midnight's
+    @pytest.mark.parametrize('gap, waited, hhmmss, logged', [
+        (4.17, 4.17, (0, 0, 2), True),      # across the console's midnight, on an idle host
+        (4.17, 3.34, (0, 0, 2), True),      # on a busy host the read starts late, the gap is the same
+        (4.17, 2.90, (0, 0, 2), True),      # however late
+        (2.0, 2.0, (0, 0, 2), False),       # an ordinary packet in the window
+        (2.25, 2.25, (23, 59, 50), False),  # the slowest normal cadence
+        (4.17, 4.17, (23, 59, 40), False),  # a long gap ending just outside the window
+        (4.17, 4.17, (0, 0, 21), False),
+        (4.17, 4.17, (12, 0, 0), False),    # a long gap at noon is not midnight's
     ])
-    def test_the_read_across_midnight_logs_how_long_it_waited(self, caplog, secs, hhmmss, logged):
-        station = self._station(hhmmss, [secs])
+    def test_the_packet_after_the_midnight_silence_logs_the_gap(self, caplog, gap, waited,
+                                                                 hhmmss, logged):
+        station = self._station(hhmmss, [waited], gap=gap)
         station.port = FakeLoopPort([make_loop1(outTemp=700)])
         with caplog.at_level(logging.INFO, logger='vantagenext'):
             station._get_packet()
-        expected = ["LOOP waited %.2f s for the console's first packet after its midnight "
-                    "(the read timeout is 4.5 s)." % secs]
+        expected = ["LOOP gap %.2f s across the console's midnight (the read waited %.2f s of "
+                    "its 4.5 s timeout)." % (gap, waited)]
         assert self._lines(caplog) == (expected if logged else [])
 
     def test_the_gap_is_logged_once_a_midnight(self, caplog):
-        # The gap read, then a slow first read of a restarted batch: one line.
+        # The gap, then a slow packet after it: one line.
         station = self._station((0, 0, 2), [4.17, 3.4])
         station.port = FakeLoopPort([make_loop1(outTemp=700), make_loop1(outTemp=705)])
         with caplog.at_level(logging.INFO, logger='vantagenext'):
             station._get_packet()
             station._get_packet()
-        assert len(self._lines(caplog)) == 1 and '4.17' in self._lines(caplog)[0]
+        assert len(self._lines(caplog)) == 1 and 'gap 4.17' in self._lines(caplog)[0]
         # The next midnight is logged again.
-        station2 = self._station((0, 0, 2), [4.15], day=(2026, 10, 11))
+        station2 = self._station((0, 0, 2), [4.15], day=(2026, 10, 11), gap=4.15)
         station2._gap_logged_at = station._gap_logged_at
         station2.port = FakeLoopPort([make_loop1(outTemp=700)])
         with caplog.at_level(logging.INFO, logger='vantagenext'):
             station2._get_packet()
         assert len(self._lines(caplog)) == 2
 
-    def test_a_slow_read_that_fails_its_crc_is_not_the_gap(self, caplog):
+    def test_a_packet_that_fails_its_crc_breaks_the_chain(self, caplog):
+        # Neither it nor the packet after it is the end of a gap.
         corrupt = bytearray(make_loop1(outTemp=700))
         corrupt[10] ^= 0xFF
         station = self._station((0, 0, 2), [4.17, 4.17])
@@ -1168,9 +1205,71 @@ class TestMidnightGap:
         with caplog.at_level(logging.INFO, logger='vantagenext'):
             with pytest.raises(weewx.CRCError):
                 station._get_packet()
-            assert self._lines(caplog) == []
             station._get_packet()
-        assert len(self._lines(caplog)) == 1
+        assert self._lines(caplog) == []
+
+    def test_a_retried_read_is_not_the_end_of_a_gap(self, caplog):
+        # Through the real batch: a read fails and is retried after
+        # wait_before_retry; the gap to the packet the retry reads would count
+        # the failure and the sleep, so none is measured.
+        t = datetime.datetime(2026, 10, 10).timestamp()
+        clock = iter([t, t + 2.0,              # the batch's first packet
+                      t + 2.01, t + 4.01,      # a packet read as it arrived
+                      t + 4.02,                # a read that fails...
+                      t + 5.5, t + 7.5])       # ...and its retry, 3.49 s after the packet before
+        station = bare_station(_now=lambda: next(clock))
+        station.port = FakeLoopPort([make_loop1(outTemp=700), make_loop1(outTemp=705),
+                                     weewx.WeeWxIOError('timed out'), make_loop1(outTemp=710)])
+        with caplog.at_level(logging.INFO, logger='vantagenext'):
+            assert len(list(station.genDavisLoopPackets(3))) == 3
+        assert self._lines(caplog) == []
+
+    @pytest.mark.parametrize('queued, waited', [(99, 0.0005), (40, 0.0005), (99, 0.5)])
+    def test_a_packet_found_waiting_is_not_the_end_of_a_gap(self, caplog, queued, waited):
+        # WeeWX spent 3.5 s on the packet before: this one, or part of it, was
+        # already in the port, so when it arrived is not known -- however
+        # long the read took (a busy host can be slow to read it).
+        station = self._station((0, 0, 2), [waited], gap=3.5)
+        station.port = FakeLoopPort([make_loop1(outTemp=700)])
+        station.port.queued = queued
+        with caplog.at_level(logging.INFO, logger='vantagenext'):
+            station._get_packet()
+        assert self._lines(caplog) == [] and station._last_packet_at is None
+
+    def test_nor_is_the_packet_after_one_found_waiting(self, caplog):
+        station = self._station((0, 0, 2), [0.5, 4.17], gap=2.0)
+        station.port = FakeLoopPort([make_loop1(outTemp=700), make_loop1(outTemp=705)])
+        station.port.queued = [99, 0]
+        with caplog.at_level(logging.INFO, logger='vantagenext'):
+            station._get_packet()
+            station._get_packet()
+        assert self._lines(caplog) == []
+
+    @pytest.mark.parametrize('error', [OSError(5, 'Input/output error'),
+                                       weewx.WeeWxIOError('no answer')])
+    def test_a_queue_that_cannot_be_asked_leaves_the_arrival_unknown(self, caplog, error):
+        station = self._station((0, 0, 2), [4.17], gap=4.17)
+        station.port = FakeLoopPort([make_loop1(outTemp=700)])
+        station.port.queued = error
+        with caplog.at_level(logging.INFO, logger='vantagenext'):
+            assert station._get_packet()['outTemp'] == pytest.approx(70.0)
+        assert self._lines(caplog) == [] and station._last_packet_at is None
+
+    def test_the_port_is_asked_what_is_waiting_before_the_read(self):
+        # After it, the answer would be about the packet after this one.
+        station = self._station((0, 0, 2), [2.0])
+        station.port = FakeLoopPort([make_loop1(outTemp=700)])
+        station._get_packet()
+        assert station.port.calls == ['queued_bytes', 'read']
+
+    def test_a_packet_read_as_it_arrives_is_the_end_of_a_gap_however_short_the_wait(self, caplog):
+        # The read waited 6 ms for the end of the packet: its arrival is known.
+        station = self._station((0, 0, 2), [0.006], gap=4.16)
+        station.port = FakeLoopPort([make_loop1(outTemp=700)])
+        with caplog.at_level(logging.INFO, logger='vantagenext'):
+            station._get_packet()
+        assert self._lines(caplog) == ["LOOP gap 4.16 s across the console's midnight (the read "
+                                       "waited 0.01 s of its 4.5 s timeout)."]
 
     def test_the_line_names_the_timeout_in_force(self, caplog):
         station = self._station((0, 0, 2), [4.17])
@@ -1178,8 +1277,8 @@ class TestMidnightGap:
         station.port.timeout = 10.0
         with caplog.at_level(logging.INFO, logger='vantagenext'):
             station._get_packet()
-        assert self._lines(caplog) == ["LOOP waited 4.17 s for the console's first packet after "
-                                       "its midnight (the read timeout is 10.0 s)."]
+        assert self._lines(caplog) == ["LOOP gap 4.17 s across the console's midnight (the read "
+                                       "waited 4.17 s of its 10.0 s timeout)."]
 
     @pytest.mark.parametrize('day, first_hour, hours', [
         ((2026, 9, 6), 1, 23),     # Chile springs forward at midnight: the day begins at 01:00
@@ -1198,13 +1297,14 @@ class TestMidnightGap:
             assert _time.localtime(start).tm_hour == first_hour and (end - start) / 3600 == hours
             # Both sides of both boundaries: the one that begins the odd day
             # (on the spring night, the instant 23:59:59 -> 01:00:00) and the
-            # one that ends it.  A 4.17 s read is logged only inside the window.
+            # one that ends it.  A 4.17 s gap is logged only if its packet
+            # arrives inside the window.
             for boundary in (start, end):
                 for offset, logged in [(5, True), (24.9, True), (25, False), (3600, False),
                                        (-20, False), (-14.9, True), (-0.5, True)]:
                     t0 = boundary + offset
-                    clock = iter([t0, t0 + 4.17])
-                    station = bare_station(_now=lambda: next(clock))
+                    clock = iter([t0 - 4.17, t0])
+                    station = bare_station(_now=lambda: next(clock), _last_packet_at=t0 - 4.17)
                     station.port = FakeLoopPort([make_loop1(outTemp=700)])
                     caplog.clear()
                     with caplog.at_level(logging.INFO, logger='vantagenext'):

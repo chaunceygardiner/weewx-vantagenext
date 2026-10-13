@@ -122,29 +122,35 @@ next packet.  That is one quarter-second step of the console's cadence above the
 measured, and a healthy console answers within 2.25 seconds, so the half second over the old
 four is paid only on a read that has already failed, when the console is not answering at
 all.  A `timeout` set longer than 4.5 is used as it is; one set shorter is raised to 4.5, and
-the log says so at startup.  There is nothing to configure.  The read that spans the console's midnight — a read in the
-seconds around the computer's local midnight that took longer than any normal packet — logs
-how long it waited:
+the log says so at startup.  There is nothing to configure.  The packet that ends the
+console's midnight silence — the first in the seconds around the computer's local midnight to
+come longer after the one before it than any normal packet — logs that gap, and how long the
+read for it waited:
 
 ```
-INFO user.vantagenext: LOOP waited 4.17 s for the console's first packet after its midnight (the read timeout is 4.5 s).
+INFO user.vantagenext: LOOP gap 4.16 s across the console's midnight (the read waited 3.80 s of its 4.5 s timeout).
 ```
 
-One line a night, and the number in it is the one the timeout is judged against.  Expect
-3.3 to 4.2 seconds, the range on the eight consoles that ran 3.1's read through its first two
-nights, 9 and 10 October 2026.  None of them logged a truncated read either night, at midnight
-or at any hour of the days after; every one logged its wait, except one console on the second
-night, which logged neither line.  Two nights settle nothing; whether the truncated read is
-gone for good is a question for the weeks ahead.  A console that one night needs longer than
-4.5 seconds gets the
-`got 0` line instead, exactly as before 3.1, and the `LOOP waited` line is missing that night
-— the two together say by how much the console overran.  If that happens on more than the odd
-night, [report it](https://github.com/chaunceygardiner/weewx-vantagenext/issues) with the
-lines; the figure was chosen from a console that never came within a quarter of a second of
-it.
+One line a night.  The gap is the console's own, and the number the timeout has to cover:
+expect about 4.15 seconds, the 4.13 to 4.19 measured above.  The read's wait is the gap less
+the time WeeWX spent on the packet before it, so it is shorter on a busier computer: 3.3 to 4.2
+seconds on the eight consoles that ran 3.1's read through its first two nights, 9 and 10
+October 2026, and under 3 seconds since on one computer with more to do at midnight, which 3.1,
+timing the read rather than the gap, did not report at all.  None of them logged a truncated
+read either night, at midnight or at any hour of the days after; every one logged 3.1's line,
+except one console on the second night, which logged neither it nor a truncated read.  Two
+nights settle nothing; whether the truncated read is gone for good is a question for the weeks
+ahead.  A console that one night needs longer than 4.5 seconds gets the `got 0` line instead,
+exactly as before 3.1, and the `LOOP gap` line is missing that night — the two together say by
+how much the console overran.  If that happens on more than the odd night,
+[report it](https://github.com/chaunceygardiner/weewx-vantagenext/issues) with the lines; the
+figure was chosen from a console that never came within a quarter of a second of it.  The line
+is also missing on a night a read fails, or finds its packet, or part of it, already waiting,
+just before the silence ends: the gap is measured only between two packets each read as it
+arrived.
 
-The line is placed by the computer's clock — a read begun within fifteen seconds before the
-computer's midnight or twenty-five after it counts — which assumes the console's clock is close
+The line is placed by the computer's clock — a gap whose closing packet arrived within fifteen
+seconds before the computer's midnight or twenty-five after it counts — which assumes the console's clock is close
 to it, as it is on any console the driver keeps; and it is measured from the day's real
 boundaries, so on a time-change night it falls where the day actually turns, even in a zone
 whose change is at midnight.
@@ -222,8 +228,8 @@ ERROR user.vantagenext: DMPAFT max tries (4) exceeded.
 
 | What you see | What it is |
 |---|---|
-| `LOOP waited 4.17 s for the console's first packet after its midnight` | Routine, once a night: the console's [midnight silence](#the-consoles-midnight), waited out.  Expect 3.3 to 4.2 seconds. |
-| `get_packet: Expected 99 chars; got 0` a few seconds after midnight | Routine before 3.1, on about half of all nights: the four-second timeout running out a few tenths before the console's [midnight silence](#the-consoles-midnight) ended.  Since 3.1 no read waits less than 4.5 seconds, so this means the console overran that, and the `LOOP waited` line is missing that night. |
+| `LOOP gap 4.16 s across the console's midnight (the read waited 3.80 s of its 4.5 s timeout)` | Routine, once a night: the console's [midnight silence](#the-consoles-midnight), waited out.  Expect a gap of about 4.15 seconds; the read's wait is shorter on a busier computer. |
+| `get_packet: Expected 99 chars; got 0` a few seconds after midnight | Routine before 3.1, on about half of all nights: the four-second timeout running out a few tenths before the console's [midnight silence](#the-consoles-midnight) ended.  Since 3.1 no read waits less than 4.5 seconds, so this means the console overran that, and the `LOOP gap` line is missing that night. |
 | The same, two to four minutes after midnight, now and then | Routine and rare: the console reacquiring its transmitter after the [midnight reception loss](#what-it-costs-in-reception). |
 | `rxCheckPercent` low in the record for five past midnight, normal either side | The [midnight reception loss](#what-it-costs-in-reception): about one night in fifteen, for two years and [still](clock.md#midnight). |
 | A run of them starting a few seconds after a `Clock stepped` line | Routine: clock sets disturb the stream, which is why the driver [no longer makes them](clock.md) except as a backstop, or on a console it cannot steer. |

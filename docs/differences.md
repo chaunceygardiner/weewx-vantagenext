@@ -34,7 +34,7 @@ below, the hardware catch-up, the loop-gust bookkeeping, the units, the observat
 | **Rain in a LOOP packet** | Day-rain subtraction, inline. | `weewx.wxformulas.calculate_delta`; a momentary dashed day-rain value neither crashes the driver nor loses rain. |
 | **The year 2028** | The console's year byte is packed signed, which holds no more than 127: from 2028-01-01 every clock set raises an error that WeeWX does not catch, and the console's year reads as 1772. | Unsigned (3.0). |
 | **Startup logging** | Quiet. | The options in force, the time change windows and the ISS id, at INFO. |
-| **The console's midnight** | The console is silent for about four seconds at its own midnight, and a four-second read timeout logs a read error for it nightly. | The read timeout's floor is 4.5 seconds, and a `LOOP waited ... s` line records each night's wait (3.1).  See [The console's midnight](recovery.md#the-consoles-midnight). |
+| **The console's midnight** | The console is silent for about four seconds at its own midnight, and a four-second read timeout logs a read error for it nightly. | The read timeout's floor is 4.5 seconds, and a `LOOP gap ... s` line records each night's silence (3.1; the gap since 3.2).  See [The console's midnight](recovery.md#the-consoles-midnight). |
 
 ## Decoding
 
