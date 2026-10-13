@@ -101,8 +101,7 @@ The console sends a LOOP packet every two seconds, on a schedule it keeps itself
 moment the driver asks for a batch, within seconds the packets are back on the console's own
 grid, about a tenth of a second past each of its odd seconds.  So the last packet before the
 console's midnight comes at about 0.9 seconds before it, every night, and the first one after
-comes at about 3.2 seconds past it, every night.  Sixteen console midnights on a Vantage Pro2 in
-October 2026,
+comes about three seconds past it.  Sixteen console midnights on a Vantage Pro2 in October 2026,
 made one after another by setting its clock to 23:57 and streaming across each, put the gap at
 4.13 to 4.19 seconds, with one of 3.90 — and seven Envoys at one site log their midnight
 truncated read at 3.06 seconds after their own midnight, which is the four-second `timeout`
@@ -132,15 +131,16 @@ INFO user.vantagenext: LOOP gap 4.16 s across the console's midnight (the read w
 ```
 
 One line a night.  The gap is the console's own, and the number the timeout has to cover:
-expect about 4.15 seconds, the 4.13 to 4.19 measured above.  The read's wait is the gap less
-the time WeeWX spent on the packet before it, so it is shorter on a busier computer: 3.3 to 4.2
-seconds on the eight consoles that ran 3.1's read through its first two nights, 9 and 10
-October 2026, and under 3 seconds since on one computer with more to do at midnight, which 3.1,
-timing the read rather than the gap, did not report at all.  None of them logged a truncated
-read either night, at midnight or at any hour of the days after; every one logged 3.1's line,
-except one console on the second night, which logged neither it nor a truncated read.  Two
-nights settle nothing; whether the truncated read is gone for good is a question for the weeks
-ahead.  A console that one night needs longer than 4.5 seconds gets the `got 0` line instead,
+about four seconds, and not the same on every console.  On the night of 12 October 2026, the
+first with this line, it was 3.82 to 4.05 seconds on seven Envoys at one site and 4.18 on the
+Vantage Pro2 above.  The read's wait is the gap less the time WeeWX spent on the packet before
+it, so it is shorter on a busier computer: 3.3 to 4.2 seconds on the eight consoles that ran
+3.1's read through its first three nights, 9 to 11 October 2026, and under 3 seconds on the
+second and third of them on one computer with more to do at midnight, which 3.1, timing the
+read rather than the gap, did not report at all.  None of the eight has logged a truncated read
+in the four nights since 3.1, at midnight or at any other hour.  Four nights settle nothing;
+whether the truncated read is gone for good is a question for the weeks ahead.  A console that
+one night needs longer than 4.5 seconds gets the `got 0` line instead,
 exactly as before 3.1, and the `LOOP gap` line is missing that night — the two together say by
 how much the console overran.  If that happens on more than the odd night,
 [report it](https://github.com/chaunceygardiner/weewx-vantagenext/issues) with the lines; the
@@ -228,7 +228,7 @@ ERROR user.vantagenext: DMPAFT max tries (4) exceeded.
 
 | What you see | What it is |
 |---|---|
-| `LOOP gap 4.16 s across the console's midnight (the read waited 3.80 s of its 4.5 s timeout)` | Routine, once a night: the console's [midnight silence](#the-consoles-midnight), waited out.  Expect a gap of about 4.15 seconds; the read's wait is shorter on a busier computer. |
+| `LOOP gap 4.16 s across the console's midnight (the read waited 3.80 s of its 4.5 s timeout)` | Routine, once a night: the console's [midnight silence](#the-consoles-midnight), waited out.  Expect a gap of about four seconds, a little different on each console; the read's wait is shorter on a busier computer. |
 | `get_packet: Expected 99 chars; got 0` a few seconds after midnight | Routine before 3.1, on about half of all nights: the four-second timeout running out a few tenths before the console's [midnight silence](#the-consoles-midnight) ended.  Since 3.1 no read waits less than 4.5 seconds, so this means the console overran that, and the `LOOP gap` line is missing that night. |
 | The same, two to four minutes after midnight, now and then | Routine and rare: the console reacquiring its transmitter after the [midnight reception loss](#what-it-costs-in-reception). |
 | `rxCheckPercent` low in the record for five past midnight, normal either side | The [midnight reception loss](#what-it-costs-in-reception): about one night in fifteen, for two years and [still](clock.md#midnight). |

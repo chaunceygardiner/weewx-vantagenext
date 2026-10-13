@@ -24,8 +24,9 @@
   timeout)`.  3.1 timed the read alone, which starts only when WeeWX has
   finished with the packet before, so on a busy computer it waited less than
   the console was silent, and on one it fell under the 3 seconds the line is
-  logged above and went unreported.  The gap is the console's own, about 4.15
-  seconds on every computer, and is what the read timeout has to cover.
+  logged above and went unreported.  The gap is the console's own, about four
+  seconds whatever else the computer is doing, and is what the read timeout has
+  to cover.
 - A clock reading is stamped with the time the request reached the console
   (the send, plus its eight bytes at the port's baud rate), not the time its
   answer arrived.  That is when the console reads its clock.  Through a
