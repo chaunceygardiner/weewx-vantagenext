@@ -1,6 +1,6 @@
 # weewx-vantagenext change history
 
-## 3.2 UNRELEASED
+## 3.2 2026-10-14
 - A WeatherLinkIP is not steered.  Measured on one: the logger holds every
   answer for half a second or more whatever tcp_send_delay is set to (0.5 and
   0.05 tried: a wakeup took 0.500 s at both, a GETTIME 1.26 s with its wakeup),

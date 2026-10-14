@@ -138,7 +138,8 @@ it, so it is shorter on a busier computer: 3.3 to 4.2 seconds on the eight conso
 3.1's read through its first three nights, 9 to 11 October 2026, and under 3 seconds on the
 second and third of them on one computer with more to do at midnight, which 3.1, timing the
 read rather than the gap, did not report at all.  None of the eight has logged a truncated read
-in the four nights since 3.1, at midnight or at any other hour.  Four nights settle nothing;
+in the five nights since 3.1, to 14 October 2026, at midnight or at any other hour.  Five
+nights settle nothing;
 whether the truncated read is gone for good is a question for the weeks ahead.  A console that
 one night needs longer than 4.5 seconds gets the `got 0` line instead,
 exactly as before 3.1, and the `LOOP gap` line is missing that night — the two together say by
