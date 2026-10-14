@@ -1,5 +1,45 @@
 # weewx-vantagenext change history
 
+## 3.3 UNRELEASED
+- A WeatherLinkIP is steered.  It cannot be read precisely (its logger holds
+  every answer for half a second or more), so the driver keeps a whole-second
+  reading at every clock check (one in 50 minutes at most) and steers from the
+  line through them: it
+  learns for two days, takes where the clock stands from the line, keeps a
+  band of 0.35 seconds, and within a second of center writes the quarter-second
+  on the near side of the drift that moves the clock toward center (the next
+  one out, when that would creep too slowly to bring it in).  A clock
+  the line puts more than a second off center is steered as soon as there is
+  a line, half a day and a midnight in, since waiting could let max_drift set
+  it.  Simulated for a month on six consoles: within half a second of center,
+  four to seven writes a month, no clock set; kept by setting, as up to 3.2,
+  the same WeatherLinkIP's console was set about two and a half times a month.
+- Upgrading, a WeatherLinkIP's clock.json is not carried over: some of its
+  readings were stamped when the logger's answer arrived, three quarters of a
+  second late.  The driver learns the console afresh and steers it two days
+  after the restart (sooner, for a clock more than a second off center),
+  setting nothing meanwhile but by the max_drift backstop.
+  A console moved between serial or USB and ethernet is learned afresh too,
+  either way.  A serial or USB console carries on exactly as it was.
+- A clock set over ethernet (the backstop, weectl device --set-time, or the
+  driver falling back) lands only to the whole second and reads back no
+  better, so where it really put the clock is learned from the readings that
+  follow it, and the drift is kept.  Until four readings have followed a set,
+  the console holds the jump for a clock at center, the one that only cancels
+  the drift: a set while steering centers the clock for it and writes it back
+  at once (up to a minute before midnight; from weectl too, where a write that
+  fails does not count toward falling back), and the evening's decision writes
+  it for a set that could not.
+- Each whole-second reading over ethernet waits a random fraction of a second
+  first.  WeeWX's clock checks start just after a LOOP packet, which the
+  console times, so undelayed they fall at much the same point of the
+  console's second and drop much the same fraction every time, an offset of
+  up to half a second the fit would take for where the clock is.
+- A [StdTimeSynch] clock_check too long for one check to land in every day's
+  decision slot is warned over ethernet too.
+- weectl device --info shows a WeatherLinkIP's state as steered "from
+  whole-second readings (ethernet)".
+
 ## 3.2 2026-10-14
 - A WeatherLinkIP is not steered.  Measured on one: the logger holds every
   answer for half a second or more whatever tcp_send_delay is set to (0.5 and

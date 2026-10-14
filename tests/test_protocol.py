@@ -1113,6 +1113,32 @@ class TestWindCupLocation:
         assert re.search(r'Wind cup type: +<Unavailable>', out.getvalue())
         assert 'OFFSETS:' in out.getvalue()   # and the report went on
 
+    @pytest.mark.parametrize('coarse, said', [(False, False), (True, True)])
+    def test_info_says_when_the_clock_is_steered_from_whole_second_readings(self, monkeypatch,
+                                                                            tmp_path, coarse, said):
+        station = bare_station(archive_interval_=300, altitude=11,
+                               altitude_vt=weewx.units.ValueTuple(11, 'foot', 'group_altitude'),
+                               altitude_unit='foot', rain_bucket_size='0.01 inches',
+                               rain_year_start=10, barometer_unit='inHg',
+                               temperature_unit='degree_F', rain_unit='inch',
+                               wind_unit='mile_per_hour')
+        station.port = ScriptedWrapper(NO_ANSWER * 3)
+
+        def unavailable(*args):
+            raise weewx.WeeWxIOError('no answer')
+        for name in ('getStnInfo', 'getStnTransmitters', 'getRX', 'getBarData', 'getConsoleTime',
+                     'getStnCalibration'):
+            monkeypatch.setattr(station, name, unavailable)
+        monkeypatch.setattr(station, 'getDayJump', lambda: 2.25)
+        state = vantagenext.ClockState(2.25, 1791000000.0, vantagenext.ClockState.STEERING)
+        state.drift, state.coarse = -2.41, coarse
+        path = str(tmp_path / 'clock.json')
+        state.save(path)
+        out = io.StringIO()
+        VantageNextConfigurator.show_info(station, dest=out, clock_path=path)
+        assert re.search(r"Driver's clock state: +STEERING", out.getvalue())
+        assert ('from whole-second readings (ethernet)' in out.getvalue()) == said
+
     @pytest.mark.parametrize('calibration', ['raises', 'inconsistent'])
     def test_info_carries_on_without_the_time_or_the_calibration(self, monkeypatch, calibration):
         # GETTIME and the calibration table can fail too: each is reported

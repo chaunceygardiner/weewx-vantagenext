@@ -17,9 +17,8 @@ The console's clock matters because the console, not the computer, timestamps ev
 record.  Since 3.0 the driver keeps that clock **without setting it**, because every clock set
 costs the console about a minute of its transmitter's packets.  It learns how the console's
 clock behaves and steers the correction the console already makes to itself every midnight,
-which costs nothing.  There is nothing to configure.  A WeatherLinkIP is not steered: its
-clock is kept by setting it, as before
-([below](#when-the-driver-falls-back-to-setting-the-clock)).
+which costs nothing.  There is nothing to configure.  Since 3.3 a WeatherLinkIP is steered
+too, from whole-second readings ([below](#a-weatherlinkip)).
 
 ## How a console's clock works
 
@@ -215,8 +214,9 @@ Some guards:
   8 seconds a day or jumps outside −8 to +8, holds a move, and learning starts again.  A
   power loss can leave the clock anywhere, seconds or months off; the size makes no
   difference.
-- **The decision needs a precise reading.**  The driver decides on the first clock check from
-  six in the evening — or from earlier, so that one `clock_check` always falls between the
+- **The decision needs a precise reading** (on a serial or USB console: a WeatherLinkIP
+  decides from the line through its readings, [below](#a-weatherlinkip)).  The driver decides
+  on the first clock check from six in the evening — or from earlier, so that one `clock_check` always falls between the
   slot opening and half past eleven, or the start of a [time change window](dst.md) that
   evening, as Chile has — and only if it can catch the console's second ticking over to within
   a quarter of a second, which pins the clock to a hundredth of a second or so (a
@@ -277,8 +277,9 @@ first decision brings it in.
 - **Its error stays within about half the drift of the true time, either way.**  For a console
   that loses 3 seconds a day: about 1.5 seconds fast just after midnight, about 1.5 seconds slow
   just before it, and right around noon.  Steering keeps the sawtooth within about a fifth of a
-  second of center, so the extremes reach about 1.7 seconds.  That is the floor for any console
-  that drifts, and nothing can do better without setting the clock all day.
+  second of center (half a second, behind a [WeatherLinkIP](#a-weatherlinkip)), so the extremes
+  reach about 1.7 seconds.  That is the floor for any console that drifts, and nothing can do
+  better without setting the clock all day.
 - **A clock that starts off center is brought in on the first night the driver steers**, after
   the day or so of learning: [A clock that starts off center](#a-clock-that-starts-off-center).
 - **WeeWX's `Clock error` line will show those extremes**, every night, and that is normal: the
@@ -309,7 +310,8 @@ The driver recovers by itself from anything that changes the console or its cloc
 | `clock.json` deleted or lost | Starts learning afresh from the jump the console holds — the best starting point there is.  It costs up to a day and three quarters before the first decision, nothing more. |
 | The console replaced by another | Sees a jump in the console other than the one it last held, at startup or at the next reading, and learns the console afresh.  If a new console happens to hold the same jump, the first reading the old drift cannot explain does the same (below). |
 | The clock moved — a power loss, a set by hand, another program on the cable | A clock off by more than `max_drift` is set at once by [the backstop](#the-backstop).  Then, or for any smaller move, **a reading that the drift cannot explain by 1.5 seconds** shows the clock was moved — or, while the driver is still learning, a line that cannot explain its own readings — and the driver starts learning afresh from that reading.  How far it moved makes no difference: seconds or months.  A move the backstop did not set back is steered out by the [decisions that follow](#a-clock-that-starts-off-center): the first one after the learning, if the move caused any. |
-| The jump cannot be steered — its memory holds no valid jump, writes fail, or it is a WeatherLinkIP | Falls back to keeping the clock by setting it ([below](#when-the-driver-falls-back-to-setting-the-clock)). |
+| The console moved between serial or USB and ethernet, either way | Learns it afresh: whole-second readings and precise ones are not mixed ([A WeatherLinkIP](#a-weatherlinkip)). |
+| The jump cannot be steered — its memory holds no valid jump, or writes fail | Falls back to keeping the clock by setting it ([below](#when-the-driver-falls-back-to-setting-the-clock)). |
 
 To make the driver start over yourself — after it has fallen back, say — stop WeeWX, delete
 `vantagenext/clock.json` from the archive directory, and start it again.  The console's jump
@@ -334,30 +336,111 @@ jump it writes.  If you run one of the consoles not yet seen,
 [the clock lines in the log](#the-clock-lines-in-the-log) will say how it is going, and a report
 in the [issues](https://github.com/chaunceygardiner/weewx-vantagenext/issues) is welcome.
 
-A WeatherLinkIP is not steered.  The logger itself holds every answer for half a second or
-more, whatever `tcp_send_delay` is set to (measured at 0.5 and at 0.05: a wakeup took 0.500 s
-at both, and a GETTIME 1.26 s with its wakeup), so the quarter of a second a
-[precise reading](#how-a-consoles-clock-works) needs is out of its reach.  Its clock is kept by
-setting it ([below](#when-the-driver-falls-back-to-setting-the-clock)).
+## A WeatherLinkIP
+
+Since 3.3 a console behind a WeatherLinkIP (`type = ethernet`) is steered too, though it
+cannot be read precisely.  The logger itself holds every answer for half a second or more,
+whatever `tcp_send_delay` is set to (measured at 0.5 and at 0.05: a wakeup took 0.500 s at
+both, and a GETTIME 1.26 s with its wakeup), so the quarter of a second a
+[precise reading](#how-a-consoles-clock-works) needs is out of its reach.  Every reading is a
+whole second, good to half a second either way.
+
+One such reading is too rough to choose a quarter-second jump on; many of them, with a line
+fitted through them, are not.  What differs from a serial or USB console:
+
+- **A reading is kept at every clock check**, not two a day: six a day at WeeWX's default
+  `clock_check`, and never more than one in 50 minutes, however short the interval.  The
+  logger holds the answer, not the request, so each reading is stamped when the request reached
+  the console and carries none of the hold.
+- **Each reading waits a random fraction of a second first.**  WeeWX's clock checks start just
+  after a LOOP packet, which the console times, so they fall at much the same point of the
+  console's second every time: measured on a WeatherLinkIP, its readings sat within a tenth of
+  a second of a line, where readings spread over the second scatter by three tenths.  Each
+  would then drop much the same fraction, an offset the line takes for where the clock is, of
+  up to half a second.  Sent after a random wait of up to a second, the readings land all over
+  the console's second and the fractions average out (simulated: an offset of a third of a
+  second, without the wait, comes to a few hundredths).
+- **It learns for two days**, not half a day: by then the line gives the drift to about a
+  tenth of a second a day and the clock's place to about 0.15 seconds.  A clock the line puts
+  more than a second off center is steered as soon as there is a line, half a day and a
+  midnight in: its first jump aims at the center, which does not need the drift that closely,
+  and waiting it could pass `max_drift` and be set.
+- **Where the clock stands comes from the line**, not from the evening's one reading.
+- **The band is 0.35 seconds**, not 0.19, so the line's own wobble does not cause writes.
+  Within a second of center the jump written is the quarter-second on the near side of the
+  drift that moves the clock toward center, not the one that lands it nearest center: with so
+  wide a band, a jump that lands it at center in one night goes on carrying it the same way,
+  out the far side, and a second write is needed to bring it back.  (A drift just short of a
+  quarter-second makes that neighbor creep a few hundredths a night; when it would leave the
+  clock more than 0.45 seconds off three nights on, the next quarter is written instead.)
+  Beyond a second, the first decision brings it in, in one night, as on a serial console.
+
+Simulated for a month on six consoles, from a WeatherLinkIP's own (losing 2.41 seconds a day,
+holding a 2.25-second jump) to one that gains a second a day, the clock stays within half a
+second of center, with four to seven writes a month and no clock set.  Over 10,000 simulated
+starts — drifts from losing four seconds a day to gaining one, jumps up to a second and a half a
+day off, clocks up to three seconds off center — every one was steering within two and a
+quarter days, none was set more than once, and from the fifth day on 99 in 100 stayed within
+0.63 seconds of center; the slowest to settle, drifting under two seconds a day and starting
+well off, came within 0.94.  Kept by setting it, as
+it was up to 3.2, that WeatherLinkIP's console was set about two and a half times a month, and
+each set costs [about a minute of reception](#what-a-clock-set-costs).
+
+A clock set lands only to the whole second over ethernet, and reads back no better, so where
+a set — by [the backstop](#the-backstop), by
+[`weectl device --set-time`](#setting-the-clock-by-hand), or by the driver falling back —
+really put the clock is learned from the readings that follow it: the line through them gives
+the set a step of its own.  The drift is kept.  Until four readings have followed the set,
+about sixteen hours at the default `clock_check` (one or two place the clock only to a few
+tenths), the console holds the jump for a clock at center, where the set put it: the one that
+only cancels the drift.  A set while steering centers the clock for that jump, and a jump
+steering wrote to bring the clock in is put back to it at once — otherwise the console would
+correct again at midnight, after the set has done it.  That write may come as late as the set
+itself, up to a minute before midnight, later than any other: the backstop sets the clock at
+its widest, often late in the evening.  A set that runs on past midnight writes nothing then,
+while the console makes its jump; the next evening's decision writes it.  `weectl device --set-time` writes it too, though a
+write that fails there does not count toward [falling back](#when-the-driver-falls-back-to-setting-the-clock);
+and for a set that could not write it, the evening's decision does.
+
+Upgrading from 3.2, a WeatherLinkIP's `clock.json` is not carried over: some of its readings
+were stamped when the logger's answer arrived, three quarters of a second late, and nothing
+marks which.  The driver learns afresh and steers two days later (sooner, for a clock more
+than a second off center), setting nothing meanwhile but by the backstop.  The same happens
+when a console moves between serial or USB and ethernet, either way.
+
+One limit, not seen: a serial-to-ethernet bridge is `type = ethernet` too, and is steered the
+same way though it might read precisely.
+
+The log lines are a serial console's, with every reading marked `about`:
+
+```
+INFO user.vantagenext: Clock: the console's midnight jump is 2.25 s; learning its drift from whole-second readings.
+INFO user.vantagenext: Clock is about -0.16 s off center (one reading, good to +-0.5 s; learning, midnight jump 2.25 s).
+INFO user.vantagenext: Clock: drift -2.41 s a day, midnight jump 2.25 s; steering.
+INFO user.vantagenext: Clock is +0.21 s off center (drift -2.41 s a day, fitted to 13 whole-second readings); midnight jump 2.25 s kept.
+```
+
+and on the night of a backstop set, putting back the jump that only cancels the drift:
+
+```
+INFO user.vantagenext: Clock is -0.42 s off center (drift -2.41 s a day, after a set: the jump that only cancels it); midnight jump 7.00 -> 2.50 s.
+```
+
+`weectl device --info` shows the state as `STEERING, from whole-second readings (ethernet)`.
 
 ## When the driver falls back to setting the clock
 
-Three things make a console one the driver cannot steer, and it falls back to keeping the
-clock by setting it:
+Two things make a console one the driver cannot steer, and it falls back to keeping the clock
+by setting it:
 
 - **Its memory does not hold a valid jump** — the two bytes at `0x2E` are not a value and its
   check, or the value is outside −8 to +8 seconds — so the jump is not known.
-- **It is connected over ethernet** (`type = ethernet`).  A WeatherLinkIP is not steered:
-  its logger holds every answer for half a second or more, too long to catch the
-  console's second ticking over ([Which consoles](#which-consoles)).  Its clock is kept
-  by setting it from the first clock check.
 - **Writing the jump fails**, or the jump doesn't read back as written, twice in a row.
 
-Falling back is logged: at the first clock check for a WeatherLinkIP or a console with no valid
-jump, and as a warning when it happens later; and its reason is logged again each time WeeWX
-starts, so a log read after a restart still says why the clock is set.  It lasts until the
-console changes, or the state file is deleted; a WeatherLinkIP's lasts until the console is
-connected some other way.  The rule is then:
+Either can happen over serial, USB or ethernet.  Falling back is logged: at the first clock
+check for a console with no valid jump, and as a warning when it happens later; and its reason
+is logged again each time WeeWX starts, so a log read after a restart still says why the clock
+is set.  It lasts until the console changes, or the state file is deleted.  The rule is then:
 
 - **Within 1.2 seconds of center:** nothing.
 - **Beyond it:** the clock is stepped a whole number of seconds toward the side of the band
@@ -380,9 +463,9 @@ target, either way.  It is never further out than it started, but it can be left
 threshold, to be stepped again at the next check the holdoff allows: two sets for one
 correction.
 
-Every reading is stamped with the time the request reached the console — the moment it was
-sent plus its eight bytes' time on the wire, 4 ms at 19200 baud — not the time its answer
-arrived.  That is when the console reads its clock.  On a serial line the answer is back 5 ms
+Every reading, in every state, is stamped with the time the request reached the console —
+the moment it was sent plus its eight bytes' time on the wire, 4 ms at 19200 baud — not the
+time its answer arrived.  That is when the console reads its clock.  On a serial line the answer is back 5 ms
 later and the difference is nothing; through a WeatherLinkIP the answer takes about three
 quarters of a second, and a reading stamped on arrival would read such a console about three quarters of a second
 slow.
@@ -427,8 +510,9 @@ Every check reads the clock precisely, to a few hundredths, by catching the cons
 ticking over: half a second of polling on average, and no LOOP packet is lost to it (measured
 on a spare console: a LOOP request up to 3.3 seconds late gets the missed tick's packet late,
 not lost).  Every check says where the clock stands; only the morning's and the evening's
-readings are kept.  While steering, a line that says `about`, "one reading, good to +-0.5 s",
-is a check on which the link was too slow to catch the tick: one whole-second reading.
+readings are kept.  While steering a serial or USB console, a line that says `about`, "one
+reading, good to +-0.5 s", is a check on which the link was too slow to catch the tick: one
+whole-second reading.  Over ethernet every line says it ([A WeatherLinkIP](#a-weatherlinkip)).
 
 {: .note }
 WeeWX asks for the console's time twice as it starts, a moment apart, so a restart logs two
@@ -467,8 +551,8 @@ INFO user.vantagenext: Clock: no drift fits the readings (one +17.04 s off the l
 ```
 
 A console that falls back while running logs a warning that says why and what to delete to
-try again; one that starts out falling back — a WeatherLinkIP, or no valid jump — says why
-at its first clock check.  The lines it writes after that, and what each means, are on the
+try again; one that starts out falling back, with no valid jump, says why at its first clock
+check.  A WeatherLinkIP's lines are [above](#a-weatherlinkip).  The lines it writes after that, and what each means, are on the
 [Troubleshooting](troubleshooting.md) page.
 
 ## What `weectl device --info` shows
@@ -510,7 +594,9 @@ midnight jump: close, and steering takes out the rest.  There is nothing to reco
 driver learns the console from scratch when WeeWX starts.
 
 With a `clock.json`, it centers the clock on the drift the driver has learned and records its
-step there, so the driver carries on steering as before.  It writes `clock.json` only over the
+step there, so the driver carries on steering as before.  Over ethernet the step cannot be
+known closer than a whole second, so the driver learns where it landed from the readings that
+follow ([A WeatherLinkIP](#a-weatherlinkip)).  It writes `clock.json` only over the
 one WeeWX has already saved, keeping that file's owner and permissions, so running it with
 `sudo` never leaves WeeWX a file it cannot replace.  If that file cannot be replaced, the step
 is not recorded: when WeeWX next runs, the driver finds the clock moved by something it does

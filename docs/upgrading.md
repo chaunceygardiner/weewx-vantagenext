@@ -2,7 +2,7 @@
 title: Upgrading
 layout: default
 nav_order: 10
-description: What existing weewx-vantagenext users need to do when upgrading — nothing for 3.2 and 3.1 beyond a clock_check warning, the clock options retired and max_drift in 3.0, the live iss_id line in 2.3, [[dst_periods]] in 2.0, and the WeeWX 5 requirement.
+description: What existing weewx-vantagenext users need to do when upgrading — nothing for 3.3, 3.2 and 3.1 beyond a clock_check warning, the clock options retired and max_drift in 3.0, the live iss_id line in 2.3, [[dst_periods]] in 2.0, and the WeeWX 5 requirement.
 ---
 
 # Upgrading
@@ -27,14 +27,23 @@ to change by hand, newest first.  Read down to the release you are coming from.
 The full history is in the
 [change history](https://github.com/chaunceygardiner/weewx-vantagenext/blob/master/changes.md).
 
+## To 3.3
+
+Nothing to change.  A WeatherLinkIP (`type = ethernet`) is now steered, from whole-second
+readings ([A WeatherLinkIP](clock.md#a-weatherlinkip)).  Its `clock.json` from 3.2 is not
+carried over: the driver learns the console afresh and steers it two days after the restart
+(sooner, for a clock more than a second off center), setting nothing meanwhile but by the
+backstop.  A `[StdTimeSynch]` `clock_check` longer than
+about 23 hours is now warned over ethernet too.  A serial or USB console carries on exactly
+as it was.
+
 ## To 3.2 and 3.1
 
 Nothing to change.  Since 3.2 the driver chooses each night's midnight jump in the evening
 rather than just after the midnight before, and reads the clock precisely at every clock
 check; a `[StdTimeSynch]` `clock_check` longer than about 23 hours, more than the driver can
 steer with, is now warned at startup, naming the limit — shorten it.  A WeatherLinkIP
-(`type = ethernet`) is not steered: its clock is kept by setting it, as
-before, from the first clock check.  3.1 raised the LOOP read timeout's floor to 4.5 seconds
+(`type = ethernet`) was not steered until 3.3: its clock was kept by setting it.  3.1 raised the LOOP read timeout's floor to 4.5 seconds
 for the console's silence at its own midnight; nothing to do for it either.
 
 ## To 3.0
@@ -62,8 +71,8 @@ after midnight and *slow* before it: the driver centers its daily sawtooth on ze
 `weectl device --set-time` now steps the clock to that center rather than to the computer's
 time, and may decline to set it at all; it says which.
 
-A console connected over ethernet (`type = ethernet`) is not steered: its clock is kept by
-setting it, as before, from the first clock check.
+A console connected over ethernet (`type = ethernet`) was not steered until 3.3: its clock
+was kept by setting it, as before, from the first clock check.
 
 ## To 2.3
 

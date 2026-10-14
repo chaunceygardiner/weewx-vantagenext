@@ -16,6 +16,7 @@ import json
 import logging
 import math
 import os
+import random
 import stat
 import struct
 import sys
@@ -32,7 +33,7 @@ from weewx.crc16 import crc16
 log = logging.getLogger(__name__)
 
 DRIVER_NAME = 'VantageNext'
-DRIVER_VERSION = '3.2'
+DRIVER_VERSION = '3.3'
 
 int2byte = struct.Struct(">B").pack
 
@@ -594,13 +595,14 @@ class ClockState:
         self.jumps = [[now, jump]]    # [from this time on, the jump in force]
         self.drift = None             # learned, s a day; None while learning
         self.fitted_jump = None       # FALLBACK with no jump in EEPROM: the one learned
-        self.readings = []            # precise readings: [host time, error, gap]
+        self.readings = []            # readings: [host time, error, gap]; gap None: whole-second
         self.moves = []               # whole-second sets made: [host time, step]
         self.fallback_reason = None
         self.pending_jump = None      # [time written, jump]: a write not yet read back
         self.write_fails = 0          # jump writes in a row that failed
         self.decision_day = None      # 'YYYY-MM-DD' of the last evening (decision) reading
         self.reading_day = None       # 'YYYY-MM-DD' of the last reading of any kind
+        self.coarse = False           # saved by a console read to the whole second (ethernet)
         self.log = []                 # [host time, what was done]
 
     def note(self, now, text):
@@ -633,6 +635,10 @@ class ClockState:
             # was named for it; now every reading does, and the file carries
             # over under the new name.
             d = dict(d, reading_day=d['learning_day'])
+        if 'coarse' not in d:
+            # Saved by 3.2 or earlier: no console was steered from whole-second
+            # readings then, so it was not.
+            d = dict(d, coarse=False)
         # 3.0 and 3.1 worded the ethernet reason differently: the same
         # reason, in this release's words, so it compares equal everywhere
         # and reads right from weectl --info.
@@ -660,6 +666,7 @@ class ClockState:
                 and all(number(v) for v in state.pending_jump))),
             ('days', all(x is None or isinstance(x, str)
                          for x in (state.decision_day, state.reading_day))),
+            ('coarse', isinstance(state.coarse, bool)),
             ('log', isinstance(state.log, list) and all(
                 isinstance(r, list) and len(r) == 2 and number(r[0]) and isinstance(r[1], str)
                 for r in state.log)),
@@ -844,11 +851,14 @@ def fit_clock(state, learn_jump=False):
     each reading is.  Returns (drift, jump or None, residuals), or None until
     the readings span CLOCK_MIN_SPAN and a midnight.
 
-    A coarse reading is biased: the engine calls getTime at much the same
-    point in the console's second every time, so whole-second readings sit
-    a constant amount high or low.  Where coarse and precise readings are
-    both present, the coarse ones get an offset of their own, so that bias
-    can never leak into the slope.  (All coarse, it is the line's own.)"""
+    An undithered coarse reading is biased: the engine calls getTime at
+    much the same point in the console's second every time (just after a
+    LOOP packet), so such readings sit a constant amount high or low.
+    Where coarse and precise readings are both present -- a serial console's
+    entry poll, now and then -- the coarse ones get an offset of their own,
+    so that bias can never leak into the slope.  A console read only to the
+    whole second dithers every reading (_coarse_reading), so their fractions
+    average out and the line's own offset is where the clock is."""
     model = _clock_model(state, state.readings, learn_jump)
     if model is None:
         return None
@@ -871,6 +881,7 @@ def _clock_model(state, readings, learn_jump):
         return None
     mixed = (any(g is None for t, e, g in readings)
              and any(g is not None for t, e, g in readings))
+    landings = _coarse_landings(state, readings)
 
     def row(reading):
         t, e, g = reading
@@ -882,6 +893,8 @@ def _clock_model(state, readings, learn_jump):
             r, y = [1.0, x], e - known_moves(state, t0, t)
         if mixed:
             r.append(1.0 if g is None else 0.0)
+        # A coarse set's landing is an unknown of its own (_coarse_landings).
+        r.extend(1.0 if t >= first else 0.0 for first in landings)
         return r, y
 
     k = len(row(readings[0])[0])
@@ -901,11 +914,69 @@ def _clock_model(state, readings, learn_jump):
     return p, row
 
 
+def _coarse_landings(state, readings):
+    """For a console read to the whole second (state.coarse): where each set
+    since the first reading LANDED is not known closer than a second, so
+    each gets an unknown offset in the fit, 1 for the readings after it.
+    Returned as the time of the first reading after each such set; sets with
+    no reading between them share one (identical columns would make the fit
+    singular), and a set after the last reading has none yet (_set_unread).
+    Empty for a serial console, whose sets are recorded as read back."""
+    if not state.coarse or not readings:
+        return []
+    firsts = set()
+    for ts, unused_step in state.moves:
+        if readings[0][0] < ts:
+            after = [t for t, unused_e, unused_g in readings if t > ts]
+            if after:
+                firsts.add(after[0])
+    return sorted(firsts)
+
+
+def readings_since_last_set(state):
+    """For a console read to the whole second: how many readings have
+    followed its last set, while that set's landing is still being learned;
+    None when there is none to learn (no set, or one before every reading)."""
+    if not state.coarse or not state.moves or not state.readings:
+        return None
+    last_set = state.moves[-1][0]
+    if state.readings[0][0] >= last_set:
+        return None
+    return sum(r[0] > last_set for r in state.readings)
+
+
+def landing_pending(state, t):
+    """Whether a coarse set's landing is still being learned at t: a set
+    since the last reading, or fewer than COARSE_LANDING_READINGS after the
+    last one.  Until then the console holds cancel_jump (_hold_for_landing),
+    and fitted_error gives no position to decide on."""
+    if _set_unread(state, t):
+        return True
+    since = readings_since_last_set(state)
+    return since is not None and since < VantageNext.COARSE_LANDING_READINGS
+
+
+def cancel_jump(drift, day_secs=86400.0):
+    """The jump that only cancels the drift, for a day of day_secs (23 or 25
+    hours on a time change day): the jump for a clock at center."""
+    return min(max(round_to_quarter(-drift * day_secs / 86400.0), JUMP_MIN), JUMP_MAX)
+
+
+def _set_unread(state, t):
+    """Whether a coarse set lies between the last reading and t: where it
+    landed is not known yet, so nothing at t can be predicted."""
+    last = state.readings[-1][0] if state.readings else None
+    return state.coarse and last is not None and any(last < ts <= t for ts, unused in state.moves)
+
+
 def prediction_error(state, reading, learn_jump=False):
     """How far a new reading lies from what the readings before it predict,
     or None while they do not yet make a line: the test for a moved clock.
     (Not the reading's residual in a fit that includes it: with a few days
-    of readings a new one drags the line toward itself.)"""
+    of readings a new one drags the line toward itself.)  None, too, for the
+    first reading after a coarse set, whose landing it is."""
+    if _set_unread(state, reading[0]):
+        return None
     model = _clock_model(state, state.readings, learn_jump)
     if model is None:
         return None
@@ -918,6 +989,25 @@ def fit_drift(state):
     """The steering fit: (drift, residuals), or None.  See fit_clock."""
     fit = fit_clock(state)
     return None if fit is None else (fit[0], fit[2])
+
+
+def fitted_error(state, t):
+    """The console's error at t by the line through its readings, with the
+    known jumps and sets put back: where a whole-second reading at t would
+    say the clock is, without its +-0.5 s.  None while there is no line, or
+    while the last coarse set has fewer than COARSE_LANDING_READINGS readings
+    after it: one or two place its landing only to a few tenths, which is no
+    position to decide a jump on.  (The night of the set the jump written
+    back holds the clock where the set put it, at center.)"""
+    if landing_pending(state, t):
+        return None
+    model = _clock_model(state, state.readings, False)
+    if model is None:
+        return None
+    p, row = model
+    r, y = row([t, 0.0, None])
+    # y is the reading less the known moves; for a reading of 0, -y is them.
+    return sum(pi * ri for pi, ri in zip(p, r)) - y
 
 
 def fit_doubt(drift, jump, residuals):
@@ -950,6 +1040,43 @@ def choose_jump(off_center, drift, jump, day_secs=86400.0):
     if abs(off_center + lost + jump) <= VantageNext.JUMP_BAND:
         return jump
     return min(max(round_to_quarter(-lost - off_center), JUMP_MIN), JUMP_MAX)
+
+
+def choose_coarse_jump(off_center, drift, jump, day_secs=86400.0):
+    """choose_jump for a console read only to the whole second, whose
+    off-center distance comes from the fit (fitted_error), good to a tenth
+    or two.  Left alone while the jump keeps the clock within COARSE_BAND of
+    center.  Otherwise, within COARSE_FAR of center, the NEIGHBOR of the
+    drift on the side that moves the clock toward center -- the nearest
+    quarter-second above the jump that only cancels the drift for a clock
+    behind center, the nearest below it for one ahead -- so the clock
+    crosses the band in one write and sits a few nights on each side.  The
+    quarter nearest center, as choose_jump writes, would carry it past
+    center and out the far side of so wide a band, and need a second write
+    to bring it back.  But a drift just short of a quarter makes that
+    neighbor creep a few hundredths a night, and a clock well out of the
+    band would crawl for weeks: a neighbor that leaves it beyond
+    COARSE_REACH after COARSE_REACH_NIGHTS gives way to the next quarter
+    out.  (Not a floor on the creep: a near-zero creep is the right jump to
+    hold for a clock in the band.)  Beyond COARSE_FAR, choose_jump's: the
+    quarter-second that brings it nearest the center, in one night."""
+    lost = drift * day_secs / 86400.0
+    if abs(off_center + lost + jump) <= VantageNext.COARSE_BAND:
+        return jump
+    if abs(off_center) > VantageNext.COARSE_FAR:
+        new = round_to_quarter(-lost - off_center)
+    else:
+        toward = 1.0 if off_center < 0 else -1.0     # the creep's sign that brings it in
+        if toward > 0:
+            new = math.floor(-lost * 4.0) / 4.0 + 0.25
+        else:
+            new = math.ceil(-lost * 4.0) / 4.0 - 0.25
+        while True:
+            later = off_center + VantageNext.COARSE_REACH_NIGHTS * (lost + new)
+            if abs(later) <= VantageNext.COARSE_REACH or toward * later > 0:
+                break
+            new += 0.25 * toward
+    return min(max(new, JUMP_MIN), JUMP_MAX)
 
 
 # ===============================================================================
@@ -1083,8 +1210,8 @@ class VantageNext(weewx.drivers.AbstractDevice):
 
         # Get an appropriate port, depending on the connection type:
         self.port = VantageNext._port_factory(vp_dict)
-        # Over ethernet (a WeatherLinkIP) the clock is never steered: see
-        # _clock_state.
+        # Over ethernet (a WeatherLinkIP) every clock reading is to the whole
+        # second, and the clock is steered from their fit: see _clock_state.
         self._ethernet = VantageNext._connection_type(vp_dict) == 'ethernet'
 
         # Open it up:
@@ -1633,24 +1760,48 @@ class VantageNext(weewx.drivers.AbstractDevice):
     # it does not know of (fit_doubt) -- a power loss can leave the clock
     # anywhere, seconds or months off -- and the learning starts again too.
     #
+    # A console read only to the whole second -- over ethernet, through a
+    # WeatherLinkIP, whose logger holds every answer for half a second or
+    # more (4) -- is steered the same way from COARSE readings (3.3): its
+    # CLASS, recorded as ClockState.coarse, is decided from the
+    # configuration at every start.  Every check's reading is kept, not two
+    # a day, each DITHERED (_coarse_reading: WeeWX's checks start just after
+    # a LOOP packet, at much the same point of the console's second, and
+    # would drop much the same fraction every time); the fit is trusted
+    # once the readings span COARSE_MIN_SPAN, or,
+    # for a clock the line puts beyond COARSE_FAR of center, as soon as they
+    # make one (waiting, max_drift would set it first); the decision's
+    # off-center distance comes
+    # from the fit (fitted_error), good to a tenth or two, not from one
+    # reading, good to half a second; and the jump is chosen by
+    # choose_coarse_jump, whose band is wider (COARSE_BAND) and which, within
+    # COARSE_FAR, writes the drift's neighbor toward center rather than the
+    # quarter nearest center, which would carry the clock out the far side
+    # of so wide a band.  Readings of one class are never carried into the
+    # other: a state saved in the other class, or saved over ethernet by
+    # 3.2 or earlier (FALLBACK, its reason ETHERNET_REASON; some of its
+    # readings were stamped on arrival), is learned afresh.  A set while
+    # coarse lands only to the whole second and reads back no better, so its
+    # landing is an unknown the fit learns from the readings after it
+    # (_coarse_landings); the drift is kept.
+    #
     # The states, kept in ClockState and saved across restarts:
     #
     #   LEARNING   the drift is not known yet (readings do not span
-    #              CLOCK_MIN_SPAN and a midnight).  The console is assumed to
-    #              creep not at all (drift = -jump); nothing is written.
+    #              CLOCK_MIN_SPAN and a midnight; coarse, as above).  The
+    #              console is assumed to creep not at all (drift = -jump);
+    #              nothing is written.
     #   STEERING   the daily decision above.  JUMP_WRITE_FAILS failed writes in
     #              a row mean this console cannot be steered: FALLBACK.
     #   FALLBACK   no writes; FALLBACK's rule below, with the learned drift and
     #              the jump the console holds.  Also where a console starts
     #              whose 0x2E/0x2F hold no valid jump (getDayJump) (at
-    #              start, or found so at a decision), one connected over
-    #              ethernet (a WeatherLinkIP; decided from the configuration
-    #              at every start, and undone, to LEARNING afresh, at a start
-    #              that is not).  It stays until the console changes or the
-    #              state file is deleted.  (A coarse reading is not a decision:
-    #              the next check tries again.  A serial console that never
-    #              gives a precise one -- never seen: they read to a few tens of
-    #              ms -- is left to WeeWX's max_drift backstop.)
+    #              start, or found so at a decision), in either class.  It
+    #              stays until the console changes or the state file is
+    #              deleted.  (On a serial console a coarse reading is not a
+    #              decision: the next check tries again.  One that never gives
+    #              a precise one -- never seen: they read to a few tens of ms
+    #              -- is left to WeeWX's max_drift backstop.)
     #
     # The jump bookkeeping.  `jump` is the jump the driver believes the
     # console holds and `jumps` when each came into force (what the fit takes
@@ -1727,18 +1878,32 @@ class VantageNext(weewx.drivers.AbstractDevice):
     #     test_the_state_files_of_earlier_3_0_builds_still_load
     #     test_a_state_file_from_the_first_3_0_build_still_loads
     #     test_a_state_file_naming_the_reading_day_as_3_0_did_still_loads
-    #   type = ethernet             FALLBACK, whatever was saved.
-    #     test_an_ethernet_console_is_kept_by_setting_it_from_the_first_check
-    #   saved on ethernet, not now  LEARNING afresh; FALLBACK, saying why, if
-    #                               the jump is not valid.
+    #   type = ethernet, saved      resume, as on serial.
+    #     coarse, the same jump
+    #     test_a_weatherlinkip_console_learns_for_two_days_and_is_never_set_meanwhile
+    #   type = ethernet, saved not  LEARNING afresh, coarse: a serial file,
+    #     coarse                    and every file from 3.2 or earlier, an
+    #                               ethernet FALLBACK among them (its reason
+    #                               in 3.2's words or 3.0/3.1's, from_dict).
+    #     test_a_3_2_ethernet_state_file_is_relearned_from_whole_second_readings
+    #     test_a_console_moved_between_serial_and_ethernet_is_learned_afresh
+    #   type = ethernet, no         LEARNING, coarse.
+    #     clock.json
+    #     test_a_weatherlinkip_console_learns_for_two_days_and_is_never_set_meanwhile
+    #   saved on ethernet, not now  LEARNING afresh: a file saved coarse, or a
+    #                               3.2-or-earlier ethernet FALLBACK, in any
+    #                               release's words; FALLBACK, saying why, if
+    #                               the jump is not valid (either link), its
+    #                               fitted jump kept, the readings of the
+    #                               other link dropped (either way).
     #     test_a_console_moved_off_ethernet_is_steered_again
-    #     test_a_console_moved_off_ethernet_with_no_valid_jump_says_why_it_falls_back
-    #   saved by 3.0/3.1 on         the same reason in this release's words
-    #   ethernet, in their words    (from_dict), then as the two rows above:
-    #                               FALLBACK still on ethernet, LEARNING
-    #                               afresh off it.
-    #     test_a_console_still_on_ethernet_with_a_3_0_state_file_gets_this_releases_reason
+    #     test_a_console_moved_between_serial_and_ethernet_is_learned_afresh
     #     test_a_console_moved_off_ethernet_with_a_3_0_state_file_is_steered_again
+    #     test_a_console_moved_off_ethernet_with_no_valid_jump_says_why_it_falls_back
+    #     test_a_fallback_console_moved_between_links_drops_the_other_links_readings
+    #   saved by 3.2 or earlier,    resume: no `coarse` field reads as not
+    #     serial                      coarse.
+    #     test_a_serial_state_file_without_the_coarse_field_is_resumed
     #
     # AT A CHECK (getTime, every clock_check).
     #   the console does not        WeeWxIOError, in any state, as a check
@@ -1763,7 +1928,11 @@ class VantageNext(weewx.drivers.AbstractDevice):
     #     TestKeepClock.test_nothing_is_decided_while_the_jump_may_be_in_progress
     #   LEARNING/STEERING, nothing  a precise reading, logged; neither kept
     #   due                         nor acted on.  A coarse one is logged as
-    #                               such.
+    #                               such.  (Coarse class: every check's
+    #                               reading is due, one poll, no boundary
+    #                               sought; kept, no closer together than
+    #                               COARSE_READING_SPACING.)
+    #     test_a_short_clock_check_keeps_a_coarse_reading_an_hour_at_most
     #                                 test_two_precise_readings_a_day
     #                                 test_every_check_reads_precisely_and_only_two_a_day_are_kept
     #                                 test_a_check_on_a_slow_link_logs_a_coarse_reading
@@ -1783,9 +1952,12 @@ class VantageNext(weewx.drivers.AbstractDevice):
     #   ... due: the reading ENDS   no reading: nothing recorded or decided.
     #   in the midnight window        test_a_decision_measured_into_the_midnight_window_is_no_reading
     #     test_a_reading_in_the_last_seconds_before_midnight_is_no_reading
-    #   ... due, coarse             no reading; the next check tries again.
-    #                               Never precise: nothing decided, nothing
-    #                               set but by the max_drift backstop.
+    #   ... due, coarse             serial: no reading; the next check tries
+    #                               again.  Never precise: nothing decided,
+    #                               nothing set but by the max_drift backstop.
+    #                               Coarse class: the reading, kept.
+    #     test_a_weatherlinkip_console_is_steered_from_whole_second_readings
+    #     test_whole_second_readings_locked_to_the_consoles_second_are_dithered
     #     test_coarse_readings_in_the_early_evening_only_delay_the_decision
     #     test_a_link_too_slow_for_a_precise_reading_is_left_to_the_backstop
     #     test_a_console_that_goes_coarse_after_being_steered_keeps_its_jump
@@ -1798,11 +1970,17 @@ class VantageNext(weewx.drivers.AbstractDevice):
     #     test_a_jump_found_invalid_at_a_decision_keeps_the_held_one_as_fitted
     #     test_a_write_whose_ack_is_lost_is_confirmed_at_the_next_decision
     #     test_a_jump_the_driver_did_not_write_is_another_console
+    #     test_another_console_found_over_ethernet_is_learned_from_whole_second_readings
+    #     test_another_console_found_at_a_decision_keeps_its_first_reading
     #   ... precise, beyond         LEARNING afresh from this reading.
     #   CLOCK_MODEL_BREAK             test_a_small_move_early_in_steering_is_found_and_relearned
     #     test_a_clock_moved_by_something_else_is_set_by_the_backstop_and_relearned
     #   LEARNING, the fit spans     STEERING -- unless no drift fits the
     #   enough                      readings (fit_doubt): LEARNING afresh.
+    #                               Coarse: COARSE_MIN_SPAN, or a line at
+    #                               all for a clock beyond COARSE_FAR.
+    #     test_a_weatherlinkip_console_learns_for_two_days_and_is_never_set_meanwhile
+    #     test_a_weatherlinkip_far_off_center_is_steered_as_soon_as_its_readings_make_a_line
     #     test_nothing_is_written_until_the_drift_is_learned
     #     test_a_clock_moved_while_learning_is_learned_afresh_whatever_the_move
     #     test_a_fit_that_misses_its_own_readings_is_no_fit
@@ -1812,7 +1990,12 @@ class VantageNext(weewx.drivers.AbstractDevice):
     #                               JUMP_NO_WRITE_AFTER until midnight, nor
     #                               in a time change window (refused as the
     #                               check begins, and asked again at the
-    #                               write).
+    #                               write).  Coarse: choose_coarse_jump on the
+    #                               fitted off-center distance.
+    #     test_choose_coarse_jump
+    #     test_a_coarse_clock_is_never_long_out_of_the_band_whatever_the_drift
+    #     test_fitted_error_puts_the_clock_where_its_line_does
+    #     test_a_weatherlinkip_console_is_steered_from_whole_second_readings
     #     test_every_console_is_steered_within_the_band_and_never_set
     #     test_a_console_that_gains_time_is_steered_with_a_negative_jump
     #     test_no_write_lands_in_the_half_hour_before_midnight
@@ -1836,6 +2019,8 @@ class VantageNext(weewx.drivers.AbstractDevice):
     #                               the midnight window.
     #     test_fallback_with_no_jump_in_memory_learns_the_drift_and_the_jump
     #     test_fallback_over_ethernet_learns_the_drift_from_coarse_readings
+    #     test_fallback_over_ethernet_spaces_its_readings_too
+    #     test_fallback_over_ethernet_takes_no_reading_that_ends_in_the_minute_before_midnight
     #     test_fallback_finds_a_clock_moved_by_something_else_and_relearns_in_place
     #     test_fallback_measured_into_the_midnight_window_sets_nothing
     #     TestKeepClock.test_unforced_sets_are_rate_limited
@@ -1845,7 +2030,28 @@ class VantageNext(weewx.drivers.AbstractDevice):
     # to the center; refused in a DST window (asked as the check begins) or
     # the midnight window (asked as it begins and as its reading ends).  Every
     # set, forced or FALLBACK's, is recorded as the move the console read
-    # back: test_a_set_is_recorded_as_the_move_the_console_made.
+    # back: test_a_set_is_recorded_as_the_move_the_console_made.  While
+    # coarse (any state), as the step asked for, with its landing an unknown
+    # of the fit (_coarse_landings): no prediction until a reading follows
+    # it, and until COARSE_LANDING_READINGS have, the jump held is the one
+    # for a clock at center, the one that only cancels the drift -- written
+    # back by a forced set while steering coarse, at once, if the set itself
+    # was allowed (from weectl too, its failure not counted), and by the
+    # evening decision, which cannot place the clock yet, for any set that
+    # could not (_hold_for_landing).
+    #     test_a_forced_set_while_coarse_keeps_the_drift
+    #     test_a_coarse_sets_landing_is_learned_from_the_readings_after_it
+    #     test_an_evening_after_a_set_holds_the_jump_that_only_cancels_the_drift
+    #     test_a_set_while_coarse_writes_back_the_jump_that_only_cancels_the_drift
+    #     test_the_write_back_allows_for_a_time_change_day
+    #     test_the_write_back_says_where_the_set_left_the_clock
+    #     test_a_set_that_ends_past_the_limit_still_writes_back
+    #     test_a_set_that_runs_past_midnight_writes_nothing_back
+    #     test_a_forced_set_whose_reading_ends_in_a_time_change_window_is_refused
+    #     test_a_coarse_set_centers_the_clock_for_the_jump_it_will_hold
+    #     test_a_set_is_saved_before_the_jump_is_written_back
+    #     test_a_set_writes_back_over_a_write_not_yet_confirmed
+    #     test_a_coarse_set_reads_the_clock_once_and_seeks_no_second_boundary
     #     test_a_clock_moved_by_something_else_is_set_by_the_backstop_and_relearned
     #     test_a_forced_set_measured_into_the_midnight_window_is_refused
     #     test_fallback_and_the_backstop_measure_a_time_change_day_for_its_real_length
@@ -1854,6 +2060,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
     # weectl device --set-time: reads clock.json, centers on what was
     # learned, records its step only over the file weewxd saved.
     #     test_set_time_centers_on_the_learned_drift_and_records_the_step
+    #     test_set_time_over_ethernet_holds_the_jump_that_only_cancels_the_drift
     #     test_set_time_with_no_saved_state_creates_nothing
     #     test_set_time_keeps_the_state_files_owner_and_permissions
     #     test_set_time_that_cannot_replace_the_state_leaves_it_alone
@@ -1971,8 +2178,37 @@ class VantageNext(weewx.drivers.AbstractDevice):
     # rather than every night.  Writes cost no reception, and a night's jump
     # is made to a few hundredths of a second.
     JUMP_BAND = 0.19
-    # No jump is written from this far into the day until midnight.
+    # A console read only to the whole second (over ethernet, through a
+    # WeatherLinkIP) is steered from the fit of its readings: the band is
+    # wider, so the fit's own noise (a tenth or two) does not cause writes,
+    # and within COARSE_FAR of center the jump is the drift's neighbor
+    # (choose_coarse_jump).  Its fit is trusted after COARSE_MIN_SPAN of
+    # readings, a reading at every check (simulated: 3.3's design).
+    COARSE_BAND = 0.35
+    COARSE_FAR = 1.0
+    # A neighbor that would leave the clock beyond COARSE_REACH after this
+    # many nights gives way to the next quarter (choose_coarse_jump).
+    COARSE_REACH = 0.45
+    COARSE_REACH_NIGHTS = 3
+    COARSE_MIN_SPAN = 2 * 86400
+    # A reading at every check, but no closer together than this: about an
+    # hour, with room for a check that lands a little early.  At WeeWX's
+    # default clock_check, every one; at 300 s, one in ten.  Fourteen days
+    # of them stay a few hundred at most, however short the interval, in
+    # FALLBACK too.  (_coarse_reading_due: less the slack for the dither and
+    # the logger's hold, which stamp a reading after its check begins.)
+    COARSE_READING_SPACING = 3000
+    COARSE_READING_SLACK = 60
+    # A coarse set's landing is learned from the readings after it, and no
+    # decision is made on fewer than this many (fitted_error).
+    COARSE_LANDING_READINGS = 4
+    # No jump is written from this far into the day until midnight...
     JUMP_NO_WRITE_AFTER = 23.5 * 3600
+    # ...but for the one written back after a set while coarse (_backstop),
+    # for as long as the set itself may be made, until CLOCK_PRE_MIDNIGHT
+    # before midnight: the set has just put the console within a second or
+    # two of the host, and a write through a WeatherLinkIP takes 1.7 s.
+    JUMP_WRITE_BACK_BEFORE = 86400 - 60
     # This many failed writes in a row mean FALLBACK.
     JUMP_WRITE_FAILS = 2
     # The drift is fitted over this many days of precise readings...
@@ -2059,12 +2295,14 @@ class VantageNext(weewx.drivers.AbstractDevice):
     _clock = None
     _clock_path = None
     _clock_save_over = False
-    # Connected over ethernet (a WeatherLinkIP): the clock is kept by setting
-    # it, never steered.
+    # Connected over ethernet (a WeatherLinkIP): every reading is coarse, and
+    # the clock is steered from the fit of them (the coarse class).
     _ethernet = False
-    # The reason is saved in clock.json; 3.0 and 3.1 wrote it with a different
-    # ending, and ClockState.from_dict maps a saved reason that opens with
-    # the mark to this sentence, so equality is all any comparison needs.
+    # Up to 3.2 a console over ethernet was kept by setting it, and its state
+    # file saved this reason; 3.0 and 3.1 wrote it with a different ending,
+    # and ClockState.from_dict maps a saved reason that opens with the mark
+    # to this sentence, so equality is all any comparison needs.  It is only
+    # READ now: such a file is relearned (_clock_state).
     ETHERNET_REASON_MARK = "the console is connected over ethernet"
     ETHERNET_REASON = (ETHERNET_REASON_MARK + " (a WeatherLinkIP), which holds every answer "
                        "for half a second or more: too slow to read its clock precisely enough "
@@ -2238,6 +2476,20 @@ class VantageNext(weewx.drivers.AbstractDevice):
         jump = self.getDayJump()
         saved = ClockState.load(self._clock_path) if self._clock_path else None
         said = False                  # why it is falling back, logged
+        # The class -- read to the whole second (ethernet) or precisely --
+        # is decided from the configuration at every start.  Readings of the
+        # other class are not carried over, and over ethernet only a file
+        # saved coarse is: one saved over ethernet by 3.2 or earlier (in
+        # FALLBACK, for the ethernet) can hold readings stamped when their
+        # answer arrived, three quarters of a second late, that nothing
+        # marks as such.  Asked of the file as saved, before anything below
+        # rewrites its reason.
+        if saved is None:
+            other_class = False
+        elif self._ethernet:
+            other_class = not saved.coarse
+        else:
+            other_class = saved.coarse or saved.fallback_reason == VantageNext.ETHERNET_REASON
         if jump is None:
             state = saved if saved is not None else ClockState(None, now)
             # Whatever was known of it, the console's jump is not known now:
@@ -2248,10 +2500,10 @@ class VantageNext(weewx.drivers.AbstractDevice):
             if state.fitted_jump is None:
                 state.fitted_jump = state.jump
             state.jump = state.pending_jump = None
-            # Already falling back only because it WAS on ethernet: the reason
-            # now is the jump, and is said so.
-            if state.state != ClockState.FALLBACK or (
-                    not self._ethernet and state.fallback_reason == VantageNext.ETHERNET_REASON):
+            # Falling back only because it was on ethernet (up to 3.2): the
+            # reason now is the jump, and is said so.
+            if (state.state != ClockState.FALLBACK
+                    or state.fallback_reason == VantageNext.ETHERNET_REASON):
                 state.state = ClockState.FALLBACK
                 state.fallback_reason = ("EEPROM 0x2E/0x2F do not hold a valid midnight jump, "
                                          "so this console's jump is not known")
@@ -2260,7 +2512,8 @@ class VantageNext(weewx.drivers.AbstractDevice):
                 said = True
         elif saved is None:
             state = ClockState(jump, now)
-            log.info("Clock: the console's midnight jump is %.2f s; learning its drift.", jump)
+            log.info("Clock: the console's midnight jump is %.2f s; learning its drift%s.", jump,
+                     ' from whole-second readings' if self._ethernet else '')
             state.note(now, 'LEARNING from a %.2f s jump' % jump)
         elif (saved.jump != jump and saved.pending_jump is not None
                 and saved.pending_jump[1] == jump):
@@ -2281,21 +2534,26 @@ class VantageNext(weewx.drivers.AbstractDevice):
             state = saved
             log.info("Clock: %s, midnight jump %.2f s%s.", state.state, jump,
                      '' if state.drift is None else ', drift %+.2f s a day' % state.drift)
-        if self._ethernet and state.state != ClockState.FALLBACK:
-            # Decided from the configuration, at every start: no count of
-            # coarse readings for a restart to reset.
-            state.state = ClockState.FALLBACK
-            state.fallback_reason = VantageNext.ETHERNET_REASON
-            log.info("Clock: %s; the clock is kept by setting it.", state.fallback_reason)
-            state.note(now, 'FALLBACK: ' + state.fallback_reason)
-            said = True
-        elif (not self._ethernet and jump is not None and state.state == ClockState.FALLBACK
-                and state.fallback_reason == VantageNext.ETHERNET_REASON):
-            # Off ethernet now: nothing learned over it was steering.
+        if (jump is None and state is saved and other_class
+                and (state.readings or state.moves or state.drift is not None)):
+            # Still FALLBACK, its jump unknown: the jump it fitted stands, but
+            # not the readings, sets or drift learned over the other link --
+            # the drift too when the readings have aged out.
+            log.info("Clock: the readings saved were taken over %s; learning the drift afresh.",
+                     'serial or USB' if self._ethernet else 'ethernet')
+            state.note(now, 'readings of the other link dropped')
+            state.readings, state.moves, state.drift = [], [], None
+        if jump is not None and state is saved and other_class:
             state = ClockState(jump, now)
-            log.info("Clock: no longer connected over ethernet; the console's midnight jump is "
-                     "%.2f s; learning its drift.", jump)
-            state.note(now, 'LEARNING afresh: off ethernet, the console holds %.2f s' % jump)
+            if self._ethernet:
+                log.info("Clock: connected over ethernet; the console's midnight jump is %.2f s; "
+                         "learning its drift from whole-second readings.", jump)
+                state.note(now, 'LEARNING afresh: over ethernet, the console holds %.2f s' % jump)
+            else:
+                log.info("Clock: no longer connected over ethernet; the console's midnight jump "
+                         "is %.2f s; learning its drift.", jump)
+                state.note(now, 'LEARNING afresh: off ethernet, the console holds %.2f s' % jump)
+        state.coarse = self._ethernet
         if state.state == ClockState.FALLBACK and not said:
             # Resuming a FALLBACK: why, at every start, so a log read after a
             # restart still says why the clock is being set.
@@ -2411,20 +2669,84 @@ class VantageNext(weewx.drivers.AbstractDevice):
             return self._keep_clock_by_setting(now, error, secs_into_day)
         return self._steer(state, now, first)
 
+    # Coarse readings are dithered (_coarse_reading): a random wait of up to
+    # this long before the GETTIME.  Seeded per process; a test may replace it.
+    COARSE_DITHER_SECS = 1.0
+    _dither = random.Random()
+
+    def _coarse_reading(self):
+        """One whole-second reading, for a console read only to the whole
+        second, DITHERED: the GETTIME is sent after a random wait of up to
+        COARSE_DITHER_SECS.  WeeWX's clock checks start just after a LOOP
+        packet, which the console times, so undithered every reading falls
+        at much the same point of the console's second and drops much the
+        same fraction (measured on rpi-imager, 2026-10-14: residuals within
+        +-0.1 s where readings spread over the second scatter by 0.29) --
+        an offset the fit cannot tell from where the clock is, up to half a
+        second.  Dithered, the fractions average out.  Returns (error, None)."""
+        self._sleep(self._dither.uniform(0.0, VantageNext.COARSE_DITHER_SECS))
+        console_ts, read_ts = self._poll_console()
+        return console_ts + 0.5 - read_ts, None
+
+    def _coarse_reading_due(self, now):
+        """Whether a coarse reading is kept at the check that began at now:
+        none kept yet, or the last at least COARSE_READING_SPACING before,
+        less COARSE_READING_SLACK -- a reading is stamped after its check's
+        dither and the logger's hold, a second or two after the check began,
+        so a check exactly the spacing after the last is still due."""
+        readings = self._clock.readings
+        return (not readings or now - readings[-1][0]
+                >= VantageNext.COARSE_READING_SPACING - VantageNext.COARSE_READING_SLACK)
+
+    def _hold_for_landing(self, state, t, off_center, how):
+        """Until COARSE_LANDING_READINGS readings have followed a coarse set
+        (landing_pending), the console holds cancel_jump: the set put the
+        clock at center, to a second, and a jump steering wrote to bring it
+        in would correct it again at midnight.  Written if the console may
+        hold anything else -- the jump it holds, or a write not yet
+        confirmed.  Called right after a coarse set, and by the evening
+        decision while the landing is pending, so a set that could not
+        write it (a time change window) is caught up.  A failure from
+        weectl device --set-time does not count toward FALLBACK."""
+        cancel = cancel_jump(state.drift, day_length(t))
+        pending = state.pending_jump[1] if state.pending_jump is not None else None
+        if state.jump == cancel and pending in (None, cancel):
+            return None
+        return self._write_jump(state, t, cancel, off_center, how,
+                                count_failure=not self._clock_save_over)
+
     def _backstop(self, state, first):
         """The forced form: step whole seconds to the center, in any state,
         and record the step so the fit stays whole."""
-        error, gap = self._measure_clock_error(first)
+        if state.coarse:
+            # No boundary to find through a WeatherLinkIP: one reading,
+            # dithered.
+            error, gap = self._coarse_reading()
+        else:
+            error, gap = self._measure_clock_error(first)
         now = self._now()
         near = VantageNext._near_the_jump(now)
         if near:
             return error, VantageNext._jump_refusal(near, True)
+        # And the time change window, asked again too: the reading (a dither
+        # and the logger's hold, over ethernet) can carry the check into it.
+        if VantageNext.inTimeChangeWindow(self.time_change_windows,
+                                          datetime.datetime.fromtimestamp(now)):
+            log.info("setTime ignored during time change transition period.")
+            return error, "Not set: inside a time change transition period."
         day_secs = day_length(now)
+        # Steered over ethernet, the clock holds cancel_jump from the set
+        # until its landing is placed (_hold_for_landing), so it is centered
+        # for that jump -- not for one steering wrote to bring it in, which
+        # would leave it that correction's half-day creep off.
+        steered_coarse = (state.coarse and state.state != ClockState.FALLBACK
+                          and state.drift is not None)
+        jump_for = cancel_jump(state.drift, day_secs) if steered_coarse else self.day_start_jump
         off_center = VantageNext.clock_off_center(
-            error, now - startOfDay(now), self.clock_drift_secs, self.day_start_jump, day_secs)
+            error, now - startOfDay(now), self.clock_drift_secs, jump_for, day_secs)
         step = VantageNext.clock_step(
             off_center, self.clock_recenter_threshold, gap is not None, True,
-            VantageNext.day_creep(self.clock_drift_secs, self.day_start_jump, day_secs))
+            VantageNext.day_creep(self.clock_drift_secs, jump_for, day_secs))
         if step == 0:
             log.info("Clock is %+.2f s off center; not set.", off_center)
             return error, ("Not set: the clock is %+.2f s from the center of its daily drift, "
@@ -2432,24 +2754,58 @@ class VantageNext(weewx.drivers.AbstractDevice):
         # FALLBACK's holdoff, armed BEFORE the attempt: see above.
         self._next_unforced_set_ts = now + VantageNext.CLOCK_MIN_SET_INTERVAL
         moved = self._step_console_clock(step, error, gap)
-        # Recorded -- the move the console made, as read back -- so the fit
-        # does not mistake it for something it does not know of.  (A set that
-        # raised is not: if it moved the clock after all, the fit breaks and
-        # learns afresh.)
+        # Recorded -- the move the console made, as read back; over ethernet
+        # the step asked for, its landing learned (_coarse_landings) -- so
+        # the fit does not mistake it for something it does not know of.  (A
+        # set that raised is not: if it moved the clock after all, the fit
+        # breaks and learns afresh.)  Recorded and saved first: a process
+        # stopped during the write below must not find that write without
+        # the set before it.
         if moved:
             state.moves.append([self._now(), moved])
         state.note(now, 'set %+d s (forced; error %+.2f)' % (step, error))
         self._save_clock()
         log.info("Clock stepped %+d s (forced): error %+.2f -> %+.2f s (%d)",
                  step, error, error + moved, self.pkt_count)
+        # Eligible as the set itself was, by the time before it: a set begun
+        # at 23:58:59 may end after 23:59, and its write a second or two
+        # later, still well before the midnight (JUMP_WRITE_BACK_BEFORE, the
+        # set's own limit, not JUMP_NO_WRITE_AFTER: the backstop's set falls
+        # at the clock's widest, late in the evening as often as not).
+        # And not if the set itself ran on -- retries over a failing link --
+        # past midnight, or into a time change window: the write would land
+        # as the console makes its jump.  (Into the minute before midnight is
+        # fine: the set has just put the console within a second or two of
+        # the host.)  The next evening's decision, the landing still pending,
+        # writes it then.
+        t = self._now()
+        if (moved and steered_coarse
+                and clock_secs(now) < VantageNext.JUMP_WRITE_BACK_BEFORE
+                and not VantageNext.inTimeChangeWindow(self.time_change_windows,
+                                                      datetime.datetime.fromtimestamp(now))
+                and VantageNext._near_the_jump(t) != 'after'
+                and not VantageNext.inTimeChangeWindow(self.time_change_windows,
+                                                      datetime.datetime.fromtimestamp(t))):
+            # Where the set left the clock, by steering's measure, as every
+            # other decision line says it.
+            landed = error + moved - VantageNext.ideal_clock_error(t - startOfDay(t), state.drift)
+            self._hold_for_landing(state, t, landed, ', after a set: the jump that only cancels it')
+            self._save_clock()                 # what the write did (weectl saves nothing else)
         return error + moved, "Clock stepped %+d s: error %+.2f -> %+.2f s." % (step, error, error + moved)
 
     def _steer(self, state, now, first):
         """LEARNING and STEERING: the day's morning reading, which learns, and
         its evening reading, the decision in STEERING.  `first` is the
-        check's entry poll, the precise reading's first."""
+        check's entry poll, the precise reading's first.  A console read
+        only to the whole second (state.coarse) keeps a reading at every
+        check instead -- but no more often than COARSE_READING_SPACING, so a
+        short clock_check does not fill the file or crowd the readings -- and
+        decides from their fit."""
         today = datetime.date.fromtimestamp(now).isoformat()
-        reading_due = state.reading_day != today
+        if state.coarse:
+            reading_due = self._coarse_reading_due(now)
+        else:
+            reading_due = state.reading_day != today
         decision_due = (state.decision_day != today
                         and clock_secs(now) >= self._decision_opens(now))
         jump = state.jump
@@ -2460,8 +2816,14 @@ class VantageNext(weewx.drivers.AbstractDevice):
         # the LOOP request waits is delivered late).  Every check says where
         # the clock stands, the kept ones too (the evening's decision adds a
         # line of its own); only the morning's and the evening's readings
-        # are kept and acted on.
-        error, gap = self._measure_clock_error(first, coarse_on_failure=True)
+        # are kept and acted on.  A console read only to the whole second
+        # is not polled for a boundary it cannot find: one reading, dithered
+        # (_coarse_reading), not the entry poll, which lands where every
+        # check does in the console's second.
+        if state.coarse:
+            error, gap = self._coarse_reading()
+        else:
+            error, gap = self._measure_clock_error(first, coarse_on_failure=True)
         t = self._now()
         near = VantageNext._near_the_jump(t)
         if near:
@@ -2471,12 +2833,15 @@ class VantageNext(weewx.drivers.AbstractDevice):
         if gap is None:
             log.info("Clock is about %+.2f s off center (one reading, good to +-0.5 s; %s, "
                      "midnight jump %.2f s).", off_center, state.state.lower(), jump)
-            # Not a reading to decide or learn on: the next check tries again.
-            # (A serial console that never gives a precise one is not kept
-            # here at all: WeeWX's max_drift backstop keeps its clock.)
-            return error, "Not set: a coarse reading."
-        log.info("Clock is %+.2f s off center (%s, midnight jump %.2f s).",
-                 off_center, state.state.lower(), jump)
+            if not state.coarse:
+                # Not a reading to decide or learn on: the next check tries
+                # again.  (A serial console that never gives a precise one
+                # is not kept here at all: WeeWX's max_drift backstop keeps
+                # its clock.)
+                return error, "Not set: a coarse reading."
+        else:
+            log.info("Clock is %+.2f s off center (%s, midnight jump %.2f s).",
+                     off_center, state.state.lower(), jump)
         if not (decision_due or reading_due):
             return error, outcome
         # The jump the console holds, read before every reading: a write
@@ -2491,38 +2856,51 @@ class VantageNext(weewx.drivers.AbstractDevice):
             self._sync_clock()
             self._save_clock()
             return error, "Not set: the console's midnight jump is not known."
-        # Another console found there starts a state of its own.
+        # Another console found there starts a state of its own -- and its
+        # first reading is kept, whatever was due for the old one.
+        swapped = self._clock is not state
         state = self._clock
-        # Every reading learns; the day's decision reading is marked too.
-        state.reading_day = today
+        # Every reading learns; the day's decision reading is marked too.  A
+        # console read to the whole second keeps a reading only when one is
+        # due by COARSE_READING_SPACING: its decision is made from the line
+        # as it stands, and a short clock_check must not crowd the readings.
+        keep = reading_due or not state.coarse or swapped
+        if keep:
+            state.reading_day = today
         if decision_due:
             state.decision_day = today
         jump = state.jump
 
-        reading = [t, error, gap]
-        moved = prediction_error(state, reading)
-        if moved is not None and abs(moved) > VantageNext.CLOCK_MODEL_BREAK:
-            log.info("Clock: a reading %+.2f s from what the drift predicts: something moved the "
-                     "clock.  Learning its drift afresh from this reading.", moved)
-            state.note(t, 'model broke (%+.2f s): LEARNING afresh' % moved)
-            state.readings = [reading]
-            state.drift = None
-            state.state = ClockState.LEARNING
-        else:
-            state.readings.append(reading)
-            state.trim(t, VantageNext.CLOCK_LEARN_DAYS)
-            fit = fit_drift(state)
-            doubt = fit and fit_doubt(fit[0], None, fit[1])
-            if doubt:
-                self._no_fit(state, reading, t, doubt)
+        if keep:
+            reading = [t, error, gap]
+            moved = prediction_error(state, reading)
+            if moved is not None and abs(moved) > VantageNext.CLOCK_MODEL_BREAK:
+                log.info("Clock: a reading %+.2f s from what the drift predicts: something moved the "
+                         "clock.  Learning its drift afresh from this reading.", moved)
+                state.note(t, 'model broke (%+.2f s): LEARNING afresh' % moved)
+                state.readings = [reading]
+                state.drift = None
                 state.state = ClockState.LEARNING
-            elif fit is not None:
-                state.drift = fit[0]
-                if state.state == ClockState.LEARNING:
-                    state.state = ClockState.STEERING
-                    log.info("Clock: drift %+.2f s a day, midnight jump %.2f s; steering.",
-                             state.drift, jump)
-                    state.note(t, 'STEERING: drift %+.2f s a day' % state.drift)
+            else:
+                state.readings.append(reading)
+                state.trim(t, VantageNext.CLOCK_LEARN_DAYS)
+                fit = fit_drift(state)
+                doubt = fit and fit_doubt(fit[0], None, fit[1])
+                if doubt:
+                    self._no_fit(state, reading, t, doubt)
+                    state.state = ClockState.LEARNING
+                elif fit is not None and (state.state == ClockState.STEERING or not state.coarse
+                                          or t - state.readings[0][0] >= VantageNext.COARSE_MIN_SPAN
+                                          or self._coarse_far_off(state, fit[0], t)):
+                    # (Whole-second readings are trusted only once they span
+                    # COARSE_MIN_SPAN -- or, for a clock beyond COARSE_FAR, as
+                    # soon as they make a line: until then the drift stays unknown.)
+                    state.drift = fit[0]
+                    if state.state == ClockState.LEARNING:
+                        state.state = ClockState.STEERING
+                        log.info("Clock: drift %+.2f s a day, midnight jump %.2f s; steering.",
+                                 state.drift, jump)
+                        state.note(t, 'STEERING: drift %+.2f s a day' % state.drift)
         self._sync_clock()
 
         # No write from JUMP_NO_WRITE_AFTER on the clock, nor in a time change
@@ -2532,15 +2910,59 @@ class VantageNext(weewx.drivers.AbstractDevice):
                 and clock_secs(t) < VantageNext.JUMP_NO_WRITE_AFTER
                 and not VantageNext.inTimeChangeWindow(self.time_change_windows,
                                                       datetime.datetime.fromtimestamp(t))):
-            off_center = error - VantageNext.ideal_clock_error(secs, state.drift)
-            new = choose_jump(off_center, state.drift, jump, day_length(t))
-            if new == jump:
-                log.info("Clock is %+.2f s off center (drift %+.2f s a day); midnight jump "
-                         "%.2f s kept.", off_center, state.drift, jump)
+            fitted = fitted_error(state, t) if state.coarse else None
+            if state.coarse and landing_pending(state, t):
+                # A set's landing is not known yet: the console holds the
+                # jump for a clock at center (_hold_for_landing), written
+                # here for a set that could not write it.  That is the day's
+                # decision.
+                log.info("Clock: no decision yet: %d readings since the last set, %d needed to "
+                         "place the clock; until then the midnight jump is %.2f s, the one "
+                         "that only cancels the drift.", readings_since_last_set(state) or 0,
+                         VantageNext.COARSE_LANDING_READINGS,
+                         cancel_jump(state.drift, day_length(t)))
+                written = self._hold_for_landing(
+                    state, t, off_center,
+                    ', the evening after a set: the jump that only cancels it')
+                if written:
+                    outcome = written
+                new, how = jump, None              # done: nothing more below
+            elif state.coarse and fitted is None:
+                # No line through the readings: nothing to decide on.
+                log.info("Clock: no decision yet: the readings make no line; midnight jump "
+                         "%.2f s kept.", jump)
+                new, how = jump, None
+            elif state.coarse:
+                # Where the clock is comes from the fit, good to a tenth or
+                # two; this check's reading alone is good to half a second.
+                off_center = fitted - VantageNext.ideal_clock_error(secs, state.drift)
+                new = choose_coarse_jump(off_center, state.drift, jump, day_length(t))
+                how = ', fitted to %d whole-second readings' % len(state.readings)
             else:
-                outcome = self._write_jump(state, t, new, off_center)
+                off_center = error - VantageNext.ideal_clock_error(secs, state.drift)
+                new = choose_jump(off_center, state.drift, jump, day_length(t))
+                how = ''
+            if new == jump and how is not None:
+                log.info("Clock is %+.2f s off center (drift %+.2f s a day%s); midnight jump "
+                         "%.2f s kept.", off_center, state.drift, how, jump)
+            elif new != jump:
+                outcome = self._write_jump(state, t, new, off_center, how)
         self._save_clock()
         return error, outcome
+
+    @staticmethod
+    def _coarse_far_off(state, drift, t):
+        """A clock read to the whole second that the line through its readings
+        puts beyond COARSE_FAR of center: the first decision's jump aims at
+        the center, and two days' wait would let max_drift set it.  The
+        first line, half a day and a midnight of readings, gives the drift
+        only to about a second a day, so that first jump can land the clock
+        some tenths off center; the nights after bring it in, with the
+        drift known better each day (10,000 simulated starts, 2026-10-14)."""
+        fitted = fitted_error(state, t)
+        if fitted is None:
+            return False
+        return abs(fitted - VantageNext.ideal_clock_error(t - startOfDay(t), drift)) > VantageNext.COARSE_FAR
 
     def _decision_opens(self, t):
         """The time of day on the clock from which the day's decision is made,
@@ -2591,11 +3013,9 @@ class VantageNext(weewx.drivers.AbstractDevice):
 
     def _warn_if_clock_check_too_long(self):
         """At startup: a clock_check past _clock_check_limit is warned,
-        never refused.  Not over ethernet: that clock is kept by setting it
-        (FALLBACK), and a long interval there costs only a later catch by
-        max_drift.  Returns whether it warned."""
+        never refused.  Returns whether it warned."""
         limit = self._clock_check_limit()
-        if self.clock_check <= limit or self._ethernet:
+        if self.clock_check <= limit:
             return False
         log.warning("The [StdTimeSynch] clock_check of %d s in weewx.conf is more than the "
                     "driver can steer the clock with: the console clock is read on the engine's checks, "
@@ -2649,6 +3069,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
                      "another console, or one set by hand.  Learning its drift afresh.", held,
                      'unknown' if state.jump is None else '%.2f' % state.jump)
             fresh = ClockState(held, t)
+            fresh.coarse = self._ethernet
             fresh.note(t, 'LEARNING afresh: the console holds %.2f s' % held)
             self._clock = fresh
             self._sync_clock()
@@ -2658,7 +3079,11 @@ class VantageNext(weewx.drivers.AbstractDevice):
         self._sync_clock()
         return True
 
-    def _write_jump(self, state, t, new, off_center):
+    def _write_jump(self, state, t, new, off_center, how='', count_failure=True):
+        """Write a new midnight jump and read it back (the bookkeeping is in
+        the design comment).  count_failure False: a failure does not count
+        toward FALLBACK (weectl device --set-time's write, a command meant
+        only to set the time)."""
         old = state.jump
         # PENDING, and saved, before the write: a process stopped between the
         # write and the save finds it at the next start as its own.
@@ -2693,11 +3118,12 @@ class VantageNext(weewx.drivers.AbstractDevice):
             state.jumps.append([t, new])
             state.write_fails = 0
             state.note(t, 'jump %.2f -> %.2f (off center %+.2f)' % (old, new, off_center))
-            log.info("Clock is %+.2f s off center (drift %+.2f s a day); midnight jump %.2f -> "
-                     "%.2f s.", off_center, state.drift, old, new)
+            log.info("Clock is %+.2f s off center (drift %+.2f s a day%s); midnight jump %.2f -> "
+                     "%.2f s.", off_center, state.drift, how, old, new)
             self._sync_clock()
             return "Midnight jump %.2f -> %.2f s." % (old, new)
-        state.write_fails += 1
+        if count_failure:
+            state.write_fails += 1
         state.note(t, 'jump write %.2f failed (read back %s)' % (new, back))
         if not raised:
             # Written, read back, and not what was written (the raise is
@@ -2708,7 +3134,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
             # It holds something else now: that is what the console will do.
             state.jump = back
             state.jumps.append([t, back])
-        if state.write_fails >= VantageNext.JUMP_WRITE_FAILS:
+        if count_failure and state.write_fails >= VantageNext.JUMP_WRITE_FAILS:
             self._to_fallback(t, "writing the midnight jump failed %d times running"
                               % state.write_fails)
         self._sync_clock()
@@ -2755,8 +3181,27 @@ class VantageNext(weewx.drivers.AbstractDevice):
         self._save_clock()
 
     def _keep_clock_by_setting(self, now, error, secs_into_day):
-        """FALLBACK's rule (see above), with what it has learned."""
-        self._learn_by_setting(now, error, None)
+        """FALLBACK's rule (see above), with what it has learned.  Over
+        ethernet the reading is dithered (_coarse_reading), not the entry
+        poll, and no boundary is sought."""
+        coarse = self._clock.coarse
+        if coarse:
+            error, unused = self._coarse_reading()
+            now = self._now()
+            secs_into_day = now - startOfDay(now)
+            # Asked again as the reading ends, as _steer asks: the dither and
+            # the logger's hold can carry it into the minute before midnight,
+            # or into a time change window.
+            near = VantageNext._near_the_jump(now)
+            if near:
+                return error, VantageNext._jump_refusal(near, False)
+            if VantageNext.inTimeChangeWindow(self.time_change_windows,
+                                              datetime.datetime.fromtimestamp(now)):
+                return error, "Not set: inside a time change transition period."
+        if not coarse or self._coarse_reading_due(now):
+            # Over ethernet, kept no oftener than COARSE_READING_SPACING, as
+            # when steering.
+            self._learn_by_setting(now, error, None)
         day_secs = day_length(now)
         off_center = VantageNext.clock_off_center(
             error, secs_into_day, self.clock_drift_secs, self.day_start_jump, day_secs)
@@ -2783,7 +3228,10 @@ class VantageNext(weewx.drivers.AbstractDevice):
                      if held_for > VantageNext.CLOCK_STARTUP_HOLDOFF else "")
             return error, "Not set: the clock may not be set again yet."
 
-        error, gap = self._measure_clock_error()
+        if coarse:
+            gap = None                     # the dithered reading above is as good as any
+        else:
+            error, gap = self._measure_clock_error()
         # Everything from here is of the moment the reading ended: its day,
         # that day's length, and how far into it.
         now = self._now()
@@ -4647,6 +5095,8 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
         else:
             state_str = saved.state + ('' if saved.fallback_reason is None
                                        else ': ' + saved.fallback_reason)
+            if saved.coarse and saved.state != ClockState.FALLBACK:
+                state_str += ', from whole-second readings (ethernet)'
             drift_str = ('not yet learned' if saved.drift is None
                          else '%+.2f s a day' % saved.drift)
         print("""    CONSOLE CLOCK:

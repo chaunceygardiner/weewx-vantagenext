@@ -214,10 +214,10 @@ class TestTimeSynch:
             assert opens == window
             assert (opens + check + console._check_lead() <= deadline) == fits
         # The warning's own condition, on the same console: at the limit,
-        # none; one second over, warned; over ethernet the clock is set, not
-        # steered -- no slot, no warning however long the interval.
+        # none; one second over, warned -- over ethernet too, whose clock is
+        # steered from the same evening decision (3.3).
         for check, ethernet, warned in ((limit, False, False), (limit + 1, False, True),
-                                        (86400, True, False)):
+                                        (limit, True, False), (86400, True, True)):
             console.clock_check, console._ethernet = check, ethernet
             caplog.clear()
             with caplog.at_level('WARNING'):

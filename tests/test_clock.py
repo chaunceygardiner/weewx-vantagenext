@@ -10,6 +10,7 @@ played by run_days (getTime every clock_check, setTime past max_drift)."""
 
 import datetime
 import json
+import math
 import optparse
 import os
 import random
@@ -65,6 +66,77 @@ def test_an_inconsistent_pair_decodes_to_none():
 ])
 def test_choose_jump(off_center, drift, jump, chosen):
     assert vantagenext.choose_jump(off_center, drift, jump) == chosen
+
+
+@pytest.mark.parametrize('off_center, drift, jump, chosen', [
+    (0.0, -2.41, 2.25, 2.25),       # -0.16 a night, within the band: kept
+    (0.30, -2.41, 2.25, 2.25),      # ends +0.14: kept
+    (-0.30, -2.41, 2.25, 2.50),     # would end -0.46: the neighbor above (+0.09 a night)
+    (0.40, -2.41, 2.50, 2.25),      # would end +0.49: the neighbor below (-0.16 a night)
+    (-0.40, -3.98, 3.75, 4.00),     # the fastest loser, behind: up to the next quarter
+    (0.40, -2.50, 2.50, 2.25),      # a drift on a quarter, ahead: one below, not the held 2.50
+    (-0.40, -2.50, 2.50, 2.75),     # and behind: one above
+    (0.20, 1.00, -0.75, -1.25),     # a gaining console, ahead (would end +0.45)
+    (2.30, -2.00, 3.75, -0.25),     # beyond COARSE_FAR: the center in one night (-0.30)
+    (-2.30, -2.00, 3.75, 4.25),     # (4.30)
+    (12.0, -3.31, 3.25, -8.0),      # never past JUMP_MIN
+    (-0.90, -2.49, 2.25, 2.75),     # the neighbor (2.50) creeps +0.01: 2.75 does it in 3 nights
+    (-0.40, -2.49, 2.25, 2.50),     # just out: +0.01 a night is the jump to hold
+])
+def test_choose_coarse_jump(off_center, drift, jump, chosen):
+    assert vantagenext.choose_coarse_jump(off_center, drift, jump) == chosen
+
+
+@pytest.mark.parametrize('gaining', [False, True])
+def test_a_coarse_clock_is_never_long_out_of_the_band_whatever_the_drift(gaining):
+    # choose_coarse_jump nightly, as the fit hands it a position good to
+    # 0.12 s and a drift to 0.04 s a day (two days' readings), for every
+    # drift between two quarter-seconds and every start within COARSE_FAR
+    # of center, losing time or gaining: from the fourth night the clock is
+    # never more than three nights beyond 0.55 s, and writes stay near six a
+    # month.  (The drift just short of a quarter is the case that matters:
+    # its neighbor creeps a few hundredths a night.)
+    worst_out, writes_all = 0, []
+    for i in range(50):
+        frac = i * 0.005
+        lost = (1.0 + frac) if gaining else -(2.0 + frac)
+        for j in range(21):
+            rng = random.Random(100 * i + j)
+            c = -1.0 + j * 0.1
+            jump = vantagenext.round_to_quarter(-lost) + 0.25 * rng.randint(-2, 2)
+            writes = out = 0
+            for night in range(60):
+                new = vantagenext.choose_coarse_jump(c + rng.gauss(0, 0.12),
+                                                     lost + rng.gauss(0, 0.04), jump)
+                writes += new != jump
+                jump = new
+                c += lost + jump
+                out += night >= 3 and abs(c) > VantageNext.COARSE_BAND + 0.2
+            worst_out = max(worst_out, out)
+            writes_all.append(writes)
+    writes_all.sort()
+    assert worst_out <= 3
+    assert writes_all[len(writes_all) // 2] <= 15                 # per 60 nights
+    assert writes_all[int(0.99 * len(writes_all))] <= 25
+
+
+def test_fitted_error_puts_the_clock_where_its_line_does():
+    # Four days of whole-second readings of a console losing 2.41 s a day
+    # with a 2.25 s jump, a reading every four hours at a different point of
+    # the host's second each time: the line through them puts the clock
+    # where it truly is to a tenth of a second, at a reading and between.
+    rng = random.Random(3)
+    state = ClockState(2.25, START)
+    drift, e0 = -2.41, 0.3
+
+    def true(t):
+        return e0 + drift * (t - START) / 86400.0 + 2.25 * vantagenext.nights_between(START, t)
+    for k in range(24):
+        t = START + k * CHECK + rng.random()
+        state.readings.append([t, math.floor(t + true(t)) - t + 0.5, None])
+    for t in (state.readings[-1][0], state.readings[-1][0] + 3 * 3600):
+        assert vantagenext.fitted_error(state, t) == pytest.approx(true(t), abs=0.1)
+    assert vantagenext.fitted_error(ClockState(2.25, START), START) is None
 
 
 @pytest.mark.parametrize('noise', [0.0, 0.012])
@@ -261,10 +333,12 @@ def restart(station, console, clock):
     return again
 
 
-def run_days(station, console, clock, days, record=None, check=CHECK):
+def run_days(station, console, clock, days, record=None, check=CHECK, phase=None):
     """StdTimeSynch: getTime every check seconds; setTime past MAX_DRIFT.
     (check is the engine's interval; the driver's clock_check is told
-    separately, as the loader tells it.)"""
+    separately, as the loader tells it.)  phase: each check lands at that
+    point of the CONSOLE's second, as WeeWX's do, starting just after a LOOP
+    packet the console times (measured on rpi-imager, 2026-10-14)."""
     end = clock.t + days * 86400
     while clock.t < end:
         error = station.getTime() - clock.now()
@@ -273,6 +347,14 @@ def run_days(station, console, clock, days, record=None, check=CHECK):
         if record is not None:
             record.append((clock.t, console.error))
         clock.sleep(check)
+        if phase is not None:
+            console.tick()
+            clock.sleep((phase - (clock.t + console.error) % 1.0) % 1.0)
+
+
+def clock_days(clock):
+    """Days since START."""
+    return (clock.t - START) / 86400.0
 
 
 def readings_on(state, day):
@@ -956,21 +1038,6 @@ def test_fallback_with_no_jump_in_memory_learns_the_drift_and_the_jump(tmp_path)
     assert console.jump_writes == []
 
 
-def test_fallback_over_ethernet_learns_the_drift_from_coarse_readings(tmp_path):
-    # A WeatherLinkIP as measured (2026-10-10): the command reaches the
-    # console at once, its answer lands about three quarters of a second
-    # later -- never a precise reading.
-    station, console, clock = make(tmp_path, -3.31, 4.00, 0.0, reply_secs=0.75)
-    station._ethernet = True
-    run_days(station, console, clock, 14)
-    state = station._clock
-    assert state.state == ClockState.FALLBACK
-    assert state.drift == pytest.approx(-3.31, abs=0.15)
-    late = [s for s in console.sets if s > START + 6 * 86400]
-    assert len(late) <= 5                              # 8 days: every couple of days at most
-    assert console.jump_writes == []
-
-
 def test_fallbacks_record_is_bounded(tmp_path):
     station, console, clock = make(tmp_path, -3.31, 4.00, 0.0, pair=(0xF3, 0x0E))
     run_days(station, console, clock, VantageNext.CLOCK_LEARN_DAYS + 4)
@@ -1149,6 +1216,40 @@ def test_set_time_centers_on_the_learned_drift_and_records_the_step(tmp_path, mo
     assert saved.decision_day == '2026-10-05'
 
 
+@pytest.mark.parametrize('write_fails', [False, True])
+def test_set_time_over_ethernet_holds_the_jump_that_only_cancels_the_drift(tmp_path, monkeypatch,
+                                                                         capsys, write_fails):
+    # A WeatherLinkIP steered from whole-second readings, holding a 7.00 s
+    # jump steering wrote to bring it in.  weectl device --set-time sets the
+    # clock, records the step (whose landing weewxd will learn), and puts the
+    # jump back to 2.50, the one that only cancels the drift, as the
+    # backstop would -- but a write that fails there does not count toward
+    # FALLBACK, from a command meant only to set the time.
+    drift = -2.41
+    start = datetime.datetime(2026, 10, 6, 14, 30, 0).timestamp()
+    clock = FakeClock(start)
+    console = SteeredConsole(clock, 0.0, drift, 7.00, reply_secs=0.75,
+                             nak_writes=99 if write_fails else 0)
+    console.error = 3.0 + ideal(start, drift)
+    state = ClockState(7.00, start - 3 * 86400, ClockState.STEERING)
+    state.drift, state.coarse, state.write_fails = drift, True, 1
+    path = tmp_path / 'archive' / 'vantagenext' / 'clock.json'
+    state.save(str(path))
+    station = clock_station(clock, console, _clock=None)
+    station._ethernet = True
+    station.time_change_windows = VantageNext.derive_time_change_windows(
+        start - 86400, start + 400 * 86400)
+    weectl_set_time(station, tmp_path, monkeypatch)
+    assert 'Clock stepped' in capsys.readouterr().out
+    assert len(console.sets) == 1
+    saved = ClockState.load(str(path))
+    assert saved.state == ClockState.STEERING and saved.coarse and saved.drift == drift
+    # A write that lands resets the count; one that fails leaves it be.
+    assert len(saved.moves) == 1 and saved.write_fails == (1 if write_fails else 0)
+    assert saved.state == ClockState.STEERING
+    assert console.held_jump() == (7.00 if write_fails else 2.50)
+
+
 def test_set_time_with_no_saved_state_creates_nothing(tmp_path, monkeypatch, capsys):
     clock = FakeClock(datetime.datetime(2026, 10, 6, 14, 30, 0).timestamp())
     console = SteeredConsole(clock, ideal(clock.t, -3.39) + 3.6, -3.39, 3.25)
@@ -1205,29 +1306,675 @@ def test_set_time_that_cannot_replace_the_state_leaves_it_alone(tmp_path, monkey
 
 
 # ===============================================================================
-#                      Over ethernet: kept by setting, never steered
+#        Over ethernet (3.3): steered from whole-second readings
 # ===============================================================================
 
-def test_an_ethernet_console_is_kept_by_setting_it_from_the_first_check(tmp_path, caplog):
-    # A jump steering would rewrite (it creeps 0.89 s a day): over ethernet
-    # it is never written, and the clock is kept by setting it instead.
-    station, console, clock = make(tmp_path, -3.39, 2.50)
+def make_wlip(tmp_path, drift, jump, c0=0.0, **kw):
+    """A console behind a WeatherLinkIP: the logger holds every answer about
+    three quarters of a second (measured 2026-10-10), so no reading is ever
+    precise, and the station is configured for ethernet."""
+    kw.setdefault('reply_secs', 0.75)
+    station, console, clock = make(tmp_path, drift, jump, c0, **kw)
     station._ethernet = True
+    return station, console, clock
+
+
+WLIPS = [   # drift, jump, off center at the start
+    ("rpi-imager's", -2.41, 2.25, 0.0),           # its console, fitted 2026-10-12
+    ('a jump 1.08 s a day off', -3.33, 2.25, 0.0),
+    ('the fastest loser', -3.98, 3.75, -1.0),
+    ('a gaining console', 1.00, -1.00, 0.0),
+    ('a drift on a quarter-second', -2.50, 2.50, 0.0),
+    ('a near-perfect clock', -0.30, 0.25, 0.0),
+]
+
+
+@pytest.mark.parametrize('name, drift, jump, c0', WLIPS, ids=[w[0] for w in WLIPS])
+def test_a_weatherlinkip_console_is_steered_from_whole_second_readings(tmp_path, name, drift,
+                                                                       jump, c0):
+    # A month of whole-second readings, one at every check: the drift is
+    # learned to a few hundredths, the clock held within about half a second
+    # of center, and never set.  The NEIGHBOR rule writes four to seven
+    # times a month here; aiming at the center as choose_jump does writes
+    # eleven to thirteen, each carrying the clock out the band's far side.
+    station, console, clock = make_wlip(tmp_path, drift, jump, c0)
+    record = []
+    run_days(station, console, clock, 30, record)
+    assert console.sets == []
+    state = station._clock
+    assert state.state == ClockState.STEERING and state.coarse
+    assert state.drift == pytest.approx(drift, abs=0.05)
+    late = [e - ideal(t, drift) for t, e in record if t > START + 5 * 86400]
+    assert max(abs(c) for c in late) <= VantageNext.COARSE_BAND + 0.2, name
+    writes = [j for unused, j in console.jump_writes]
+    assert len(writes) <= 8, (name, writes)
+    assert all(a != b for a, b in zip([jump] + writes, writes))
+
+
+@pytest.mark.parametrize('phase', [0.05, 0.95])
+def test_whole_second_readings_locked_to_the_consoles_second_are_dithered(tmp_path, phase):
+    # WeeWX's checks start just after a LOOP packet, at much the same point
+    # of the console's second every time, so an undithered whole-second
+    # reading drops much the same fraction every time: an offset the fit
+    # takes for where the clock is (here up to a third of a second, held for
+    # good).  Each reading waits a random fraction of a second first, and
+    # the fractions average out.
+    station, console, clock = make_wlip(tmp_path, -2.41, 2.25)
+    record = []
+    run_days(station, console, clock, 30, record, phase=phase)
+    late = [e - ideal(t, -2.41) for t, e in record if t > START + 5 * 86400]
+    assert abs(sum(late) / len(late)) <= 0.12
+    assert max(abs(c) for c in late) <= VantageNext.COARSE_BAND + 0.2
+    assert console.sets == []
+
+
+def test_a_weatherlinkip_console_learns_for_two_days_and_is_never_set_meanwhile(tmp_path, caplog):
+    # rpi-imager's console, centered: every check's reading is kept, nothing
+    # is written or set for two days, and steering begins at the reading that
+    # spans them.
+    station, console, clock = make_wlip(tmp_path, -2.41, 2.25)
     with caplog.at_level('INFO'):
         station.getTime()
-    assert station._clock.state == ClockState.FALLBACK
-    assert station._clock.fallback_reason == VantageNext.ETHERNET_REASON
-    assert 'connected over ethernet' in caplog.text
-    run_days(station, console, clock, 6)
-    assert console.jump_writes == []
-    assert console.sets
-    # A restart decides it again from the configuration: no count of coarse
-    # readings, so nothing for the restart to reset.
+    assert "learning its drift from whole-second readings" in caplog.text
+    run_days(station, console, clock, 1.9)
+    state = station._clock
+    assert state.state == ClockState.LEARNING and state.coarse and state.drift is None
+    assert len(state.readings) >= 11                   # one at every check
+    assert all(g is None for unused_t, unused_e, g in state.readings)
+    assert console.jump_writes == [] and console.sets == []
+    run_days(station, console, clock, 0.35)
+    assert station._clock.state == ClockState.STEERING
+    span = station._clock.readings[-1][0] - station._clock.readings[0][0]
+    assert span >= VantageNext.COARSE_MIN_SPAN
+    # A restart over ethernet resumes: nothing relearned.
+    readings = list(station._clock.readings)
     again = restart(station, console, clock)
     again._ethernet = True
     again.getTime()
-    assert again._clock.state == ClockState.FALLBACK
-    assert again._clock.fallback_reason == VantageNext.ETHERNET_REASON
+    assert again._clock.state == ClockState.STEERING
+    assert again._clock.readings[:len(readings)] == readings
+
+
+@pytest.mark.parametrize('c0', [2.30, -2.30])
+def test_a_weatherlinkip_far_off_center_is_steered_as_soon_as_its_readings_make_a_line(tmp_path,
+                                                                                     c0):
+    # The spare's start of 2026-10-12, behind a WeatherLinkIP: losing 2.0 s a
+    # day with a 3.75 s jump (+1.75 a night), 2.3 s off center.  Waiting two
+    # days, the max_drift backstop would set it first -- and a set over
+    # ethernet relearns, so it would set it again as each two days ended.
+    # Beyond COARSE_FAR the first line is trusted, and the first decision
+    # aims at the center.  (Behind center, the creep brings it within
+    # COARSE_FAR by the first line, and it waits the two days as any other.)
+    station, console, clock = make_wlip(tmp_path, -2.0, 3.75, c0)
+    record = []
+    run_days(station, console, clock, 1.5 if c0 > 0 else 2.5, record)
+    assert station._clock.state == ClockState.STEERING
+    assert console.jump_writes
+    run_days(station, console, clock, 10 - clock_days(clock), record)
+    assert len(console.sets) <= 1
+    # Settled by day 5: a backstop set while it learns waits four readings
+    # for its landing, and the first jumps come from a young fit (over 24
+    # starts, 2026-10-14: within 0.45 s typically, 0.7 at worst).
+    late = [e - ideal(t, -2.0) for t, e in record if t > START + 5 * 86400]
+    assert max(abs(c) for c in late) <= VantageNext.COARSE_BAND + 0.35
+    assert station._clock.drift == pytest.approx(-2.0, abs=0.1)
+
+
+def test_a_short_clock_check_keeps_a_coarse_reading_an_hour_at_most(tmp_path):
+    # At clock_check 300 a reading at every check would be 4000 in fourteen
+    # days, each check rewriting the file and refitting them all.  One in
+    # COARSE_READING_SPACING is kept, and the console's jump is read only
+    # for those.
+    station, console, clock = make_wlip(tmp_path, -2.41, 2.25)
+    station.clock_check = 300
+    reads = []
+    held = station.getDayJump
+
+    def counted():
+        reads.append(clock.t)
+        return held()
+    station.getDayJump = counted
+    run_days(station, console, clock, 3, check=300)
+    # And through an evening after a set, when the four readings that place
+    # its landing must not come crowded together.
+    console.move(2.0)
+    assert station.setTime().startswith('Clock stepped')
+    run_days(station, console, clock, 1, check=300)
+    readings = station._clock.readings
+    gaps = [b[0] - a[0] for a, b in zip(readings, readings[1:])]
+    assert min(gaps) >= VantageNext.COARSE_READING_SPACING - 1
+    assert len(readings) <= 4 * 86400 / VantageNext.COARSE_READING_SPACING + 2
+    # The console's jump is read for a kept reading, and once a day for the
+    # evening decision, which keeps none.
+    assert len(reads) <= len(readings) + 4 + 2
+    assert station._clock.state == ClockState.STEERING and len(console.sets) == 1
+
+
+@pytest.mark.parametrize('check, every', [(300, False), (3000, True)])
+def test_fallback_over_ethernet_spaces_its_readings_too(tmp_path, check, every):
+    # FALLBACK over ethernet (no valid jump) keeps its readings no closer
+    # than COARSE_READING_SPACING, as steering does: at clock_check 300, one
+    # in ten; at 3000, the spacing itself, every one -- the stamp, after the
+    # dither and the logger's hold, does not make a check exactly the
+    # spacing after the last look early.
+    station, console, clock = make_wlip(tmp_path, -3.31, 4.00, pair=(0xF3, 0x0E))
+    station.clock_check = check
+    # Each check begins clock_check after the last BEGAN, as WeeWX's do --
+    # not after it ended.
+    began = clock.t
+    for k in range(int(2 * 86400 / check)):
+        clock.sleep(began + k * check - clock.t)
+        try:
+            station.getTime()
+        except weewx.WeeWxIOError:
+            pass                                       # the console's midnight silence
+    state = station._clock
+    assert state.state == ClockState.FALLBACK
+    gaps = [b[0] - a[0] for a, b in zip(state.readings, state.readings[1:])]
+    assert min(gaps) >= VantageNext.COARSE_READING_SPACING - VantageNext.COARSE_READING_SLACK
+    if every:
+        assert max(gaps) < check + 60
+    else:
+        assert len(state.readings) <= 2 * 86400 / (VantageNext.COARSE_READING_SPACING
+                                                  - VantageNext.COARSE_READING_SLACK) + 2
+
+
+def test_fallback_over_ethernet_takes_no_reading_that_ends_in_the_minute_before_midnight(tmp_path):
+    # A check that begins 60.5 s before midnight passes the test as it
+    # begins; its reading, after the dither and the logger's hold, ends
+    # inside the last minute, when a console ahead may be into its jump.
+    # It is asked again then, and nothing is learned or set.
+    station, console, clock = make_wlip(tmp_path, -3.31, 4.00, pair=(0xF3, 0x0E))
+    run_days(station, console, clock, 1)
+    midnight = vantagenext.startOfDay(vantagenext.startOfDay(clock.t) + 36 * 3600)
+    clock.sleep(midnight - 60.5 - clock.t)
+
+    class Late:
+        def uniform(self, low, high):
+            return 0.9
+    station._dither = Late()
+    station._clock.readings[-1][0] -= 86400            # so a reading is due
+    readings, sets = list(station._clock.readings), len(console.sets)
+    station.getTime()
+    assert station._clock.readings == readings and len(console.sets) == sets
+
+
+def test_fallback_over_ethernet_learns_the_drift_from_coarse_readings(tmp_path):
+    # FALLBACK still happens over ethernet: here 0x2E/0x2F hold no valid
+    # jump, though the console makes 4.00 s every midnight.  It learns the
+    # drift and the jump from whole-second readings alone, and keeps the
+    # clock by setting it.  Their SUM, the creep its rule acts on, comes out
+    # right; how it splits between them is loosely held by whole-second
+    # readings (a few tenths either way: it tilts the centered line by
+    # at most half that, against a 1.2 s threshold).
+    station, console, clock = make_wlip(tmp_path, -3.31, 4.00, pair=(0xF3, 0x0E))
+    run_days(station, console, clock, 14)
+    state = station._clock
+    assert state.state == ClockState.FALLBACK and state.coarse
+    assert state.drift + state.fitted_jump == pytest.approx(-3.31 + 4.00, abs=0.1)
+    assert state.drift == pytest.approx(-3.31, abs=0.5)
+    late = [s for s in console.sets if s > START + 6 * 86400]
+    assert len(late) <= 5                              # 8 days: every couple of days at most
+    assert console.jump_writes == []
+
+
+@pytest.mark.parametrize('aged', [False, True])
+@pytest.mark.parametrize('ethernet', [False, True])
+def test_a_fallback_console_moved_between_links_drops_the_other_links_readings(tmp_path, caplog,
+                                                                              ethernet, aged):
+    # No valid jump, on one link for three days, then the other: still
+    # FALLBACK, the jump it fitted kept, but not the readings, sets or drift
+    # -- the drift too when the readings have aged out of the file.
+    station, console, clock = make(tmp_path, -3.31, 4.00, pair=(0xF3, 0x0E),
+                                   reply_secs=0.005 if ethernet else 0.75)
+    station._ethernet = not ethernet
+    run_days(station, console, clock, 3)
+    fitted = station._clock.fitted_jump
+    assert station._clock.readings and fitted is not None
+    assert station._clock.drift is not None
+    if aged:
+        with open(station._clock_path, encoding='utf-8') as f:
+            saved = json.load(f)
+        saved['readings'], saved['moves'] = [], []
+        with open(station._clock_path, 'w', encoding='utf-8') as f:
+            json.dump(saved, f)
+    again = restart(station, console, clock)
+    again._ethernet = ethernet
+    console.reply_secs = 0.75 if ethernet else 0.005
+    with caplog.at_level('INFO'):
+        again.getTime()
+    state = again._clock
+    assert state.state == ClockState.FALLBACK and state.coarse == ethernet
+    assert state.fitted_jump == fitted
+    assert len(state.readings) <= 1 and state.moves == []
+    assert state.drift is None
+    assert 'readings saved were taken over' in caplog.text
+
+
+def test_a_forced_set_while_coarse_keeps_the_drift(tmp_path, caplog):
+    # A set from a whole-second reading lands to the whole second and reads
+    # back no better.  It is recorded as the step asked for, and where it
+    # landed is learned from the readings after it: the drift is kept, and
+    # steering carries on without relearning or a second set.
+    station, console, clock = make_wlip(tmp_path, -2.41, 2.25)
+    run_days(station, console, clock, 5)
+    drift = station._clock.drift
+    assert station._clock.state == ClockState.STEERING
+    # A set with nothing unexplained before it (a clock moved more than
+    # CLOCK_MODEL_BREAK is found by the next reading, and that is a relearn
+    # of its own): moved a second, and set at once.
+    console.move(1.0)
+    assert station.setTime().startswith('Clock stepped')
+    record = []
+    with caplog.at_level('INFO'):
+        run_days(station, console, clock, 6, record)
+    assert len(console.sets) == 1
+    state = station._clock
+    assert state.state == ClockState.STEERING and len(state.moves) == 1
+    assert state.drift == pytest.approx(drift, abs=0.05)
+    assert 'afresh' not in caplog.text
+    # The set may land a whole second off (it names the second from a reading
+    # good to half a second); the landing is learned from four readings, and
+    # the clock brought in over the nights after.
+    late = [e - ideal(t, -2.41) for t, e in record if t > console.sets[0] + 4 * 86400]
+    assert max(abs(c) for c in late) <= VantageNext.COARSE_BAND + 0.2
+
+
+def test_an_evening_after_a_set_holds_the_jump_that_only_cancels_the_drift(tmp_path, caplog):
+    # weectl device --set-time in the afternoon on a WeatherLinkIP holding a
+    # 7.00 s jump steering wrote to bring it in, and weectl's write of the
+    # jump that only cancels the drift is refused.  The set put the clock at
+    # center, but four readings have not yet followed it, so the evening's
+    # decision cannot place the clock: it writes that jump itself, and the
+    # stale 7.00 never fires.
+    station, console, clock = make_wlip(tmp_path, -2.41, 2.25)
+    run_days(station, console, clock, 4)               # steering, to 14:30
+    console.eeprom = bytearray(vantagenext.jump_encode(7.00))
+    station._clock.jump = 7.00
+    station._clock.jumps.append([clock.t, 7.00])
+    station._sync_clock()
+    station._save_clock()
+    clock.sleep(1.5 * 3600)                            # 16:00
+    weectl = restart(station, console, clock)
+    weectl._ethernet, weectl._clock_save_over = True, True
+    console.move(2.0)
+    console.nak_writes = 99                            # weectl's write is refused
+    assert weectl.setTime().startswith('Clock stepped')
+    console.nak_writes = 0
+    day = datetime.date.fromtimestamp(clock.t).isoformat()
+    writes = len(console.jump_writes)
+    assert console.held_jump() == 7.00
+    weewxd = restart(station, console, clock)
+    weewxd._ethernet = True
+    with caplog.at_level('INFO'):
+        run_days(weewxd, console, clock, 0.3)          # to about 23:10
+    said = [r.getMessage() for r in caplog.records
+            if r.getMessage().startswith('Clock: no decision yet: ')]
+    assert said and 'needed to place the clock; until then the midnight jump is 2.50 s' in said[0]
+    assert len(said) == 1                              # the day's decision, made once
+    assert console.held_jump() == 2.50 and len(console.jump_writes) == writes + 1
+    assert weewxd._clock.decision_day == day
+
+
+def test_a_coarse_sets_landing_is_learned_from_the_readings_after_it():
+    # A set asked to move the clock -3 s that really moved it -2 (it named
+    # the wrong second from a whole-second reading).  The fit gives the
+    # landing an unknown of its own, so the line after it is the console's;
+    # taken at its word, the step would put a second into the line.  The
+    # reading right after the set has nothing to be tested against.
+    rng = random.Random(5)
+    state = ClockState(2.25, START)
+    state.coarse = True
+    drift, e0, set_at = -2.41, 0.3, START + 2.1 * 86400
+
+    def true(t):
+        return (e0 + drift * (t - START) / 86400.0 + 2.25 * vantagenext.nights_between(START, t)
+                + (-2.0 if t > set_at else 0.0))
+    state.moves.append([set_at, -3])
+    for k in range(30):
+        t = START + k * CHECK + rng.random()
+        if k == 13:
+            assert t > set_at
+            assert vantagenext.prediction_error(state, [t, 0.0, None]) is None
+            assert vantagenext.fitted_error(state, t) is None
+        if 14 <= k < 13 + VantageNext.COARSE_LANDING_READINGS:
+            # Read, but too few times to decide on: tested, not fitted.
+            assert vantagenext.prediction_error(state, [t, 0.0, None]) is not None
+            assert vantagenext.fitted_error(state, t) is None
+        state.readings.append([t, math.floor(t + true(t)) - t + 0.5, None])
+    # Five days of whole-second readings place the clock to a tenth or two,
+    # set or no set (the fit's own spread)...
+    t = state.readings[-1][0] + 3 * 3600
+    assert vantagenext.fitted_error(state, t) == pytest.approx(true(t), abs=0.25)
+    assert vantagenext.fit_drift(state)[0] == pytest.approx(drift, abs=0.1)
+    # ...where the step taken at its word puts the whole second into the line.
+    state.coarse = False
+    assert abs(vantagenext.fitted_error(state, t) - true(t)) > 0.3
+
+
+@pytest.mark.parametrize('hhmm, written_back', [((18, 30), True), ((23, 40), True),
+                                                 ((23, 58), True)])
+def test_a_set_while_coarse_writes_back_the_jump_that_only_cancels_the_drift(tmp_path, hhmm,
+                                                                           written_back):
+    # Steering has written a correcting jump far from the drift (7.00 for a
+    # console losing 2.41 s a day) when the backstop sets the clock.  The set
+    # did the correcting: the 7.00 would do it again at midnight.  So 2.50,
+    # the jump for a clock at center, the one that only cancels the
+    # drift, is written back -- later than other writes, for as long as the
+    # set itself may be made (until 23:59), since the backstop's set falls
+    # at the clock's widest, late in the evening.
+    station, console, clock = make_wlip(tmp_path, -2.41, 2.25)
+    run_days(station, console, clock, 4)
+    state = station._clock
+    assert state.state == ClockState.STEERING
+    console.eeprom = bytearray(vantagenext.jump_encode(7.00))
+    state.jump = 7.00
+    state.jumps.append([clock.t, 7.00])
+    day = datetime.date.fromtimestamp(clock.t) + datetime.timedelta(days=1)
+    clock.sleep(datetime.datetime.combine(day, datetime.time(*hhmm)).timestamp() - clock.t)
+    console.move(-6.0)                                 # past max_drift
+    station.setTime()
+    assert len(console.sets) == 1
+    assert station._clock.state == ClockState.STEERING and station._clock.drift is not None
+    expected = vantagenext.cancel_jump(station._clock.drift) if written_back else 7.00
+    assert console.held_jump() == expected
+    assert station._clock.jump == expected
+
+
+def coarse_steered(tmp_path, when, drift, held):
+    """A WeatherLinkIP in STEERING with a learned drift, holding `held` (a
+    jump steering wrote to bring it in), its clock 3 s past center at
+    `when`: a station a forced set will set."""
+    start = when.timestamp()
+    clock = FakeClock(start)
+    console = SteeredConsole(clock, 3.0 + ideal(start, drift), drift, held, reply_secs=0.75)
+    state = ClockState(held, start - 3 * 86400, ClockState.STEERING)
+    state.drift, state.coarse = drift, True
+    path = tmp_path / 'vantagenext' / 'clock.json'
+    state.save(str(path))
+    station = clock_station(clock, console, _clock=None)
+    station._clock_path, station._ethernet = str(path), True
+    station.time_change_windows = VantageNext.derive_time_change_windows(
+        start - 86400, start + 400 * 86400)
+    return station, console, clock
+
+
+@pytest.mark.parametrize('day, written', [((2026, 10, 31), 2.25), ((2026, 11, 1), 2.50)])
+def test_the_write_back_allows_for_a_time_change_day(tmp_path, day, written):
+    # Losing 2.35 s a day: 2.25 cancels a 24-hour day's drift, but the
+    # day the clocks fall back is 25 hours, and 2.45 s are lost by its
+    # midnight: 2.50.
+    station, console, unused = coarse_steered(
+        tmp_path, datetime.datetime(*day, 18, 30), -2.35, 7.00)
+    station.setTime()
+    assert len(console.sets) == 1 and console.held_jump() == written
+
+
+def test_the_write_back_says_where_the_set_left_the_clock(tmp_path, caplog):
+    # By steering's own measure, as every other decision line says it.
+    # FALLBACK's measure, which looks half a day's creep ahead, would be off
+    # by half the held 7.00 jump's creep: 2.3 s.
+    station, console, unused = coarse_steered(
+        tmp_path, datetime.datetime(2026, 10, 6, 18, 30), -2.41, 7.00)
+    with caplog.at_level('INFO'):
+        station.setTime()
+    said = re.search(r'Clock is ([-+][\d.]+) s off center \(drift [^)]*after a set', caplog.text)
+    assert said and abs(float(said.group(1)) - off_center(console, -2.41)) < 0.6
+
+
+def test_a_set_that_ends_past_the_limit_still_writes_back(tmp_path):
+    # Allowed as it began, at 23:58:57, a set through a slow logger ends
+    # three seconds later, past 23:59: its write-back is judged by when the
+    # set began, as the set was, and lands with most of a minute still to go
+    # before midnight.
+    station, console, clock = coarse_steered(
+        tmp_path, datetime.datetime(2026, 10, 6, 23, 58, 57), -2.41, 7.00)
+    step = station._step_console_clock
+
+    def slow(*args):
+        moved = step(*args)
+        clock.sleep(3.0)
+        return moved
+    station._step_console_clock = slow
+    assert station.setTime().startswith('Clock stepped')
+    assert vantagenext.clock_secs(console.jump_writes[-1][0]) >= VantageNext.JUMP_WRITE_BACK_BEFORE
+    assert console.held_jump() == 2.50
+
+
+def test_a_set_that_runs_past_midnight_writes_nothing_back(tmp_path):
+    # Begun at 23:58:57, a set whose retries through a failing logger carry
+    # it past midnight: a write now would land as the console makes its
+    # jump.  None is made; the jump is left to the next evening's decision.
+    station, console, clock = coarse_steered(
+        tmp_path, datetime.datetime(2026, 10, 6, 23, 58, 57), -2.41, 7.00)
+    step = station._step_console_clock
+
+    def retried(*args):
+        moved = step(*args)
+        clock.sleep(70.0)
+        return moved
+    station._step_console_clock = retried
+    assert station.setTime().startswith('Clock stepped')
+    assert console.jump_writes == [] and console.held_jump() == 7.00
+
+
+@pytest.mark.parametrize('when', [(2026, 11, 1, 0, 54, 59), (2026, 3, 8, 1, 54, 59)])
+def test_a_forced_set_whose_reading_ends_in_a_time_change_window_is_refused(tmp_path, when):
+    # Asked as the check began, the window had not opened; the dithered
+    # reading through the logger ends inside it.  No set: a set in a time
+    # change window is how an hour of data was once lost.
+    station, console, unused = coarse_steered(tmp_path, datetime.datetime(*when), -2.41, 2.50)
+
+    class Late:
+        def uniform(self, low, high):
+            return 0.9
+    station._dither = Late()
+    assert station.setTime() == "Not set: inside a time change transition period."
+    assert console.sets == []
+
+
+def test_a_coarse_set_centers_the_clock_for_the_jump_it_will_hold(tmp_path):
+    # Holding 7.00 s, a jump steering wrote to bring a far-off clock in, a
+    # WeatherLinkIP is set by the backstop.  It will hold 2.50, the jump that
+    # only cancels the drift, until the set's landing is placed, so it is set
+    # to center for that jump: next morning it is still within the second a
+    # whole-second set can miss by, not 2.3 s off (half the 7.00 jump's
+    # creep, which centering for the held jump would leave).
+    station, console, clock = coarse_steered(
+        tmp_path, datetime.datetime(2026, 10, 6, 18, 30), -2.41, 7.00)
+    assert station.setTime().startswith('Clock stepped')
+    clock.sleep(10 * 3600)                             # 04:30
+    assert console.held_jump() == 2.50
+    assert abs(off_center(console, -2.41)) < 1.0
+
+
+def test_a_set_writes_back_over_a_write_not_yet_confirmed(tmp_path):
+    # The evening's write of 4.00 landed, but its read-back failed: the
+    # driver still believes 2.50, the jump that only cancels the drift, with
+    # 4.00 pending.  A set now must not take the console for one holding
+    # 2.50: it writes 2.50, or 4.00 fires at midnight on a centered clock.
+    station, console, clock = coarse_steered(
+        tmp_path, datetime.datetime(2026, 10, 6, 21, 0), -2.41, 4.00)
+    state = station._clock_state()
+    state.jump, state.jumps = 2.50, [[clock.t - 86400, 2.50]]
+    state.pending_jump = [clock.t - 3 * 3600, 4.00]
+    station._sync_clock()
+    assert station.setTime().startswith('Clock stepped')
+    assert console.held_jump() == 2.50
+
+
+def test_a_coarse_set_reads_the_clock_once_and_seeks_no_second_boundary(tmp_path):
+    # Through a WeatherLinkIP a GETTIME takes 1.26 s and never catches the
+    # second ticking over: a forced set takes one dithered reading, as a
+    # check does, and polls for no boundary.
+    station, console, clock = coarse_steered(
+        tmp_path, datetime.datetime(2026, 10, 6, 18, 30), -2.41, 2.50)
+    station._clock_state()
+    readings, seeks = [], []
+    reading, seek = station._coarse_reading, station._measure_clock_error
+    station._coarse_reading = lambda: readings.append(1) or reading()
+    station._measure_clock_error = lambda *a, **k: seeks.append(1) or seek(*a, **k)
+    assert station.setTime().startswith('Clock stepped')
+    assert readings == [1] and seeks == []
+
+
+def test_another_console_found_at_a_decision_keeps_its_first_reading(tmp_path):
+    # Over ethernet a decision check keeps no reading when the last came
+    # under COARSE_READING_SPACING ago.  But one that finds another console
+    # starts its state afresh, and that state's first reading is kept.
+    station, console, clock = make_wlip(tmp_path, -2.41, 2.25)
+    run_days(station, console, clock, 3)               # to 14:30, a reading kept
+    clock.sleep(3 * 3600 + 10 * 60)                    # 17:40: a reading kept
+    station.getTime()
+    clock.sleep(25 * 60)                               # 18:05: the decision, no reading due
+    console.eeprom = bytearray(vantagenext.jump_encode(3.00))
+    station.getTime()
+    state = station._clock
+    assert state.jump == 3.00 and state.state == ClockState.LEARNING
+    assert len(state.readings) == 1
+
+
+def test_a_set_is_saved_before_the_jump_is_written_back(tmp_path):
+    # WeeWX stopped in the 1.7 s of the write-back: the state file already
+    # holds the set, so the restart does not find the clock moved by a set
+    # it knows nothing of.
+    station, console, unused = coarse_steered(
+        tmp_path, datetime.datetime(2026, 10, 6, 18, 30), -2.41, 7.00)
+
+    def stopped(jump):
+        raise Terminate()
+    station.setDayJump = stopped
+    with pytest.raises(Terminate):
+        station.setTime()
+    assert len(console.sets) == 1
+    saved = ClockState.load(station._clock_path)
+    assert len(saved.moves) == 1 and saved.pending_jump is not None
+
+
+@pytest.mark.parametrize('first, second', [('ethernet', 'serial'), ('serial', 'ethernet')])
+def test_a_console_moved_between_serial_and_ethernet_is_learned_afresh(tmp_path, caplog, first,
+                                                                      second):
+    # Readings of one class are not carried into the other.
+    station, console, clock = make(tmp_path, -3.39, 3.25)
+    station._ethernet = first == 'ethernet'
+    run_days(station, console, clock, 3)
+    assert station._clock.state == ClockState.STEERING
+    again = restart(station, console, clock)
+    again._ethernet = second == 'ethernet'
+    console.reply_secs = 0.75 if again._ethernet else 0.005
+    with caplog.at_level('INFO'):
+        again.getTime()
+    assert again._clock.state == ClockState.LEARNING
+    assert again._clock.coarse == again._ethernet
+    assert len(again._clock.readings) <= 1
+    said = 'Clock: connected over ethernet' if again._ethernet else 'no longer connected over ethernet'
+    assert said in caplog.text
+    run_days(again, console, clock, 3)
+    assert again._clock.state == ClockState.STEERING
+
+
+def test_another_console_found_over_ethernet_is_learned_from_whole_second_readings(tmp_path):
+    # A jump the driver did not write, found at a reading: another console,
+    # learned afresh -- in the same class, read at every check as before.
+    station, console, clock = make_wlip(tmp_path, -2.41, 2.25)
+    run_days(station, console, clock, 3)
+    console.eeprom = bytearray(vantagenext.jump_encode(3.00))
+    run_days(station, console, clock, 0.5)
+    state = station._clock
+    assert state.state == ClockState.LEARNING and state.coarse
+    assert len(state.readings) >= 2
+    run_days(station, console, clock, 2)
+    assert station._clock.state == ClockState.STEERING
+
+
+def test_a_console_moved_off_ethernet_is_steered_again(tmp_path, caplog):
+    station, console, clock = make_wlip(tmp_path, -3.39, 3.25)
+    run_days(station, console, clock, 3)
+    assert station._clock.coarse
+    console.reply_secs = 0.005
+    serial = restart(station, console, clock)
+    with caplog.at_level('INFO'):
+        serial.getTime()
+    assert serial._clock.state == ClockState.LEARNING and not serial._clock.coarse
+    assert 'no longer connected over ethernet' in caplog.text
+    run_days(serial, console, clock, 4)
+    assert serial._clock.state == ClockState.STEERING
+
+
+def ethernet_fallback_file(station, clock, wording):
+    """The state file a WeatherLinkIP console was left with by 3.2 (or, in
+    their wording, 3.0 and 3.1): FALLBACK for the ethernet, two days of
+    coarse readings -- the first few stamped when the answer arrived, as
+    before 3.2 stamped them at the send, three quarters of a second low --
+    and no `coarse` field."""
+    t0 = clock.t - 2 * 86400
+    state = ClockState(3.25, t0, ClockState.FALLBACK)
+    state.fallback_reason = wording
+    for k in range(12):
+        t = t0 + k * CHECK
+        e = 0.4 - 3.39 * k * CHECK / 86400.0 + 3.25 * vantagenext.nights_between(t0, t)
+        state.readings.append([t, e - (0.75 if k < 4 else 0.0), None])
+    saved = state.to_dict()
+    del saved['coarse']
+    os.makedirs(os.path.dirname(station._clock_path), exist_ok=True)
+    with open(station._clock_path, 'w', encoding='utf-8') as f:
+        json.dump(saved, f)
+
+
+WORDINGS = {
+    '3.2': VantageNext.ETHERNET_REASON,
+    '3.0': ("the console is connected over ethernet (a WeatherLinkIP), which waits "
+            "tcp_send_delay after every command: too slow to read its clock precisely enough "
+            "to steer it"),
+}
+
+
+@pytest.mark.parametrize('release', sorted(WORDINGS))
+def test_a_3_2_ethernet_state_file_is_relearned_from_whole_second_readings(tmp_path, caplog,
+                                                                          release):
+    # Its readings cannot be trusted (some arrival-stamped, nothing says
+    # which): steered from scratch, two days later, and nothing set meanwhile.
+    station, console, clock = make_wlip(tmp_path, -3.39, 3.25)
+    ethernet_fallback_file(station, clock, WORDINGS[release])
+    with caplog.at_level('INFO'):
+        station.getTime()
+    state = station._clock
+    assert state.state == ClockState.LEARNING and state.coarse
+    assert state.fallback_reason is None and len(state.readings) <= 1
+    assert 'Clock: connected over ethernet' in caplog.text
+    assert 'kept by setting it' not in caplog.text
+    run_days(station, console, clock, 2.3)
+    assert station._clock.state == ClockState.STEERING and console.sets == []
+    with open(station._clock_path, encoding='utf-8') as f:
+        assert json.load(f)['coarse'] is True
+
+
+def test_a_console_moved_off_ethernet_with_a_3_0_state_file_is_steered_again(tmp_path, caplog):
+    station, console, clock = make(tmp_path, -3.39, 3.25)
+    ethernet_fallback_file(station, clock, WORDINGS['3.0'])
+    with caplog.at_level('INFO'):
+        station.getTime()
+    assert station._clock.state == ClockState.LEARNING and not station._clock.coarse
+    assert 'no longer connected over ethernet' in caplog.text
+    run_days(station, console, clock, 2)
+    assert station._clock.state == ClockState.STEERING
+
+
+def test_a_serial_state_file_without_the_coarse_field_is_resumed(tmp_path, caplog):
+    # Every file 3.2 saved for a serial console: resumed as it was.
+    station, console, clock = make(tmp_path, -3.39, 3.25)
+    run_days(station, console, clock, 3)
+    with open(station._clock_path, encoding='utf-8') as f:
+        saved = json.load(f)
+    del saved['coarse']
+    with open(station._clock_path, 'w', encoding='utf-8') as f:
+        json.dump(saved, f)
+    again = restart(station, console, clock)
+    with caplog.at_level('INFO'):
+        again.getTime()
+    assert again._clock.state == ClockState.STEERING and not again._clock.coarse
+    assert again._clock.readings[:len(saved['readings'])] == saved['readings']
+    assert 'afresh' not in caplog.text
 
 
 def test_a_reading_is_stamped_when_the_time_is_asked_for_not_when_the_answer_lands(tmp_path):
@@ -1255,66 +2002,6 @@ def test_a_reading_is_stamped_when_the_time_is_asked_for_not_when_the_answer_lan
         errors.append(console_ts + 0.5 - now - console.error)
     assert abs(sum(errors) / len(errors)) < 0.08
     assert max(abs(e) for e in errors) < 0.55
-
-
-def test_a_console_moved_off_ethernet_is_steered_again(tmp_path, caplog):
-    station, console, clock = make(tmp_path, -3.39, 3.25)
-    station._ethernet = True
-    run_days(station, console, clock, 2)
-    assert station._clock.state == ClockState.FALLBACK
-    serial = restart(station, console, clock)
-    with caplog.at_level('INFO'):
-        serial.getTime()
-    assert serial._clock.state == ClockState.LEARNING
-    assert 'no longer connected over ethernet' in caplog.text
-    run_days(serial, console, clock, 4)
-    assert serial._clock.state == ClockState.STEERING
-
-
-def test_a_console_moved_off_ethernet_with_a_3_0_state_file_is_steered_again(tmp_path, caplog):
-    # 3.0 and 3.1 saved the ethernet reason with a different ending.  The
-    # reason is recognized by its opening words, so their state files are
-    # read as this release's own: moved off ethernet, the console relearns.
-    station, console, clock = make(tmp_path, -3.39, 3.25)
-    station._ethernet = True
-    run_days(station, console, clock, 2)
-    assert station._clock.state == ClockState.FALLBACK
-    with open(station._clock_path, encoding='utf-8') as f:
-        saved = json.load(f)
-    assert saved['fallback_reason'] == VantageNext.ETHERNET_REASON
-    saved['fallback_reason'] = ("the console is connected over ethernet (a WeatherLinkIP), which "
-                                "waits tcp_send_delay after every command: too slow to read its "
-                                "clock precisely enough to steer it")
-    with open(station._clock_path, 'w', encoding='utf-8') as f:
-        json.dump(saved, f)
-    serial = restart(station, console, clock)
-    with caplog.at_level('INFO'):
-        serial.getTime()
-    assert serial._clock.state == ClockState.LEARNING
-    assert 'no longer connected over ethernet' in caplog.text
-
-
-def test_a_console_still_on_ethernet_with_a_3_0_state_file_gets_this_releases_reason(tmp_path, caplog):
-    # Same old state file, console still on ethernet: the same reason, in
-    # this release's words, in the log and the state file.
-    station, console, clock = make(tmp_path, -3.39, 3.25)
-    station._ethernet = True
-    run_days(station, console, clock, 2)
-    old_text = VantageNext.ETHERNET_REASON_MARK + " (a WeatherLinkIP), which waits tcp_send_delay"
-    with open(station._clock_path, encoding='utf-8') as f:
-        saved = json.load(f)
-    saved['fallback_reason'] = old_text
-    with open(station._clock_path, 'w', encoding='utf-8') as f:
-        json.dump(saved, f)
-    again = restart(station, console, clock)
-    again._ethernet = True
-    with caplog.at_level('INFO'):
-        again.getTime()
-    assert again._clock.state == ClockState.FALLBACK
-    assert again._clock.fallback_reason == VantageNext.ETHERNET_REASON
-    assert VantageNext.ETHERNET_REASON in caplog.text and 'waits tcp_send_delay' not in caplog.text
-    with open(station._clock_path, encoding='utf-8') as f:
-        assert json.load(f)['fallback_reason'] == VantageNext.ETHERNET_REASON
 
 
 # ===============================================================================
@@ -1450,19 +2137,20 @@ def test_a_jump_found_invalid_at_a_decision_keeps_the_held_one_as_fitted(tmp_pat
     assert station.day_start_jump == held
 
 
-def test_a_console_moved_off_ethernet_with_no_valid_jump_says_why_it_falls_back(tmp_path, caplog):
-    # Still FALLBACK, but no longer for the ethernet: the reason saved (and
-    # shown by --info) is the jump.
+@pytest.mark.parametrize('ethernet', [False, True])
+def test_a_console_moved_off_ethernet_with_no_valid_jump_says_why_it_falls_back(tmp_path, caplog,
+                                                                                ethernet):
+    # A 3.2 ethernet FALLBACK file, and 0x2E/0x2F gone bad: FALLBACK still,
+    # on either link, but for the jump -- the reason saved (and shown by
+    # --info) says so.
     station, console, clock = make(tmp_path, -3.39, 3.25)
-    station._ethernet = True
-    run_days(station, console, clock, 1)
-    assert station._clock.fallback_reason == VantageNext.ETHERNET_REASON
+    station._ethernet = ethernet
+    ethernet_fallback_file(station, clock, VantageNext.ETHERNET_REASON)
     console.eeprom = bytearray(b'\x12\x34')
-    serial = restart(station, console, clock)
     with caplog.at_level('INFO'):
-        serial.getTime()
-    assert serial._clock.state == ClockState.FALLBACK
-    assert 'do not hold a valid midnight jump' in serial._clock.fallback_reason
+        station.getTime()
+    assert station._clock.state == ClockState.FALLBACK
+    assert 'do not hold a valid midnight jump' in station._clock.fallback_reason
     assert 'do not hold a valid midnight jump' in caplog.text
 
 
@@ -1471,8 +2159,7 @@ def test_a_console_moved_off_ethernet_with_no_valid_jump_says_why_it_falls_back(
 # ===============================================================================
 
 def test_fallback_finds_a_clock_moved_by_something_else_and_relearns_in_place(tmp_path, caplog):
-    station, console, clock = make(tmp_path, -3.39, 3.25)
-    station._ethernet = True
+    station, console, clock = make(tmp_path, -3.39, 3.25, pair=(0xF3, 0x0E))
     run_days(station, console, clock, 4)
     assert station._clock.drift is not None
     console.error += 2.0                               # under max_drift: no forced set
@@ -1630,19 +2317,23 @@ def test_the_simulated_console_is_silent_just_after_its_midnight():
     assert console.read(2) == b'\n\r'
 
 
-@pytest.mark.parametrize('kind', ['learning', 'steering', 'fallback'])
+@pytest.mark.parametrize('kind', ['learning', 'steering', 'fallback', 'coarse-learning',
+                                  'coarse-steering'])
 @pytest.mark.parametrize('by', [20.0, -3600.0, 180 * 86400.0])
 def test_a_clock_moved_while_learning_is_learned_afresh_whatever_the_move(tmp_path, kind, by):
     # A power loss can leave the clock anywhere.  Moved while the driver is
     # still learning -- no line yet to test a reading against -- the move
     # must not be taken into the drift: the fit that holds it is no fit.
     # Moved while steering, the line catches it.  Either way WeeWX's
-    # max_drift sets the clock back, and the driver is steering (or, over
-    # ethernet, keeping it by setting it) as before within days.
-    station, console, clock = make(tmp_path, -3.39, 3.25)
-    if kind == 'fallback':
-        station._ethernet = True
-    run_days(station, console, clock, 5 if kind == 'steering' else 0.5)
+    # max_drift sets the clock back, and the driver is steering (or, with no
+    # valid jump, keeping it by setting it) as before within days.  Over
+    # ethernet too, where a set relearns.
+    if kind.startswith('coarse'):
+        station, console, clock = make_wlip(tmp_path, -3.39, 3.25)
+    else:
+        station, console, clock = make(tmp_path, -3.39, 3.25,
+                                       pair=(0xF3, 0x0E) if kind == 'fallback' else None)
+    run_days(station, console, clock, 5 if kind.endswith('steering') else 0.5)
     console.move(by)
     sets = len(console.sets)
     drifts = []
@@ -1662,7 +2353,8 @@ def test_a_clock_moved_while_learning_is_learned_afresh_whatever_the_move(tmp_pa
         assert abs(off_center(console, -3.39)) <= VantageNext.CLOCK_FALLBACK_THRESHOLD + 1.0
     else:
         assert station._clock.state == ClockState.STEERING
-        assert abs(off_center(console, -3.39)) <= VantageNext.JUMP_BAND + 0.3
+        band = VantageNext.COARSE_BAND if kind.startswith('coarse') else VantageNext.JUMP_BAND
+        assert abs(off_center(console, -3.39)) <= band + 0.3
 
 
 def _readings_on(drift, times, move_at=None, move=0.0, jump=0.0):
@@ -1711,14 +2403,14 @@ def test_a_fit_whose_jump_took_a_move_at_midnight_is_no_fit():
     assert vantagenext.fit_doubt(drift, jump, residuals).startswith('a jump of')
 
 
-@pytest.mark.parametrize('why', ['no valid jump', 'ethernet', 'writes failed'])
+@pytest.mark.parametrize('why', ['no valid jump', 'no valid jump over ethernet', 'writes failed'])
 def test_a_console_in_fallback_says_why_at_every_start(tmp_path, caplog, why):
     # A log read after a restart must still say why the clock is being set.
-    kw = dict(pair=b'\x12\x34') if why == 'no valid jump' else {}
+    kw = dict(pair=b'\x12\x34') if why.startswith('no valid jump') else {}
     if why == 'writes failed':
         kw = dict(garble_writes=99)
     station, console, clock = make(tmp_path, -3.31, 4.00, 0.0, **kw)
-    station._ethernet = why == 'ethernet'
+    station._ethernet = why.endswith('ethernet')
     with caplog.at_level('INFO'):
         station.getTime()
     # Falling back at the first start says why once, not twice.

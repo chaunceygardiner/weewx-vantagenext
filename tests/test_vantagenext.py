@@ -1041,9 +1041,13 @@ class TestReopenPort:
         server.bind(('127.0.0.1', 0))
         server.listen(2)
         packets = [make_loop1(outTemp=700), make_loop1(outTemp=710)]
+        # The reset comes once the test's own openPort has returned: before
+        # it, openPort itself can meet the reset (a race, not the case).
+        opened = threading.Event()
 
         def serve():
             first, unused = server.accept()
+            opened.wait(5)
             first.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
             first.close()                                    # an RST, not a FIN
             second, unused = server.accept()
@@ -1061,6 +1065,7 @@ class TestReopenPort:
                                            timeout=2.0, tcp_send_delay=0.0,
                                            wait_before_retry=0.0, command_delay=0)
         port.openPort()
+        opened.set()
         station = bare_station(port=port, max_tries=2)
         got = []
 

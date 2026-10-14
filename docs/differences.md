@@ -24,7 +24,7 @@ below, the hardware catch-up, the loop-gust bookkeeping, the units, the observat
 
 | | Built-in driver | This driver |
 |---|---|---|
-| **Setting the clock** | When the error passes `max_drift`, sets the console to the computer's time plus a fixed 0.75 seconds. | Never, in normal running: keeps the clock's daily sawtooth centered on zero by rewriting the console's own midnight jump, which costs no reception.  It learns the console's drift itself.  A WeatherLinkIP is not steered: it, and a console the driver cannot steer, are set as before.  See [Keeping the console clock](clock.md). |
+| **Setting the clock** | When the error passes `max_drift`, sets the console to the computer's time plus a fixed 0.75 seconds. | Never, in normal running: keeps the clock's daily sawtooth centered on zero by rewriting the console's own midnight jump, which costs no reception.  It learns the console's drift itself; a WeatherLinkIP's from whole-second readings (3.3).  A console the driver cannot steer is set as before.  See [Keeping the console clock](clock.md). |
 | **The clock error WeeWX logs** | The console's truncated reading: half a second slow, on average. | Corrected for the truncation. |
 | **Daylight-saving time changes** | No special handling. | The clock is not set, and misread times are corrected, inside a window around each change.  See [Daylight-saving time changes](dst.md). |
 | **A truncated LOOP packet** (serial and USB) | Counts against the batch; enough errors and the error reaches WeeWX, which restarts the driver after 60 seconds. | The batch is dropped and a new one started at once.  See [Read errors and recovery](recovery.md). |

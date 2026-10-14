@@ -18,6 +18,7 @@ module is imported."""
 
 import datetime
 import math
+import random
 import struct
 import time
 
@@ -448,7 +449,9 @@ class SteeredConsole(ClockConsole):
 
 
 def clock_station(clock, console, **attrs):
-    """A bare station wired to a FakeClock and a ClockConsole."""
+    """A bare station wired to a FakeClock and a ClockConsole, its coarse
+    readings' dither seeded so a run repeats."""
+    attrs.setdefault('_dither', random.Random(7))
     station = bare_station(_now=clock.now, _sleep=clock.sleep, **attrs)
     station.port = console
     return station
