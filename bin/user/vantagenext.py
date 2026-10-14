@@ -2522,8 +2522,11 @@ class VantageNext(weewx.drivers.AbstractDevice):
             state.jumps.append([state.pending_jump[0], jump])
             state.note(now, 'the jump %.2f written before the restart landed' % jump)
             state.jump, state.pending_jump, state.write_fails = jump, None, 0
-            log.info("Clock: %s, midnight jump %.2f s%s.", state.state, jump,
-                     '' if state.drift is None else ', drift %+.2f s a day' % state.drift)
+            if not other_class:
+                # (Saved in the other class, it is not resumed: relearned below,
+                # and said so there.)
+                log.info("Clock: %s, midnight jump %.2f s%s.", state.state, jump,
+                         '' if state.drift is None else ', drift %+.2f s a day' % state.drift)
         elif saved.jump != jump:
             state = ClockState(jump, now)
             log.info("Clock: the console's midnight jump is %.2f s, not the %s s last held: "
@@ -2532,8 +2535,9 @@ class VantageNext(weewx.drivers.AbstractDevice):
             state.note(now, 'LEARNING afresh: the console holds %.2f s' % jump)
         else:
             state = saved
-            log.info("Clock: %s, midnight jump %.2f s%s.", state.state, jump,
-                     '' if state.drift is None else ', drift %+.2f s a day' % state.drift)
+            if not other_class:
+                log.info("Clock: %s, midnight jump %.2f s%s.", state.state, jump,
+                         '' if state.drift is None else ', drift %+.2f s a day' % state.drift)
         if (jump is None and state is saved and other_class
                 and (state.readings or state.moves or state.drift is not None)):
             # Still FALLBACK, its jump unknown: the jump it fitted stands, but

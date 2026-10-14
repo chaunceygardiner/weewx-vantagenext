@@ -1869,6 +1869,7 @@ def test_a_console_moved_between_serial_and_ethernet_is_learned_afresh(tmp_path,
     assert len(again._clock.readings) <= 1
     said = 'Clock: connected over ethernet' if again._ethernet else 'no longer connected over ethernet'
     assert said in caplog.text
+    assert 'Clock: STEERING, midnight jump' not in caplog.text      # not resumed, relearned
     run_days(again, console, clock, 3)
     assert again._clock.state == ClockState.STEERING
 
@@ -1943,6 +1944,8 @@ def test_a_3_2_ethernet_state_file_is_relearned_from_whole_second_readings(tmp_p
     assert state.fallback_reason is None and len(state.readings) <= 1
     assert 'Clock: connected over ethernet' in caplog.text
     assert 'kept by setting it' not in caplog.text
+    # The state relearned is not first announced as resumed.
+    assert 'Clock: FALLBACK, midnight jump' not in caplog.text
     run_days(station, console, clock, 2.3)
     assert station._clock.state == ClockState.STEERING and console.sets == []
     with open(station._clock_path, encoding='utf-8') as f:
