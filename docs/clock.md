@@ -103,22 +103,15 @@ Then on the night into 11 October 2026 four of the seven lost it together.  On s
 those nights the console also stops sending LOOP packets two to three minutes into the day.
 
 Clock sets are not the cause: the loss was the same on a console whose clock was never set,
-and it has gone on since the driver stopped setting the clock — four times in 61
-console-nights across the seven to 13 October 2026, all four on that one night.  What is not
-settled is whether the computer is.  Those two years were run with WeeWX's `archive_delay` at 3 seconds, which
-puts the archive download a fraction of a second after the console's
+and it has gone on since the driver stopped setting the clock.  What is not settled is
+whether the computer is.  Those two years were run with WeeWX's `archive_delay` at 3 seconds,
+which puts the archive download a fraction of a second after the console's
 [three-second silence at its own midnight](recovery.md#the-consoles-midnight), inside whatever
 it is still finishing — and one console that had its clock read repeatedly across its
-midnight lost eight minutes.  Moving the download to 6 seconds did not stop it:
-at 6 seconds the loss has come six times in 72 console-nights across the seven, against one
-in thirteen in the weeks before at 3 seconds.
-WeeWX's default of 15 seconds puts the download twelve seconds clear of the silence.  Fifteen
-console-nights at 15 seconds, on five of these consoles early in October 2026, saw no loss,
-too few to say, so since 13 October all seven run at 15 seconds to find out.  A loss night
-at 15 would settle it at once; it takes about two weeks of clean nights to show that 15
-seconds stops it, because the loss comes in clusters.  Until it is settled: averaged over
-every night the loss cost about a dozen seconds of reception, and a low record at five past
-midnight is not a failing link.
+midnight lost eight minutes.  Moving the download to 6 seconds did not stop it.  Whether
+WeeWX's default of 15 seconds, twelve seconds clear of the silence, does is not yet known.
+Averaged over every night the loss cost about a dozen seconds of reception, and a low record
+at five past midnight is not a failing link.
 
 ### How we know the loss is real
 
@@ -294,7 +287,7 @@ first decision brings it in.
 - **The midnight loss is a separate question.**  Steering removes the cost of clock sets,
   not the console's loss of its transmitter after midnight, which has gone on at about the
   rate of the two years before; moving `archive_delay` from 3 seconds to 6 did not stop it
-  either.  Whether WeeWX's default of 15 seconds would is [being measured](#midnight).
+  either.  Whether WeeWX's default of 15 seconds would is [not yet known](#midnight).
 - **The backstop never fires** on a console being steered.  It is there for a console whose
   clock something else has moved, and for one so far off center at the start that the backstop
   reaches it before the first decision
