@@ -1,6 +1,16 @@
 # weewx-vantagenext change history
 
 ## 3.3 UNRELEASED
+- A forced set while steering a serial or USB console (WeeWX's max_drift
+  backstop, or weectl device --set-time) centers the clock for the jump that
+  only cancels the drift and writes that jump back at once, as a
+  WeatherLinkIP's already did.  Before, a clock 3 to 5 seconds off center at
+  its first evening decision could be set by the backstop in the same clock
+  check, after the decision had written a jump to bring it in: the set did the
+  correcting, and the stale jump carried the clock about two seconds past
+  center at midnight, costing a third night (found by simulation, in 9 of 189
+  such starts).  A write that fails after a set no longer counts toward
+  falling back; the next evening's decision recovers from it.
 - A WeatherLinkIP is steered.  It cannot be read precisely (its logger holds
   every answer for half a second or more), so the driver keeps a whole-second
   reading at every clock check (one in 50 minutes at most) and steers from the

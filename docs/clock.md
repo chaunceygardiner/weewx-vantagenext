@@ -266,8 +266,11 @@ That console, 2.3 seconds off center, is about 4.1 seconds fast just after midni
 that finds it more than `max_drift` out sets it to center at once
 ([The backstop](#the-backstop)).  So a clock off center by more than about `max_drift` less
 half its drift — 3.2 seconds, for that console — can be set by the backstop while the driver
-learns, if a clock check lands near its widest; one closer than that is never set, and the
-first decision brings it in.
+learns, if a clock check lands near its widest, or in the very check that makes the first
+decision.  Set while the driver learns, the console keeps its jump and the first decision
+brings the clock the rest of the way in; set in the check that decides, it is left holding
+the jump that only cancels the drift, so that night's jump does not correct it again.  One
+closer than that is never set, and the first decision brings it in.
 
 ## What to expect
 
@@ -472,13 +475,14 @@ Until four readings have followed the set, about sixteen hours at the default `c
 center, where the set put it: the one that only cancels the drift.  A set while steering
 centers the clock for that jump, and a jump steering wrote to bring the clock in is put back
 to it at once — otherwise the console would correct again at midnight, after the set has done
-it.  That write may come as late as the set itself, up to a minute before midnight, later than
-any other: the backstop sets the clock at its widest, often late in the evening.  A set that
+it (the same on a serial console: [The backstop](#the-backstop)).  That write may come as
+late as the set itself, up to a minute before midnight, later than any other: the backstop
+sets the clock at its widest, often late in the evening.  A set that
 runs on past midnight writes nothing then, while the console makes its jump; the next
-evening's decision writes it.  `weectl device --set-time` writes it too, though a write that
-fails there does not count toward
-[falling back](#when-the-driver-falls-back-to-setting-the-clock); and for a set that could not
-write it, the evening's decision does.
+evening's decision writes it.  `weectl device --set-time` writes it too.  A write that fails
+after a set, from either, does not count toward
+[falling back](#when-the-driver-falls-back-to-setting-the-clock): the next evening's decision
+recovers from it; and for a set that could not write it, the evening's decision does.
 
 ### Upgrading, and one limit
 
@@ -566,10 +570,14 @@ slow.
 
 WeeWX's `max_drift` remains as a **backstop**.  A clock further out than that — a console that
 has lost power, say — is set to the center at once, in any state, and the driver records the
-set so its learning stays whole.  With a console it is steering, it never fires; before the
-first decision, it can set a clock that starts more than about `max_drift` less half its drift
-off center ([A clock that starts off center](#a-clock-that-starts-off-center)).  Leave it at
-WeeWX's default of 5: see [Configuration](configuration.md#the-clock-and-stdtimesynch).
+set so its learning stays whole.  While the driver is steering, the set centers the clock for
+the jump that only cancels the drift and writes that jump back at once: a jump steering wrote
+to bring the clock in is stale once the set has done it, and left in the console it would
+carry the clock its correction past center at midnight.  With a console it is steering, the
+backstop never fires on its own; before the first decision, or in the same clock check as it,
+it can set a clock that starts more than about `max_drift` less half its drift off center
+([A clock that starts off center](#a-clock-that-starts-off-center)).  Leave it at WeeWX's
+default of 5: see [Configuration](configuration.md#the-clock-and-stdtimesynch).
 
 ## The clock lines in the log
 
@@ -687,13 +695,14 @@ midnight jump: close, and steering takes out the rest.  There is nothing to reco
 driver learns the console from scratch when WeeWX starts.
 
 With a `clock.json`, it centers the clock on the drift the driver has learned and records its
-step there, so the driver carries on steering as before.  Over ethernet the step cannot be
+step there, so the driver carries on steering as before; and if the console holds a jump
+steering wrote to bring the clock in, it puts back the one that only cancels the drift, since
+the set has done the bringing in ([The backstop](#the-backstop)).  Over ethernet the step cannot be
 known closer than a whole second, so the driver learns where it landed from the readings that
 follow ([A WeatherLinkIP](#a-weatherlinkip)).  It writes `clock.json` only over the
 one WeeWX has already saved, keeping that file's owner and permissions, so running it with
 `sudo` never leaves WeeWX a file it cannot replace.  If that file cannot be replaced, the step
 is not recorded: when WeeWX next runs, the driver finds the clock moved by something it does
 not know of.  Moved more than a second and a half, it learns the drift afresh; moved less, the
-move is taken into the drift for a few days and steered back out.  Over ethernet, where it may
-also have rewritten the jump, WeeWX may instead find a jump it did not write and learn the
-console afresh.
+move is taken into the drift for a few days and steered back out.  Where it also rewrote the
+jump, WeeWX may instead find a jump it did not write and learn the console afresh.

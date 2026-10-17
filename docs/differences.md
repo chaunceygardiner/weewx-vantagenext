@@ -52,7 +52,7 @@ below, the hardware catch-up, the loop-gust bookkeeping, the units, the observat
 | **`--set-offset`** | Rejects negative humidity offsets, which the console supports. | Accepts −100 to 100 (2.2). |
 | **`--set-transmitter-type`** | Accepts an extra temperature or humidity id of 8, a channel whose data can never surface. | Rejects it (2.2). |
 | **`--set-tz-code=0`** | Silently ignored. | Works (2.0). |
-| **`--set-time`** | Sets the console to the computer's time. | Steps it to the center of its daily drift, and says what it did (3.0).  Behind a WeatherLinkIP it also puts back the jump that only cancels the drift (3.3). |
+| **`--set-time`** | Sets the console to the computer's time. | Steps it to the center of its daily drift, and says what it did (3.0).  On a console being steered it also puts back the jump that only cancels the drift (3.3). |
 | **`--info`** | The console's settings. | Those, and the console's midnight jump and what the driver has learned about its clock (3.0); a WeatherLinkIP's as steered from whole-second readings (3.3). |
 
 ## Options

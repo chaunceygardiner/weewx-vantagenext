@@ -1211,8 +1211,12 @@ def test_set_time_centers_on_the_learned_drift_and_records_the_step(tmp_path, mo
     assert saved.state == ClockState.STEERING and saved.drift == -3.39
     assert [step for unused_t, step in saved.moves] == [-3]
     # The time printed after the set is the console's, read: the day's
-    # decision, though due, is left to weewxd, and no jump is written.
-    assert console.jump_writes == []
+    # decision, though due, is left to weewxd.  The one write is the set's
+    # own: the console held 2.50, short of the 3.50 that only cancels the
+    # drift, and the set has just centered the clock, so 3.50 is put back
+    # (as over ethernet) rather than letting 2.50 creep it off by morning.
+    assert [j for unused_t, j in console.jump_writes] == [3.50]
+    assert console.held_jump() == 3.50 == saved.jump
     assert saved.decision_day == '2026-10-05'
 
 
@@ -1679,6 +1683,35 @@ def test_a_set_while_coarse_writes_back_the_jump_that_only_cancels_the_drift(tmp
     expected = vantagenext.cancel_jump(station._clock.drift) if written_back else 7.00
     assert console.held_jump() == expected
     assert station._clock.jump == expected
+
+
+def test_a_forced_set_while_steering_serial_writes_back_the_jump_that_only_cancels_the_drift(tmp_path):
+    # A serial console 4.2 s behind center at its first evening decision
+    # (3.2 s behind at the start, its held 1.75 s jump a second short of its
+    # 2.69 s drift): steering writes a jump to bring it in at midnight,
+    # 6.75, and in the same check WeeWX's backstop finds the clock past
+    # max_drift and sets it.  The set does the correcting: it centers the
+    # clock for the jump that only cancels the drift, 2.75, and writes that
+    # jump back at once, so the 6.75 does not carry the clock two seconds
+    # past center at midnight and cost a third night (as it did, for 9 of
+    # 189 simulated starts 3-5 s off, before 2026-10-17).
+    station, console, clock = make(tmp_path, -2.69, 1.75, c0=-3.21)
+    record = []
+    run_days(station, console, clock, 3, record)
+    state = station._clock
+    assert state.state == ClockState.STEERING
+    assert len(console.sets) == 1
+    set_at = console.sets[0]
+    assert state.drift == pytest.approx(-2.69, abs=0.02)      # the fit at the set, and after
+    cancel = 2.75                                             # ...whose cancel jump is this
+    after = [(t, j) for t, j in console.jump_writes if t > set_at - 60]
+    assert after and after[0][1] == cancel and after[0][0] - set_at < 60
+    assert console.held_jump() == cancel == state.jump
+    # Centered from the midnight after the set on: never the two seconds
+    # past center the stale jump would have put it.
+    midnight = vantagenext.startOfDay(set_at) + 86400
+    late = [e - ideal(t, -2.69) for t, e in record if t > midnight + 600]
+    assert late and max(abs(c) for c in late) <= VantageNext.JUMP_BAND + 0.3
 
 
 def coarse_steered(tmp_path, when, drift, held):

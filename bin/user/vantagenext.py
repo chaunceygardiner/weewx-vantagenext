@@ -2031,14 +2031,19 @@ class VantageNext(weewx.drivers.AbstractDevice):
     # the midnight window (asked as it begins and as its reading ends).  Every
     # set, forced or FALLBACK's, is recorded as the move the console read
     # back: test_a_set_is_recorded_as_the_move_the_console_made.  While
-    # coarse (any state), as the step asked for, with its landing an unknown
-    # of the fit (_coarse_landings): no prediction until a reading follows
-    # it, and until COARSE_LANDING_READINGS have, the jump held is the one
-    # for a clock at center, the one that only cancels the drift -- written
-    # back by a forced set while steering coarse, at once, if the set itself
-    # was allowed (from weectl too, its failure not counted), and by the
+    # steering, serial or coarse, the set centers the clock for the jump
+    # that only cancels the drift and writes that jump back at once, if the
+    # set itself was allowed (from weectl too, its failure not counted): a
+    # jump steering wrote to bring the clock in is stale once the set has
+    # done it, and would carry the clock its correction past center at
+    # midnight (_hold_for_landing).
+    #     test_a_forced_set_while_steering_serial_writes_back_the_jump_that_only_cancels_the_drift
+    # While coarse (any state), as the step asked for, with its landing an
+    # unknown of the fit (_coarse_landings): no prediction until a reading
+    # follows it, and until COARSE_LANDING_READINGS have, the jump held is
+    # the one for a clock at center -- written back by the set, and by the
     # evening decision, which cannot place the clock yet, for any set that
-    # could not (_hold_for_landing).
+    # could not.
     #     test_a_forced_set_while_coarse_keeps_the_drift
     #     test_a_coarse_sets_landing_is_learned_from_the_readings_after_it
     #     test_an_evening_after_a_set_holds_the_jump_that_only_cancels_the_drift
@@ -2702,22 +2707,24 @@ class VantageNext(weewx.drivers.AbstractDevice):
         return (not readings or now - readings[-1][0]
                 >= VantageNext.COARSE_READING_SPACING - VantageNext.COARSE_READING_SLACK)
 
-    def _hold_for_landing(self, state, t, off_center, how):
-        """Until COARSE_LANDING_READINGS readings have followed a coarse set
-        (landing_pending), the console holds cancel_jump: the set put the
-        clock at center, to a second, and a jump steering wrote to bring it
-        in would correct it again at midnight.  Written if the console may
-        hold anything else -- the jump it holds, or a write not yet
-        confirmed.  Called right after a coarse set, and by the evening
-        decision while the landing is pending, so a set that could not
-        write it (a time change window) is caught up.  A failure from
-        weectl device --set-time does not count toward FALLBACK."""
+    def _hold_for_landing(self, state, t, off_center, how, count_failure=True):
+        """After a forced set while steering, the console holds cancel_jump:
+        the set put the clock at center (to a second, over ethernet), and a
+        jump steering wrote to bring it in would correct it again at
+        midnight.  Written if the console may hold anything else -- the
+        jump it holds, or a write not yet confirmed.  Called right after
+        the set, serial or coarse; and over ethernet, where the landing is
+        learned from the readings after it, by the evening decision while
+        the landing is pending (landing_pending), so a set that could not
+        write it (a time change window) is caught up.  count_failure False:
+        the write after a set, whose failure the next evening's decision
+        recovers from (from weectl, or the backstop), does not count toward
+        FALLBACK; the evening's own write does."""
         cancel = cancel_jump(state.drift, day_length(t))
         pending = state.pending_jump[1] if state.pending_jump is not None else None
         if state.jump == cancel and pending in (None, cancel):
             return None
-        return self._write_jump(state, t, cancel, off_center, how,
-                                count_failure=not self._clock_save_over)
+        return self._write_jump(state, t, cancel, off_center, how, count_failure=count_failure)
 
     def _backstop(self, state, first):
         """The forced form: step whole seconds to the center, in any state,
@@ -2738,19 +2745,32 @@ class VantageNext(weewx.drivers.AbstractDevice):
                                           datetime.datetime.fromtimestamp(now)):
             log.info("setTime ignored during time change transition period.")
             return error, "Not set: inside a time change transition period."
-        day_secs = day_length(now)
-        # Steered over ethernet, the clock holds cancel_jump from the set
-        # until its landing is placed (_hold_for_landing), so it is centered
-        # for that jump -- not for one steering wrote to bring it in, which
-        # would leave it that correction's half-day creep off.
-        steered_coarse = (state.coarse and state.state != ClockState.FALLBACK
-                          and state.drift is not None)
-        jump_for = cancel_jump(state.drift, day_secs) if steered_coarse else self.day_start_jump
-        off_center = VantageNext.clock_off_center(
-            error, now - startOfDay(now), self.clock_drift_secs, jump_for, day_secs)
-        step = VantageNext.clock_step(
-            off_center, self.clock_recenter_threshold, gap is not None, True,
-            VantageNext.day_creep(self.clock_drift_secs, jump_for, day_secs))
+        # Steered, the clock holds cancel_jump from the set (_hold_for_landing:
+        # over ethernet until its landing is placed, on serial from the set
+        # on), so it is centered for that jump -- not for one steering wrote
+        # to bring it in, which the set has made stale: centered for that,
+        # the clock would be carried its correction past center at midnight.
+        # Only if that jump can be written back once the set is made: a set
+        # begun in the last minute before midnight cannot (the limit below),
+        # and the console then keeps the jump it holds, so the clock is
+        # centered for that one, as FALLBACK centers.  (A write-back whose
+        # ACK is lost leaves the held jump too; the next evening's decision
+        # corrects what it did at midnight.)
+        steered = state.state != ClockState.FALLBACK and state.drift is not None
+        writes_back = steered and clock_secs(now) < VantageNext.JUMP_WRITE_BACK_BEFORE
+        if writes_back:
+            # By steering's own measure, the distance from the centered line
+            # for the learned drift (what every decision line reports), not
+            # FALLBACK's, which looks half a day's creep ahead for a jump the
+            # console will keep.
+            off_center = error - VantageNext.ideal_clock_error(now - startOfDay(now), state.drift)
+        else:
+            off_center = VantageNext.clock_off_center(
+                error, now - startOfDay(now), self.clock_drift_secs, self.day_start_jump,
+                day_length(now))
+        # (The creep shapes only an unforced step: forced, it is to the center.)
+        step = VantageNext.clock_step(off_center, self.clock_recenter_threshold,
+                                      gap is not None, True, 0.0)
         if step == 0:
             log.info("Clock is %+.2f s off center; not set.", off_center)
             return error, ("Not set: the clock is %+.2f s from the center of its daily drift, "
@@ -2783,17 +2803,15 @@ class VantageNext(weewx.drivers.AbstractDevice):
         # the host.)  The next evening's decision, the landing still pending,
         # writes it then.
         t = self._now()
-        if (moved and steered_coarse
-                and clock_secs(now) < VantageNext.JUMP_WRITE_BACK_BEFORE
-                and not VantageNext.inTimeChangeWindow(self.time_change_windows,
-                                                      datetime.datetime.fromtimestamp(now))
+        if (moved and writes_back
                 and VantageNext._near_the_jump(t) != 'after'
                 and not VantageNext.inTimeChangeWindow(self.time_change_windows,
                                                       datetime.datetime.fromtimestamp(t))):
             # Where the set left the clock, by steering's measure, as every
             # other decision line says it.
             landed = error + moved - VantageNext.ideal_clock_error(t - startOfDay(t), state.drift)
-            self._hold_for_landing(state, t, landed, ', after a set: the jump that only cancels it')
+            self._hold_for_landing(state, t, landed, ', after a set: the jump that only cancels it',
+                                   count_failure=False)
             self._save_clock()                 # what the write did (weectl saves nothing else)
         return error + moved, "Clock stepped %+d s: error %+.2f -> %+.2f s." % (step, error, error + moved)
 
@@ -3086,8 +3104,8 @@ class VantageNext(weewx.drivers.AbstractDevice):
     def _write_jump(self, state, t, new, off_center, how='', count_failure=True):
         """Write a new midnight jump and read it back (the bookkeeping is in
         the design comment).  count_failure False: a failure does not count
-        toward FALLBACK (weectl device --set-time's write, a command meant
-        only to set the time)."""
+        toward FALLBACK (the write after a set, from the backstop or weectl
+        device --set-time, which the next evening's decision recovers from)."""
         old = state.jump
         # PENDING, and saved, before the write: a process stopped between the
         # write and the save finds it at the next start as its own.

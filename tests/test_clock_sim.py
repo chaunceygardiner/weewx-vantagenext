@@ -14,8 +14,11 @@ no-write time.  Every ordinary check starts where WeeWX's do, just after a
 LOOP packet, which the console times: at one point of the console's
 second, the same for the whole run.
 Each seed is one console -- losing time or gaining it, its jump anywhere
-near its drift, now and then one whose memory holds no valid jump (another
-model) -- started on any day of the year.  A seed that fails is a
+near its drift, its clock anywhere up to max_drift off center (those beyond
+about max_drift less half the drift, which WeeWX's check compares the raw
+error against, are set by the backstop at the first check; the rest are the
+driver's to bring in), now and then one whose memory holds no valid jump
+(another model) -- started on any day of the year.  A seed that fails is a
 regression test as it stands.
 
 Each seed runs three ways, kept apart so that no one connection's results
@@ -28,6 +31,14 @@ weectl device --set-time run before WeeWX starts again, over a clock.json
 saved on the other connection).  The three get the same console, the same
 start and the same sequence of events; when each event falls differs a
 little, with what the connection's readings take.
+
+The events come far oftener than they do on a real station -- an outage
+of days about once in fifty, a jump write's ACK lost once in two hundred
+-- so that forty-five days exercise every path many times over.  A
+simulated month is therefore not a real month: what the driver writes,
+sets and lets the clock stray during the event days overstates a real
+console's, and a figure quoted from these runs is drawn from the quiet
+month, or from seeds that drew no event in the days measured.
 
 Not simulated, because nothing like them has been seen and nothing is
 designed for them: coarse readings on serial (0 of 169), a set that does
@@ -97,7 +108,7 @@ class Sim:
         self.clock = FakeClock(start)
         pair = INVALID_PAIR if rng.random() < 0.1 else None
         self.console = SteeredConsole(self.clock, ideal(start, self.drift)
-                                       + rng.uniform(-1.0, 1.0), self.drift, self.jump,
+                                       + rng.uniform(-MAX_DRIFT, MAX_DRIFT), self.drift, self.jump,
                                        pair=pair)
         self.path = str(tmp_path / 'vantagenext' / 'clock.json')
         self.windows = VantageNext.derive_time_change_windows(start - 86400,
@@ -346,6 +357,34 @@ class Sim:
         return self.station._clock
 
 
+def settled(sim, state):
+    """Where the quiet month left the clock: its distance from center as
+    the state is judged (steering's measure, or FALLBACK's), and the limit
+    it must be within.  Apart from assert_settled so that a run of many
+    seeds can record the distance as well as judge it."""
+    console = sim.console
+    t = sim.clock.t
+    if state.state == ClockState.STEERING:
+        off = console.error - ideal(t, sim.drift)
+        limit = WLIP_STEERED if sim.ethernet else VantageNext.JUMP_BAND + 0.3
+    else:
+        secs = t - vantagenext.startOfDay(t)
+        made = sim.jump if console.held_jump() is None else console.held_jump()
+        off = VantageNext.clock_off_center(console.error, secs, sim.drift, made,
+                                           vantagenext.day_length(t))
+        limit = VantageNext.CLOCK_FALLBACK_THRESHOLD + 1.0
+    return off, limit
+
+
+def assert_settled(sim, state, connection, seed):
+    """A month of quiet: steered within the band, or kept within FALLBACK's
+    threshold; never still learning."""
+    assert state.state != ClockState.LEARNING, 'seed %d (%s): still learning' % (seed, connection)
+    off, limit = settled(sim, state)
+    why = '' if state.state == ClockState.STEERING else ' (%s)' % state.fallback_reason
+    assert abs(off) <= limit, 'seed %d (%s): %s %+.2f%s' % (seed, connection, state.state, off, why)
+
+
 @pytest.mark.parametrize('seed', SEEDS)
 @pytest.mark.parametrize('connection', CONNECTIONS)
 def test_the_clock_keeping_holds_through_months_of_everything(tmp_path, connection, seed):
@@ -355,20 +394,4 @@ def test_the_clock_keeping_holds_through_months_of_everything(tmp_path, connecti
     except AssertionError as e:
         raise AssertionError('seed %d (%s): %s\n  %s' % (seed, connection, e,
                                                           '\n  '.join(sim.log[-25:])))
-    # A month of quiet: steered within the band, or kept within FALLBACK's
-    # threshold; never still learning.
-    console = sim.console
-    t = sim.clock.t
-    secs = t - vantagenext.startOfDay(t)
-    made = sim.jump if console.held_jump() is None else console.held_jump()
-    assert state.state != ClockState.LEARNING, 'seed %d (%s): still learning' % (seed, connection)
-    if state.state == ClockState.STEERING:
-        off = console.error - ideal(t, sim.drift)
-        limit = WLIP_STEERED if sim.ethernet else VantageNext.JUMP_BAND + 0.3
-        assert abs(off) <= limit, 'seed %d (%s): steered %+.2f' % (seed, connection, off)
-    else:
-        off = VantageNext.clock_off_center(console.error, secs, sim.drift, made,
-                                           vantagenext.day_length(t))
-        assert abs(off) <= VantageNext.CLOCK_FALLBACK_THRESHOLD + 1.0, \
-            'seed %d (%s): FALLBACK %+.2f (%s)' % (seed, connection, off,
-                                                    state.fallback_reason)
+    assert_settled(sim, state, connection, seed)

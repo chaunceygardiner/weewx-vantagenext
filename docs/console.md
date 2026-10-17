@@ -107,9 +107,9 @@ console, by whole seconds, to the *center of its daily drift* — which, for a c
 loses time, is deliberately ahead of the computer's time after midnight and behind it
 before — and it may decline to do anything at all.  It prints what it did.  See
 [Setting the clock by hand](clock.md#setting-the-clock-by-hand).  A console the driver is
-steering never needs it: it is for one whose clock was lost.  Behind a WeatherLinkIP, on a
-console being steered, it also writes the midnight jump that only cancels the drift, so the
-console does not correct the set again at midnight.
+steering never needs it: it is for one whose clock was lost.  On a console being steered,
+over any connection, it also writes the midnight jump that only cancels the drift if the
+console holds another, so the console does not correct the set again at midnight.
 
 ## `--info`
 
