@@ -1,0 +1,21 @@
+# A WeatherLinkIP's console, 2026-10-14..16 (Pacific time): the whole-second
+# readings the driver kept, one at each four-hourly clock check but the one
+# that fell in the first ten minutes of 15 October, when the driver reads
+# nothing (the console may be making its jump), each sent after a random wait of up to a second and stamped when the request reached
+# the console.  error is console minus host, with the half second a truncated
+# reading drops on average added back.  The console held a 2.25 s midnight
+# jump throughout, and nothing set its clock.
+time,error
+2026-10-14T11:54:12,-0.897
+2026-10-14T15:55:21,-0.752
+2026-10-14T20:00:19,-0.866
+2026-10-15T04:05:20,0.270
+2026-10-15T08:05:21,-0.228
+2026-10-15T12:05:21,-0.403
+2026-10-15T16:05:21,-0.940
+2026-10-15T20:10:19,-1.663
+2026-10-16T00:15:20,0.914
+2026-10-16T04:15:20,-0.377
+2026-10-16T08:15:20,-0.600
+2026-10-16T12:15:21,-0.864
+2026-10-16T16:15:21,-1.562

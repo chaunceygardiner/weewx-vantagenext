@@ -66,7 +66,7 @@ problems below.
   the line through days of whole-second readings.  The clock of a console the driver cannot
   steer, or one lost to a power failure, is still set.
   The manual
-  lists the consoles it has been seen on
+  lists the consoles steering has been seen on
   ([Which consoles](https://chaunceygardiner.github.io/weewx-vantagenext/clock.html#which-consoles)).
   → [Keeping the console clock](https://chaunceygardiner.github.io/weewx-vantagenext/clock.html)
 
@@ -130,6 +130,8 @@ problems below.
        port = /dev/ttyUSB0
    ```
 
+   For a WeatherLinkIP, `type = ethernet` and `host =` its address.
+
 1. Restart WeeWX, then check the log for the driver announcing itself:
 
    ```
@@ -146,8 +148,9 @@ Upgrading from an earlier release?  Run the same `weectl extension install` comm
 restart WeeWX.  An upgrade never rewrites weewx.conf, so a few things need doing by hand —
 deleting the obsolete clock options and checking `max_drift` (3.0), a live `iss_id` line that
 suppresses ISS detection (2.3), the `[[dst_periods]]` section (2.0) — and all of them are on
-the [Upgrading page](https://chaunceygardiner.github.io/weewx-vantagenext/upgrading.html).  The
-full history is in the
+the [Upgrading page](https://chaunceygardiner.github.io/weewx-vantagenext/upgrading.html).
+Nothing needs doing for 3.3: a WeatherLinkIP's clock is learned afresh and steered two days
+after the restart.  The full history is in the
 [change history](https://github.com/chaunceygardiner/weewx-vantagenext/blob/master/changes.md).
 
 ## Testing
@@ -158,8 +161,9 @@ the driver's real wake-up, acknowledgment, checksum and retry logic runs against
 console responses, and the suite is safe to run anywhere.  It covers the console protocol,
 packet decoding, the clock keeping (weeks of simulated days against a console that drifts,
 slews in its midnight jump, falls silent at midnight and truncates its time, as the real
-ones were measured to; and a randomized simulation that puts a console through months of
-restarts, power losses, read errors and midnight checks — `VNEXT_SIM_SEEDS=50` runs fifty
+ones were measured to, or answers through a WeatherLinkIP that holds every answer; and a
+randomized simulation that puts a console through months of restarts, power losses, read
+errors, moves between serial and ethernet, and midnight checks — `VNEXT_SIM_SEEDS=50` runs fifty
 of them instead of two), daylight-saving handling, the installer's config stanza, and a full
 WeeWX engine round trip into a temporary database.  A further
 set keeps the manual and the code in lockstep: every documented option and default is one

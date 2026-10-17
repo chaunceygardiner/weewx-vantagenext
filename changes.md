@@ -13,7 +13,8 @@
   a line, half a day and a midnight in, since waiting could let max_drift set
   it.  Simulated for a month on six consoles: within half a second of center,
   four to seven writes a month, no clock set; kept by setting, as up to 3.2,
-  the same WeatherLinkIP's console was set about two and a half times a month.
+  the same simulation sets that WeatherLinkIP's console about two and a half
+  times a month.
 - Upgrading, a WeatherLinkIP's clock.json is not carried over: some of its
   readings were stamped when the logger's answer arrived, three quarters of a
   second late.  The driver learns the console afresh and steers it two days
@@ -221,7 +222,7 @@
   on is now logged at startup.
 - The installer now writes the options it can supply defaults for as commented
   out lines showing the default, rather than as live settings.  A live value
-  froze that station on the default of the day for ever, since an upgrade never
+  froze that station on the default of the day forever, since an upgrade never
   rewrites weewx.conf.  Thirteen options, iss_id among them.  Fresh installs
   only -- on an existing station, delete its iss_id line to pick up the guess.
 

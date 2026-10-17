@@ -34,7 +34,7 @@ below, the hardware catch-up, the loop-gust bookkeeping, the units, the observat
 | **Rain in a LOOP packet** | Day-rain subtraction, inline. | `weewx.wxformulas.calculate_delta`; a momentary dashed day-rain value neither crashes the driver nor loses rain. |
 | **The year 2028** | The console's year byte is packed signed, which holds no more than 127: from 2028-01-01 every clock set raises an error that WeeWX does not catch, and the console's year reads as 1772. | Unsigned (3.0). |
 | **Startup logging** | Quiet. | The options in force, the time change windows and the ISS id, at INFO. |
-| **The console's midnight** | The console is silent for about four seconds at its own midnight, and a four-second read timeout logs a read error for it nightly. | The read timeout's floor is 4.5 seconds, and a `LOOP gap ... s` line records each night's silence (3.1; the gap since 3.2).  See [The console's midnight](recovery.md#the-consoles-midnight). |
+| **The console's midnight** | The console sends nothing for about three seconds after its own midnight, a gap of about four seconds between packets, and a four-second read timeout logs a read error for it on about half of all nights. | The read timeout's floor is 4.5 seconds, and a `LOOP gap ... s` line records each night's silence (3.1; the gap since 3.2).  See [The console's midnight](recovery.md#the-consoles-midnight). |
 
 ## Decoding
 
@@ -52,8 +52,8 @@ below, the hardware catch-up, the loop-gust bookkeeping, the units, the observat
 | **`--set-offset`** | Rejects negative humidity offsets, which the console supports. | Accepts −100 to 100 (2.2). |
 | **`--set-transmitter-type`** | Accepts an extra temperature or humidity id of 8, a channel whose data can never surface. | Rejects it (2.2). |
 | **`--set-tz-code=0`** | Silently ignored. | Works (2.0). |
-| **`--set-time`** | Sets the console to the computer's time. | Steps it to the center of its daily drift, and says what it did (3.0). |
-| **`--info`** | The console's settings. | Those, and the console's midnight jump and what the driver has learned about its clock (3.0). |
+| **`--set-time`** | Sets the console to the computer's time. | Steps it to the center of its daily drift, and says what it did (3.0).  Behind a WeatherLinkIP it also puts back the jump that only cancels the drift (3.3). |
+| **`--info`** | The console's settings. | Those, and the console's midnight jump and what the driver has learned about its clock (3.0); a WeatherLinkIP's as steered from whole-second readings (3.3). |
 
 ## Options
 

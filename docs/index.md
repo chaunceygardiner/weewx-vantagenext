@@ -79,7 +79,7 @@ keeps the clock without that cost, and solves the specific problems below.
 
 | What the driver does | |
 |---|---|
-| [Keeping the console clock](clock.md) | How the console's clock works, what a clock set costs in reception, how the driver steers the midnight jump, what to expect, and every clock line in the log |
+| [Keeping the console clock](clock.md) | How the console's clock works, what a clock set costs in reception, how the driver steers the midnight jump, a WeatherLinkIP, what to expect, and every clock line in the log |
 | [Daylight-saving time changes](dst.md) | The time change windows and what happens inside one |
 | [Read errors and recovery](recovery.md) | Truncated reads, retries, and telling routine recovery from a fault |
 | [Configuring the console](console.md) | `weectl device`, and the one option that differs from WeeWX's guide |

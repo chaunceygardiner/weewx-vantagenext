@@ -455,7 +455,9 @@ class TestConstants:
         assert spec is not None and spec.loader is not None
         figure = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(figure)
-        assert sorted(figure.FIGURES) == ['clock-midnight.svg', 'clock-sawtooth.svg', 'clock-week.svg']
+        assert sorted(figure.FIGURES) == ['clock-midnight.svg', 'clock-sawtooth.svg', 'clock-week.svg',
+                                          'clock-wlip-readings.svg', 'clock-wlip-rule.svg',
+                                          'clock-wlip-steering.svg']
         for name, draw in figure.FIGURES.items():
             assert draw() == read('docs', 'images', name), \
                 'run tools/clock_figure.py, and check clock.md still describes %s' % name
@@ -472,6 +474,30 @@ class TestConstants:
                'whole sawtooth climbs %.2f seconds a day' % (-drift, jump, drift + jump) in page
         assert 'A jump of 3.75 seconds takes' in page
         assert abs(figure.midnight_readings()[-1][1] - 3.75) < 0.05
+        # A WeatherLinkIP: the real readings' fit, the rule night by night,
+        # and the steered run's writes, each as the page tells it.
+        state = figure.wlip_state()
+        assert 'this one loses %.2f seconds a day and gains back %.2f at each midnight' % (
+            -state.drift, figure.WLIP_JUMP) in page
+        assert 'The console loses %.2f seconds a day and came with a %.2f-second jump. From %.1f seconds ' \
+               'behind center' % (-figure.RULE_DRIFT, figure.RULE_JUMP, -figure.RULE_STARTS[0]) in page
+        far = [new for unused_n, unused_c, held, new in figure.rule_nights(figure.RULE_STARTS[0]) if new != held]
+        near = [new for unused_n, unused_c, held, new in figure.rule_nights(figure.RULE_STARTS[1]) if new != held]
+        assert 'the first jump, %.2f, brings it in at once, and the next evening the jump goes to %.2f' % (
+            far[0], far[1]) in page
+        assert 'two evenings later it goes to %.2f' % far[2] in page
+        assert 'From %.1f seconds behind' % -figure.RULE_STARTS[1] in page
+        assert 'so %.2f is written' % near[0] in page
+        assert 'the jump goes to %.2f, the other neighbor, and later back to %.2f.' % (near[1], near[2]) in page
+        unused_curve, unused_readings, writes, unused_steering = figure.simulate_wlip()
+        assert [(old, new) for unused_t, unused_e, old, new in writes] == [
+            (figure.WLIP_SIM_JUMP, 2.50), (2.50, 2.75), (2.75, 2.25)]
+        assert 'The console loses %.2f seconds a day, came with a %.2f-second jump, and starts %s of ' \
+               'a second behind center' % (-figure.WLIP_SIM_DRIFT, figure.WLIP_SIM_JUMP,
+                                           {-0.3: 'three tenths'}[figure.WLIP_SIM_OFF_CENTER]) in page
+        assert 'the driver writes %.2f, the drift\'s neighbor toward center' % writes[0][3] in page
+        assert 'the driver writes %.2f, the next quarter out' % writes[1][3] in page
+        assert 'When the clock has crossed the band it writes %.2f.' % writes[2][3] in page
 
 
 # ---------------------------------------------------------------------------

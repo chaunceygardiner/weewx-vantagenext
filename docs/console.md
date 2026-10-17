@@ -83,8 +83,8 @@ Wind cup type set to 3 (other).
 
 `weectl device --info` reports the current setting as `small`, `large` or `other`, read
 from wherever the console keeps it.  `unknown` means `0xC3` holds no type yet: on a Vantage
-Pro2, set one.  `<Unavailable>` means the console did not answer the firmware query the
-location is chosen by.
+Pro2, set one.  `<Unavailable>` means the console did not answer: the firmware query the
+location is chosen by, or the read of the type itself.
 Check the wind speeds after changing it.
 
 ## The Davis sonic anemometer
@@ -107,7 +107,9 @@ console, by whole seconds, to the *center of its daily drift* — which, for a c
 loses time, is deliberately ahead of the computer's time after midnight and behind it
 before — and it may decline to do anything at all.  It prints what it did.  See
 [Setting the clock by hand](clock.md#setting-the-clock-by-hand).  A console the driver is
-steering never needs it: it is for one whose clock was lost.
+steering never needs it: it is for one whose clock was lost.  Behind a WeatherLinkIP, on a
+console being steered, it also writes the midnight jump that only cancels the drift, so the
+console does not correct the set again at midnight.
 
 ## `--info`
 

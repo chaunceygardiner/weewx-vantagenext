@@ -41,8 +41,10 @@ hour of data was lost.
 ## Time change windows
 
 The driver sets aside a **window** around each time change and behaves differently inside
-it.  A window runs from five minutes before the change until five minutes after the shifted
-clock has caught up:
+it.  A window covers every wall-clock time the change makes ambiguous, with five minutes to
+spare at each end: springing forward, from five minutes before the change until five minutes
+after the hour it skips; falling back, from five minutes before the hour that repeats until
+five minutes after its second pass:
 
 | Change | Window (for a one-hour shift at 02:00) |
 |---|---|
@@ -99,7 +101,7 @@ INFO user.vantagenext: In time change transition period.
 and for each corrected time, with the name of the function that asked:
 
 ```
-INFO user.vantagenext: DST adjustment: subtracted 3600 seconds; caller: getConsoleTime
+INFO user.vantagenext: DST adjustment: subtracted 3600 seconds; caller: _read_console_time
 INFO user.vantagenext: DST adjustment: added 3600 seconds; caller: _unpackArchivePacket
 ```
 

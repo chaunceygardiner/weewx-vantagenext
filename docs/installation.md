@@ -66,6 +66,8 @@ and changes nothing.  It has no other dependencies.
        port = /dev/ttyUSB0
    ```
 
+   For a WeatherLinkIP, `type = ethernet` and `host =` its address.
+
    See [Switching from the built-in driver](#switching-from-the-built-in-driver) if
    `weewx.conf` already has a working `[Vantage]` section — nearly everyone's does.
 
@@ -79,7 +81,7 @@ The two drivers read their settings from different sections — `[Vantage]` and
 - **`type`, and `port` or `host`.**  Copy these.  They are the only options the driver
   cannot run without.
 - **`iss_id`.**  Think before copying it.  Left out, the driver works out the ISS from the
-  console itself and logs what it found; a copied value suppresses that for ever.  See
+  console itself and logs what it found; a copied value suppresses that forever.  See
   [`iss_id`](configuration.md#iss_id).
 - **Anything else you had changed** (`loop_request`, `max_tries` and so on): copy it.  The
   option names and meanings are the same.

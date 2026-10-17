@@ -109,13 +109,13 @@ decision slot the first of them must land a check in:
 
 | Option | WeeWX default | What it means to this driver |
 |---|---|---|
-| `clock_check` | `14400` | How often, in seconds, WeeWX asks the driver for the console's time — and so how often the driver looks at the clock.  Each look is a [precise reading](clock.md#what-the-driver-does), half a second of polling on average.  It must land one check in every day's decision slot, which runs from ten past midnight at the earliest to half past eleven, less a LOOP batch and the ten minutes a check can land late: with a five-minute archive interval, about 23 hours.  Past that the driver warns at startup, naming the limit, and a day with no check learns nothing and keeps its jump.  The default suits it: the driver decides once a day, on the first check from six in the evening, and opens that slot earlier for a longer interval, so that one check always falls in it before half past eleven; with an interval near a day the day's first check decides.  A shorter interval changes only how often the log says where the clock stands, and how soon the `max_drift` backstop sees a clock something else has moved. |
+| `clock_check` | `14400` | How often, in seconds, WeeWX asks the driver for the console's time — and so how often the driver looks at the clock.  Each look is a [precise reading](clock.md#what-the-driver-does), half a second of polling on average; over ethernet, one whole-second reading after a random wait of up to a second ([A WeatherLinkIP](clock.md#a-weatherlinkip)).  It must land one check in every day's decision slot, which runs from ten past midnight at the earliest to half past eleven, less a LOOP batch and the ten minutes a check can land late: with a five-minute archive interval, about 23 hours.  Past that the driver warns at startup, naming the limit, and a day with no check learns nothing and keeps its jump.  The default suits it: the driver decides once a day, on the first check from six in the evening, and opens that slot earlier for a longer interval, so that one check always falls in it before half past eleven; with an interval near a day the day's first check decides.  On a serial or USB console a shorter interval changes only how often the log says where the clock stands, and how soon the `max_drift` backstop sees a clock something else has moved.  Over ethernet every check's reading is kept, about one in 50 minutes at most, so a shorter interval also gives the line more readings. |
 | `max_drift` | `5` | A **backstop only**.  Past it, WeeWX tells the driver to set the clock to the center at once — after a power loss, say. |
 
 {: .important }
 Leave `max_drift` at WeeWX's default of `5`.  The driver keeps the clock within about half
-the console's daily drift, and about a fifth of a second more, of the true time, so `5` never
-fires on a console it is keeping.  A smaller value would set the clock — which costs the console
+the console's daily drift, and about a fifth of a second more (about half a second more,
+behind a WeatherLinkIP), of the true time, so `5` never fires on a console it is keeping.  A smaller value would set the clock — which costs the console
 about a minute of its transmitter's packets — when nothing was wrong.
 
 ## Obsolete options

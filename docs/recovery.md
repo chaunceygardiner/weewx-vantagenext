@@ -23,7 +23,7 @@ Seven consoles, 34 days in August and September 2026, 282 truncated reads — an
 
 | When | Share | |
 |---|---|---|
-| In the minutes after a clock set | 62% | Three clock sets in four were followed by them: typically four in a row, the first about five seconds after the set, the last half a minute later — and once, 36 of them over more than three minutes.  Measured before 3.0, which [no longer sets the clock](clock.md) in normal running, so this cause is gone — except on a console the driver keeps by setting, a WeatherLinkIP or one it cannot steer, after each set. |
+| In the minutes after a clock set | 62% | Three clock sets in four were followed by them: typically four in a row, the first about five seconds after the set, the last half a minute later — and once, 36 of them over more than three minutes.  Measured before 3.0, which [no longer sets the clock](clock.md) in normal running, so this cause is gone — except after a `max_drift` backstop set, and on a console the driver has [fallen back to setting](clock.md#when-the-driver-falls-back-to-setting-the-clock), after each set. |
 | Two to four seconds after midnight | 35% | One, as the console rolled its day over — the same moment its [daily clock jump](clock.md#how-a-consoles-clock-works) begins.  On some consoles most nights, on others rarely, on one never.  Measured before 3.1, which [waits out that silence](#the-consoles-midnight), so this cause is gone too. |
 | Two to four minutes after midnight | 3% | Eight of them, on four consoles — most on nights the console had also [lost its transmitter at midnight](#what-it-costs-in-reception), and busy reacquiring it.  That loss [continues](clock.md#midnight); whether these do is not yet known — four consoles lost their transmitter on the night into 11 October 2026, with 3.1's longer read, and none of them logged one. |
 | At any other time | none | |
@@ -37,9 +37,9 @@ still set the clock.  That is why it no longer does — it
 [waits out the console's midnight silence](#the-consoles-midnight) as well.  Of the three
 causes in the table, at most the smallest is left on a console the driver steers: the
 occasional read, about one night a month, when the console has lost its transmitter at
-midnight and is busy reacquiring it.  That loss [continues](clock.md#midnight); whether these
-reads still come with it is not yet known.  (A
-console the driver [keeps by setting](clock.md) still has the first cause, after each set.)
+midnight and is busy reacquiring it.  (A console the driver has
+[fallen back to setting](clock.md#when-the-driver-falls-back-to-setting-the-clock) still has the
+first cause, after each set.)
 That is what makes a truncated read at any *other* time worth a look.
 
 ## What it costs in reception
@@ -52,7 +52,7 @@ these consoles it means one of two things: a **clock set** — the `max_drift` b
 a console the driver keeps by setting — which costs the console about a minute of its
 transmitter's packets every time, or **midnight**, when about one night in fifteen the
 console loses its transmitter for a few minutes — as it did for two years, and
-[still does](clock.md#midnight) with the archive download moved later after midnight.
+[still does](clock.md#midnight) now that the driver steers the clock.
 Both, and how we know the packets really are lost, are in
 [What a clock set costs](clock.md#what-a-clock-set-costs).
 
@@ -61,7 +61,7 @@ Both, and how we know the packets really are lost, are in
 The driver asks the console for LOOP packets in batches of 200 at most — a console will not
 supply an unlimited run — but WeeWX ends each batch at the archive boundary, `archive_delay`
 after the interval turns, and the driver asks for a fresh one then: with a five-minute interval,
-a new batch every five and a quarter minutes.  Each packet is 99 bytes ending in a checksum.
+a new batch every five minutes, each starting `archive_delay` after the interval turns.  Each packet is 99 bytes ending in a checksum.
 
 ## A truncated read
 
@@ -137,10 +137,7 @@ Vantage Pro2 above.  The read's wait is the gap less the time WeeWX spent on the
 it, so it is shorter on a busier computer: 3.3 to 4.2 seconds on the eight consoles that ran
 3.1's read through its first three nights, 9 to 11 October 2026, and under 3 seconds on the
 second and third of them on one computer with more to do at midnight, which 3.1, timing the
-read rather than the gap, did not report at all.  None of the eight has logged a truncated read
-in the five nights since 3.1, to 14 October 2026, at midnight or at any other hour.  Five
-nights settle nothing;
-whether the truncated read is gone for good is a question for the weeks ahead.  A console that
+read rather than the gap, did not report at all.  A console that
 one night needs longer than 4.5 seconds gets the `got 0` line instead,
 exactly as before 3.1, and the `LOOP gap` line is missing that night — the two together say by
 how much the console overran.  If that happens on more than the odd night,
@@ -233,8 +230,8 @@ ERROR user.vantagenext: DMPAFT max tries (4) exceeded.
 | `get_packet: Expected 99 chars; got 0` a few seconds after midnight | Routine before 3.1, on about half of all nights: the four-second timeout running out a few tenths before the console's [midnight silence](#the-consoles-midnight) ended.  Since 3.1 no read waits less than 4.5 seconds, so this means the console overran that, and the `LOOP gap` line is missing that night. |
 | The same, two to four minutes after midnight, now and then | Routine and rare: the console reacquiring its transmitter after the [midnight reception loss](#what-it-costs-in-reception). |
 | `rxCheckPercent` low in the record for five past midnight, normal either side | The [midnight reception loss](#what-it-costs-in-reception): about one night in fifteen, for two years and [still](clock.md#midnight). |
-| A run of them starting a few seconds after a `Clock stepped` line | Routine: clock sets disturb the stream, which is why the driver [no longer makes them](clock.md) except as a backstop, or on a console it cannot steer. |
+| A run of them starting a few seconds after a `Clock stepped` line | Routine: clock sets disturb the stream, which is why the driver [no longer makes them](clock.md) except as a backstop, or on a console it cannot steer.  (Not over ethernet, where a timed-out read is an `ip-read error`.) |
 | The same at other times of day, now and then | Worth a look, not yet a fault.  See the next row. |
-| Truncated reads through the day, a few packets apart, with no clock set before them | A marginal link: the USB cable, a hub, the data logger's seating, power to the console.  On a WeatherLinkIP, the network. |
+| Truncated reads through the day, a few packets apart, with no clock set before them | A marginal link: the USB cable, a hub, the data logger's seating, power to the console.  On a WeatherLinkIP the same fault shows as `ip-read error` and `LOOP try` lines: the network. |
 | `LOOP try` and `max tries exceeded` lines without pause | The console is not answering at all.  Check that it is powered and connected — and that nothing else has the port open (see [Troubleshooting](troubleshooting.md)). |
 | `Unable to wake up Vantage console` | The same, met at the start of an exchange rather than in the middle of one. |

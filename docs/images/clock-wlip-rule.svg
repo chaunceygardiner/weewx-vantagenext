@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="360" viewBox="0 0 760 360" role="img" aria-label="How far off center the clock is each evening, under the WeatherLinkIP rule" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">
+<title>The WeatherLinkIP rule, night by night</title>
+<desc>How far off center a console that loses 2.45 seconds a day stands each evening, with no reading noise, from two starts.  From 1.7 seconds behind, more than a second off, the first jump, 4.25, brings it in at once, and the jump then goes to 2.25 and then 2.50.  From 0.8 seconds behind, the jump written is 2.75, the quarter-second next to the drift being too slow, and the clock crosses the band over a few nights, the jump then going to 2.25 and then 2.50.</desc>
+<rect width="760" height="360" fill="#fcfcfb"/>
+<text x="58" y="22" font-size="14" font-weight="600" fill="#0b0b0b">Off center each evening, seconds, with no reading noise</text>
+<rect x="58" y="99.4" width="684" height="63.9" fill="#2a78d6" fill-opacity="0.12"/>
+<line x1="58" y1="222.7" x2="742" y2="222.7" stroke="#898781" stroke-width="1" stroke-dasharray="5 4"/>
+<line x1="58" y1="40.0" x2="742" y2="40.0" stroke="#898781" stroke-width="1" stroke-dasharray="5 4"/>
+<line x1="58" y1="314.0" x2="742" y2="314.0" stroke="#e1e0d9" stroke-width="1"/>
+<text x="50" y="318.0" font-size="12" text-anchor="end" fill="#898781">-2</text>
+<line x1="58" y1="222.7" x2="742" y2="222.7" stroke="#e1e0d9" stroke-width="1"/>
+<text x="50" y="226.7" font-size="12" text-anchor="end" fill="#898781">-1</text>
+<text x="50" y="135.3" font-size="12" text-anchor="end" fill="#898781">0</text>
+<line x1="58" y1="40.0" x2="742" y2="40.0" stroke="#e1e0d9" stroke-width="1"/>
+<text x="50" y="44.0" font-size="12" text-anchor="end" fill="#898781">+1</text>
+<line x1="58" y1="131.3" x2="742" y2="131.3" stroke="#898781" stroke-width="1"/>
+<text x="738" y="217.7" font-size="12" text-anchor="end" fill="#52514e">a second off</text>
+<text x="89.1" y="332" font-size="12" text-anchor="middle" fill="#898781">1</text>
+<text x="151.3" y="332" font-size="12" text-anchor="middle" fill="#898781">2</text>
+<text x="213.5" y="332" font-size="12" text-anchor="middle" fill="#898781">3</text>
+<text x="275.6" y="332" font-size="12" text-anchor="middle" fill="#898781">4</text>
+<text x="337.8" y="332" font-size="12" text-anchor="middle" fill="#898781">5</text>
+<text x="400.0" y="332" font-size="12" text-anchor="middle" fill="#898781">6</text>
+<text x="462.2" y="332" font-size="12" text-anchor="middle" fill="#898781">7</text>
+<text x="524.4" y="332" font-size="12" text-anchor="middle" fill="#898781">8</text>
+<text x="586.5" y="332" font-size="12" text-anchor="middle" fill="#898781">9</text>
+<text x="648.7" y="332" font-size="12" text-anchor="middle" fill="#898781">10</text>
+<text x="710.9" y="332" font-size="12" text-anchor="middle" fill="#898781">11</text>
+<text x="400.0" y="352" font-size="12" text-anchor="middle" fill="#898781">evening; shaded: the band, give or take 0.35 s</text>
+<polyline fill="none" stroke="#2a78d6" stroke-width="2" stroke-linejoin="round" points="89.1,286.6 151.3,122.2 213.5,140.5 275.6,158.7 337.8,154.2 400.0,149.6 462.2,145.0 524.4,140.5 586.5,135.9 648.7,131.3 710.9,126.8"/>
+<circle cx="89.1" cy="286.6" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<text x="89.1" y="306.6" font-size="12" text-anchor="middle" fill="#52514e">4.25</text>
+<circle cx="151.3" cy="122.2" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<text x="151.3" y="112.2" font-size="12" text-anchor="middle" fill="#52514e">2.25</text>
+<circle cx="213.5" cy="140.5" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="275.6" cy="158.7" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<text x="275.6" y="178.7" font-size="12" text-anchor="middle" fill="#52514e">2.50</text>
+<circle cx="337.8" cy="154.2" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="400.0" cy="149.6" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="462.2" cy="145.0" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="524.4" cy="140.5" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="586.5" cy="135.9" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="648.7" cy="131.3" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="710.9" cy="126.8" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<text x="97.1" y="290.6" font-size="12" fill="#52514e">from -1.7 s</text>
+<polyline fill="none" stroke="#eb6834" stroke-width="2" stroke-linejoin="round" points="89.1,204.4 151.3,177.0 213.5,149.6 275.6,122.2 337.8,140.5 400.0,158.7 462.2,154.2 524.4,149.6 586.5,145.0 648.7,140.5 710.9,135.9"/>
+<circle cx="89.1" cy="204.4" r="4" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<text x="89.1" y="224.4" font-size="12" text-anchor="middle" fill="#52514e">2.75</text>
+<circle cx="151.3" cy="177.0" r="4" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="213.5" cy="149.6" r="4" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="275.6" cy="122.2" r="4" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<text x="275.6" y="112.2" font-size="12" text-anchor="middle" fill="#52514e">2.25</text>
+<circle cx="337.8" cy="140.5" r="4" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="400.0" cy="158.7" r="4" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<text x="400.0" y="178.7" font-size="12" text-anchor="middle" fill="#52514e">2.50</text>
+<circle cx="462.2" cy="154.2" r="4" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="524.4" cy="149.6" r="4" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="586.5" cy="145.0" r="4" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="648.7" cy="140.5" r="4" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="710.9" cy="135.9" r="4" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<text x="97.1" y="208.4" font-size="12" fill="#52514e">from -0.8 s</text>
+<text x="400.0" y="56" font-size="12" text-anchor="middle" fill="#52514e">labels: the jump written that evening (drift -2.45 s a day; the console came with 2.25)</text>
+</svg>

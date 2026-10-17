@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="360" viewBox="0 0 760 360" role="img" aria-label="A WeatherLinkIP console's whole-second clock readings" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">
+<title>A WeatherLinkIP console's whole-second clock readings</title>
+<desc>The 13 whole-second readings the driver kept of a console behind a WeatherLinkIP, one at each four-hourly clock check but any that fell in the first ten minutes of a day, each good only to half a second either way, and the line the driver fits through them: the sawtooth of a clock that loses 2.51 seconds a day and gains back 2.25 at each midnight.  The readings scatter around the line; the line is known far better than any one of them.</desc>
+<rect width="760" height="360" fill="#fcfcfb"/>
+<text x="58" y="22" font-size="14" font-weight="600" fill="#0b0b0b">A WeatherLinkIP console's clock error, seconds (positive is fast)</text>
+<line x1="58" y1="283.6" x2="742" y2="283.6" stroke="#e1e0d9" stroke-width="1"/>
+<text x="50" y="287.6" font-size="12" text-anchor="end" fill="#898781">-2</text>
+<line x1="58" y1="222.7" x2="742" y2="222.7" stroke="#e1e0d9" stroke-width="1"/>
+<text x="50" y="226.7" font-size="12" text-anchor="end" fill="#898781">-1</text>
+<line x1="58" y1="161.8" x2="742" y2="161.8" stroke="#898781" stroke-width="1"/>
+<text x="50" y="165.8" font-size="12" text-anchor="end" fill="#898781">0</text>
+<line x1="58" y1="100.9" x2="742" y2="100.9" stroke="#e1e0d9" stroke-width="1"/>
+<text x="50" y="104.9" font-size="12" text-anchor="end" fill="#898781">+1</text>
+<line x1="58" y1="40.0" x2="742" y2="40.0" stroke="#e1e0d9" stroke-width="1"/>
+<text x="50" y="44.0" font-size="12" text-anchor="end" fill="#898781">+2</text>
+<line x1="58.0" y1="40" x2="58.0" y2="314" stroke="#e1e0d9" stroke-width="1" stroke-dasharray="2 3"/>
+<text x="172.0" y="332" font-size="12" text-anchor="middle" fill="#898781">Oct 14</text>
+<line x1="286.0" y1="40" x2="286.0" y2="314" stroke="#e1e0d9" stroke-width="1" stroke-dasharray="2 3"/>
+<text x="400.0" y="332" font-size="12" text-anchor="middle" fill="#898781">Oct 15</text>
+<line x1="514.0" y1="40" x2="514.0" y2="314" stroke="#e1e0d9" stroke-width="1" stroke-dasharray="2 3"/>
+<text x="628.0" y="332" font-size="12" text-anchor="middle" fill="#898781">Oct 16</text>
+<line x1="742.0" y1="40" x2="742.0" y2="314" stroke="#e1e0d9" stroke-width="1" stroke-dasharray="2 3"/>
+<text x="400.0" y="352" font-size="12" text-anchor="middle" fill="#898781">dotted lines are midnight</text>
+<line x1="171.1" y1="183.4" x2="286.0" y2="260.4" stroke="#2a78d6" stroke-width="2" stroke-opacity="0.55"/>
+<line x1="286.0" y1="123.4" x2="514.0" y2="276.2" stroke="#2a78d6" stroke-width="2" stroke-opacity="0.55"/>
+<line x1="514.0" y1="139.2" x2="668.4" y2="242.6" stroke="#2a78d6" stroke-width="2" stroke-opacity="0.55"/>
+<line x1="171.1" y1="186.0" x2="171.1" y2="246.8" stroke="#2a78d6" stroke-width="1.5"/>
+<circle cx="171.1" cy="216.4" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<line x1="209.3" y1="177.1" x2="209.3" y2="238.0" stroke="#2a78d6" stroke-width="1.5"/>
+<circle cx="209.3" cy="207.6" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<line x1="248.1" y1="184.1" x2="248.1" y2="245.0" stroke="#2a78d6" stroke-width="1.5"/>
+<circle cx="248.1" cy="214.5" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<line x1="324.8" y1="114.9" x2="324.8" y2="175.8" stroke="#2a78d6" stroke-width="1.5"/>
+<circle cx="324.8" cy="145.3" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<line x1="362.8" y1="145.2" x2="362.8" y2="206.1" stroke="#2a78d6" stroke-width="1.5"/>
+<circle cx="362.8" cy="175.7" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<line x1="400.8" y1="155.9" x2="400.8" y2="216.8" stroke="#2a78d6" stroke-width="1.5"/>
+<circle cx="400.8" cy="186.3" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<line x1="438.8" y1="188.6" x2="438.8" y2="249.5" stroke="#2a78d6" stroke-width="1.5"/>
+<circle cx="438.8" cy="219.0" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<line x1="477.6" y1="232.6" x2="477.6" y2="293.5" stroke="#2a78d6" stroke-width="1.5"/>
+<circle cx="477.6" cy="263.0" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<line x1="516.4" y1="75.7" x2="516.4" y2="136.6" stroke="#2a78d6" stroke-width="1.5"/>
+<circle cx="516.4" cy="106.1" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<line x1="554.4" y1="154.3" x2="554.4" y2="215.2" stroke="#2a78d6" stroke-width="1.5"/>
+<circle cx="554.4" cy="184.7" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<line x1="592.4" y1="167.9" x2="592.4" y2="228.8" stroke="#2a78d6" stroke-width="1.5"/>
+<circle cx="592.4" cy="198.3" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<line x1="630.4" y1="183.9" x2="630.4" y2="244.8" stroke="#2a78d6" stroke-width="1.5"/>
+<circle cx="630.4" cy="214.4" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<line x1="668.4" y1="226.4" x2="668.4" y2="287.3" stroke="#2a78d6" stroke-width="1.5"/>
+<circle cx="668.4" cy="256.9" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<text x="400.0" y="58.3" font-size="12" text-anchor="middle" fill="#52514e">dots: the readings, each good to half a second either way (the bars); line: the driver's fit, drift -2.51 s a day</text>
+</svg>

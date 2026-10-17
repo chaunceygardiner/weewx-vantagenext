@@ -33,7 +33,8 @@ Nothing to change.  A WeatherLinkIP (`type = ethernet`) is now steered, from who
 readings ([A WeatherLinkIP](clock.md#a-weatherlinkip)).  Its `clock.json` from 3.2 is not
 carried over: the driver learns the console afresh and steers it two days after the restart
 (sooner, for a clock more than a second off center), setting nothing meanwhile but by the
-backstop.  A `[StdTimeSynch]` `clock_check` longer than
+[`max_drift` backstop](clock.md#the-backstop); the log says `Clock: connected over ethernet`
+at the first clock check.  A `[StdTimeSynch]` `clock_check` longer than
 about 23 hours is now warned over ethernet too.  A serial or USB console carries on exactly
 as it was.
 
@@ -60,7 +61,8 @@ does not set it; see [Keeping the console clock](clock.md).  It needs no clock o
    forces clock sets that are not needed.
 
 For about a day after the upgrade — from under a day to a day and three quarters, depending
-on the hour WeeWX restarts — the driver is learning the console's drift and changes nothing;
+on the hour WeeWX restarts, or two days for a WeatherLinkIP ([To 3.3](#to-33)) — the driver is
+learning the console's drift and changes nothing;
 from then on it writes a new midnight jump to the console, in the evening, when the clock
 needs one.  It keeps what it learns in `vantagenext/clock.json` in the archive directory.
 
@@ -78,7 +80,7 @@ was kept by setting it, as before, from the first clock check.
 
 **Look at your `iss_id` line.**  2.3 fixed how the ISS is found when `iss_id` is not set,
 and new installs leave it unset.  But every station installed before 2.3 has a live
-`iss_id = ...` line, written by the old installer, which overrides detection for ever.  If
+`iss_id = ...` line, written by the old installer, which overrides detection forever.  If
 it names your ISS, it is harmless.  To let the driver find the ISS itself, delete the line,
 restart, and check the `ISS ID is ...` line in the log.  See
 [`iss_id`](configuration.md#iss_id).
