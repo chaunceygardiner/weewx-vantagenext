@@ -1740,7 +1740,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
     # time change day).  The off-center distance moves only at midnight, so
     # the evening's reading says what the morning's did, and everything
     # learned since -- a relearn, a set, a sharper drift -- goes into that
-    # night's jump instead of waiting a day.  The band is narrow, so the
+    # night's jump.  The band is narrow, so the
     # jump settles on the two quarter-seconds either side of the drift, held
     # a night or a few at a time: a write about every other night at most,
     # on average.  The drift is learned (1): the slope of the console's precise

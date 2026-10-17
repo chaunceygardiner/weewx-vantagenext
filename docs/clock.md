@@ -172,7 +172,7 @@ time gets a negative jump.
 
 The clock's distance from center moves only at midnight, so the evening reading says what the
 morning's did.  What deciding in the evening adds is everything learned since — a clock found
-moved, a set, a sharper drift — which goes into tonight's jump instead of waiting a day.
+moved, a set, a sharper drift — which goes into tonight's jump.
 
 ![A week of clock error: a day of a sawtooth creeping up, then the jump is rewritten and the sawtooth stays in the band around center](images/clock-sawtooth.svg)
 
