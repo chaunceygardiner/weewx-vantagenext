@@ -183,6 +183,10 @@ class FakeClock:
         self.t += secs
 
 
+# What a WeatherLinkIP holds every GETTIME answer (measured 2026-10-10).
+WLIP_REPLY_SECS = 0.75
+
+
 class ClockConsole(vantagenext.BaseWrapper):
     """A console that keeps time the way the Envoys were measured to: GETTIME
     answers in whole seconds, truncated; SETTIME replaces the whole second and
@@ -402,7 +406,7 @@ class SteeredConsole(ClockConsole):
             return
         if self.slow_hours is not None:
             hour = datetime.datetime.fromtimestamp(self.console_time()).hour
-            self.reply_secs = 0.75 if self.slow_hours[0] <= hour < self.slow_hours[1] else self.fast_reply
+            self.reply_secs = WLIP_REPLY_SECS if self.slow_hours[0] <= hour < self.slow_hours[1] else self.fast_reply
         if self.awaiting_eeprom:
             self.awaiting_eeprom = False
             self.clock.t += self.io_secs

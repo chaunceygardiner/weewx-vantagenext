@@ -449,11 +449,12 @@ When the clock has crossed the band it writes 2.25.  The clock is never set.
 
 Simulated for a month on six consoles, from that WeatherLinkIP's own (losing 2.41 seconds a day,
 holding a 2.25-second jump) to one that gains a second a day, the clock stays within about
-half a second of center, with four to seven writes a month and no clock set.  Over 10,000
-simulated starts, with clocks up to three seconds off center, every one was steering within
-two and a quarter days, none was set more than once, and from the fifth day on 99 in 100
-stayed within 0.63 seconds of center; the slowest to settle, starting well off, came within
-0.94.  The same simulation keeping that WeatherLinkIP's console by setting it, as up to 3.2,
+half a second of center, with four to seven writes a month and no clock set.  Over 100,000
+simulated starts, with clocks up to three seconds off center holding a jump up to a second
+from the one that only cancels their drift, every one was steering within two and a quarter
+days, none was set more than once, and from the fifth day on 99 in 100 stayed within 0.59
+seconds of center; the furthest any strayed was 1.04 seconds, and from the seventh day on,
+0.76.  The same simulation keeping that WeatherLinkIP's console by setting it, as up to 3.2,
 sets it about two and a half times a month, and each set costs
 [about a minute of reception](#what-a-clock-set-costs).
 

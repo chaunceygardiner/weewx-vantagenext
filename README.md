@@ -163,9 +163,10 @@ packet decoding, the clock keeping (weeks of simulated days against a console th
 slews in its midnight jump, falls silent at midnight and truncates its time, as the real
 ones were measured to, or answers through a WeatherLinkIP that holds every answer; and a
 randomized simulation that puts a console through months of restarts, power losses, read
-errors, moves between serial and ethernet, and midnight checks — `VNEXT_SIM_SEEDS=50` runs fifty
-of them instead of two), daylight-saving handling, the installer's config stanza, and a full
-WeeWX engine round trip into a temporary database.  A further
+errors and midnight checks, run apart on a serial line, through a WeatherLinkIP, and with
+the console's logger replaced partway — `VNEXT_SIM_SEEDS=50` runs fifty of each instead of
+two), daylight-saving handling, the installer's config stanza, and a full WeeWX engine
+round trip into a temporary database.  A further
 set keeps the manual and the code in lockstep: every documented option and default is one
 the code actually reads, every log message the manual quotes is one the driver can write,
 and every internal link and anchor resolves.  Run it with the Python that runs WeeWX:

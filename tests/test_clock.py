@@ -22,7 +22,7 @@ import weewx
 import vantagenext
 from vantagenext import ClockState, VantageNext
 
-from common import FakeClock, SteeredConsole, bare_station, clock_station
+from common import WLIP_REPLY_SECS, FakeClock, SteeredConsole, bare_station, clock_station
 
 CHECK = 14400                   # WeeWX's default clock_check; the fleet's too
 MAX_DRIFT = 5                   # WeeWX's default
@@ -731,7 +731,7 @@ def test_a_link_too_slow_for_a_precise_reading_is_left_to_the_backstop(tmp_path)
     # Never seen on serial (readings take a few tens of ms), so not designed
     # for: nothing is decided or written, and WeeWX's max_drift backstop
     # keeps the clock.  (Slow as a WeatherLinkIP is: the answer lands late.)
-    station, console, clock = make(tmp_path, -3.31, 2.50, 0.0, reply_secs=0.75)
+    station, console, clock = make(tmp_path, -3.31, 2.50, 0.0, reply_secs=WLIP_REPLY_SECS)
     record = []
     run_days(station, console, clock, 10, record)
     assert station._clock.state == ClockState.LEARNING
@@ -1228,7 +1228,7 @@ def test_set_time_over_ethernet_holds_the_jump_that_only_cancels_the_drift(tmp_p
     drift = -2.41
     start = datetime.datetime(2026, 10, 6, 14, 30, 0).timestamp()
     clock = FakeClock(start)
-    console = SteeredConsole(clock, 0.0, drift, 7.00, reply_secs=0.75,
+    console = SteeredConsole(clock, 0.0, drift, 7.00, reply_secs=WLIP_REPLY_SECS,
                              nak_writes=99 if write_fails else 0)
     console.error = 3.0 + ideal(start, drift)
     state = ClockState(7.00, start - 3 * 86400, ClockState.STEERING)
@@ -1313,7 +1313,7 @@ def make_wlip(tmp_path, drift, jump, c0=0.0, **kw):
     """A console behind a WeatherLinkIP: the logger holds every answer about
     three quarters of a second (measured 2026-10-10), so no reading is ever
     precise, and the station is configured for ethernet."""
-    kw.setdefault('reply_secs', 0.75)
+    kw.setdefault('reply_secs', WLIP_REPLY_SECS)
     station, console, clock = make(tmp_path, drift, jump, c0, **kw)
     station._ethernet = True
     return station, console, clock
@@ -1526,7 +1526,7 @@ def test_a_fallback_console_moved_between_links_drops_the_other_links_readings(t
     # FALLBACK, the jump it fitted kept, but not the readings, sets or drift
     # -- the drift too when the readings have aged out of the file.
     station, console, clock = make(tmp_path, -3.31, 4.00, pair=(0xF3, 0x0E),
-                                   reply_secs=0.005 if ethernet else 0.75)
+                                   reply_secs=0.005 if ethernet else WLIP_REPLY_SECS)
     station._ethernet = not ethernet
     run_days(station, console, clock, 3)
     fitted = station._clock.fitted_jump
@@ -1540,7 +1540,7 @@ def test_a_fallback_console_moved_between_links_drops_the_other_links_readings(t
             json.dump(saved, f)
     again = restart(station, console, clock)
     again._ethernet = ethernet
-    console.reply_secs = 0.75 if ethernet else 0.005
+    console.reply_secs = WLIP_REPLY_SECS if ethernet else 0.005
     with caplog.at_level('INFO'):
         again.getTime()
     state = again._clock
@@ -1687,7 +1687,7 @@ def coarse_steered(tmp_path, when, drift, held):
     `when`: a station a forced set will set."""
     start = when.timestamp()
     clock = FakeClock(start)
-    console = SteeredConsole(clock, 3.0 + ideal(start, drift), drift, held, reply_secs=0.75)
+    console = SteeredConsole(clock, 3.0 + ideal(start, drift), drift, held, reply_secs=WLIP_REPLY_SECS)
     state = ClockState(held, start - 3 * 86400, ClockState.STEERING)
     state.drift, state.coarse = drift, True
     path = tmp_path / 'vantagenext' / 'clock.json'
@@ -1861,7 +1861,7 @@ def test_a_console_moved_between_serial_and_ethernet_is_learned_afresh(tmp_path,
     assert station._clock.state == ClockState.STEERING
     again = restart(station, console, clock)
     again._ethernet = second == 'ethernet'
-    console.reply_secs = 0.75 if again._ethernet else 0.005
+    console.reply_secs = WLIP_REPLY_SECS if again._ethernet else 0.005
     with caplog.at_level('INFO'):
         again.getTime()
     assert again._clock.state == ClockState.LEARNING
@@ -1914,7 +1914,7 @@ def ethernet_fallback_file(station, clock, wording):
     for k in range(12):
         t = t0 + k * CHECK
         e = 0.4 - 3.39 * k * CHECK / 86400.0 + 3.25 * vantagenext.nights_between(t0, t)
-        state.readings.append([t, e - (0.75 if k < 4 else 0.0), None])
+        state.readings.append([t, e - (WLIP_REPLY_SECS if k < 4 else 0.0), None])
     saved = state.to_dict()
     del saved['coarse']
     os.makedirs(os.path.dirname(station._clock_path), exist_ok=True)
@@ -1985,7 +1985,7 @@ def test_a_reading_is_stamped_when_the_time_is_asked_for_not_when_the_answer_lan
     # of a second after the console stamped it.  Stamped on arrival, every
     # reading read the console that much slow; stamped at the send, the
     # reading carries the console's truncation and nothing else.
-    station, console, clock = make(tmp_path, -3.39, 2.50, 0.0, reply_secs=0.75)
+    station, console, clock = make(tmp_path, -3.39, 2.50, 0.0, reply_secs=WLIP_REPLY_SECS)
     console_ts, now = station._poll_console()
     # The stamp is the send plus the command's wire time -- eight bytes of
     # ten bits at 19200 baud, written here as the physics, not the driver's
