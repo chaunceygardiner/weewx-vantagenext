@@ -2689,7 +2689,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
         COARSE_DITHER_SECS.  WeeWX's clock checks start just after a LOOP
         packet, which the console times, so undithered every reading falls
         at much the same point of the console's second and drops much the
-        same fraction (measured on rpi-imager, 2026-10-14: residuals within
+        same fraction (measured through a WeatherLinkIP, 2026-10-14: residuals within
         +-0.1 s where readings spread over the second scatter by 0.29) --
         an offset the fit cannot tell from where the clock is, up to half a
         second.  Dithered, the fractions average out.  Returns (error, None)."""

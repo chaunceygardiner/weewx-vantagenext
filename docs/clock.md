@@ -91,27 +91,24 @@ That is why the driver steers the jump instead of setting the clock.
 
 ### Midnight
 
-**About one night in fifteen, the console loses its transmitter just after midnight**, for two
-to five minutes, occasionally longer: it did through two years of archives, and it still does
-now that the driver steers the clock.  The record for the first five minutes of the day reads
-anywhere from about 60 percent down to almost nothing, with the records either side at 100.
-Two years of the site's archives show it every month, at a steady rate, and each of the four
-consoles with an archive of its own since February loses 5 to 8 percent of nights.  In those
-two years it did not depend on the weather, on the size of that night's jump, on whether WeeWX
-was restarted, or on what the other consoles did that night: each console lost its own nights.
-Then on the night into 11 October 2026 four of the seven lost it together.  On some of
-those nights the console also stops sending LOOP packets two to three minutes into the day.
-
-Clock sets are not the cause: the loss was the same on a console whose clock was never set,
-and it has gone on since the driver stopped setting the clock.  What is not settled is
-whether the computer is.  Those two years were run with WeeWX's `archive_delay` at 3 seconds,
-which puts the archive download a fraction of a second after the console's
-[three-second silence at its own midnight](recovery.md#the-consoles-midnight), inside whatever
-it is still finishing — and one console that had its clock read repeatedly across its
-midnight lost eight minutes.  Moving the download to 6 seconds did not stop it.  Whether
-WeeWX's default of 15 seconds, twelve seconds clear of the silence, does is not yet known.
-Averaged over every night the loss cost about a dozen seconds of reception, and a low record
-at five past midnight is not a failing link.
+**With `archive_delay` set short, the console loses its transmitter just after midnight about
+one night in fifteen**, for two to five minutes, occasionally longer.  This site ran WeeWX's
+`archive_delay` at 3 seconds for two years, which puts the archive download a fraction of a
+second after the console's [three-second silence at its own midnight](recovery.md#the-consoles-midnight),
+inside whatever it is still finishing, and the archives show the loss every month at a steady
+rate: each of the four consoles with an archive of its own since February lost 5 to 8 percent
+of nights.  The record for the first five minutes of the day reads anywhere from about 60
+percent down to almost nothing, with the records either side at 100.  It did not depend on the
+weather, on the size of that night's jump, on whether WeeWX was restarted, or on what the other
+consoles did that night, and clock sets are not the cause: the loss was the same on a console
+whose clock was never set, and it went on after the driver stopped setting the clock.  On some
+of those nights the console also stopped sending LOOP packets two to three minutes into the
+day.  Moving the download to 6 seconds did not stop it, and one console that had its clock read
+repeatedly across its midnight lost eight minutes.  At WeeWX's default of 15 seconds, twelve
+seconds clear of the silence, it has not been seen on this site and has not been reported.
+Leave `archive_delay` at its default.  Averaged over every night at 3 seconds the loss cost
+about a dozen seconds of reception, and a low record at five past midnight is not a failing
+link.
 
 ### How we know the loss is real
 
@@ -174,13 +171,15 @@ The clock's distance from center moves only at midnight, so the evening reading 
 morning's did.  What deciding in the evening adds is everything learned since — a clock found
 moved, a set, a sharper drift — which goes into tonight's jump.
 
-![A week of clock error: a day of a sawtooth creeping up, then the jump is rewritten and the sawtooth stays in the band around center](images/clock-sawtooth.svg)
+![13 days of one Envoy's clock error while steered: the sawtooth creeps down for two days under a jump that is too small, then the jump is rewritten and the sawtooth stays in the band around center](images/clock-sawtooth.svg)
 
-The figure is a simulated console that loses 3.39 seconds a day and came with a 4.00-second
-jump: a creep of +0.61 seconds a day.  For its first day the driver is learning, and the
-sawtooth climbs.  The next evening it writes a jump of 2.75 seconds — two thirds of a second
-less than the drift calls for, to pull the clock back — and from then on the clock stays in the
-band, the jump changing when it needs to.  The clock is never set.
+The figure is a real console, an Envoy that loses 3.33 seconds a day, found holding a
+2.50-second jump when the record opens: a creep of −0.83 seconds a day, and for two days the
+sawtooth slides down while the driver learns the drift.  At its first decision it writes a jump
+of 4.25 seconds — nearly a second more than the drift calls for, to pull the clock back — and
+the next midnight brings the clock into the band.  From then on the jump moves between 3.25 and
+3.50, the quarter-seconds either side of the drift, a night or a few at a time, and the clock
+stays in the band.  The clock is never set.
 
 Some guards:
 
@@ -284,9 +283,9 @@ is brought in by the first decision.
   that loses 3 seconds a day: about 1.5 seconds fast just after midnight, about 1.5 seconds slow
   just before it, and right around noon.  Steering keeps the sawtooth within about a fifth of a
   second of center, so the extremes reach about 1.7 seconds.  Behind a
-  [WeatherLinkIP](#a-weatherlinkip) it keeps the sawtooth within about half a second of center
-  (a little more at times in its first week), so they reach about 2 seconds.  That is the floor for any console that drifts, and nothing can do
-  better without setting the clock all day.
+  [WeatherLinkIP](#a-weatherlinkip), read only to the second, the band is wider and the
+  sawtooth sits some tenths further from center.  That is the floor for any console that
+  drifts, and nothing can do better without setting the clock all day.
 - **A clock that starts off center is brought in on the first night the driver steers**, after
   the day or so of learning (over a few nights, behind a WeatherLinkIP): [A clock that starts off center](#a-clock-that-starts-off-center).
 - **WeeWX's `Clock error` line will show those extremes**, every night, and that is normal: the
@@ -299,10 +298,9 @@ is brought in by the first decision.
   year.  A
   Vantage Pro2 console keeps its settings in the EEPROM built into its microcontroller, an
   Atmel ATmega128L, which is rated for 100,000 writes: at that rate, more than 500 years.
-- **The midnight loss is a separate question.**  Steering removes the cost of clock sets,
-  not the console's loss of its transmitter after midnight, which has gone on at about the
-  rate of the two years before; moving `archive_delay` from 3 seconds to 6 did not stop it
-  either.  Whether WeeWX's default of 15 seconds would is [not yet known](#midnight).
+- **The midnight loss is a matter of `archive_delay`, not of steering.**  Steering removes
+  the cost of clock sets; the console's loss of its transmitter after midnight came with a
+  short `archive_delay`, and at WeeWX's default it [has not been seen](#midnight).
 - **The backstop never fires** on a console being steered.  It is there for a console whose
   clock something else has moved, and for one so far off center at the start that the backstop
   reaches it before the first jump the driver chooses has been made
@@ -389,9 +387,10 @@ line it fits through them:
 
 Each dot is good only to half a second either way; the line through a few days of them is
 good to a tenth or two.  It is the same sawtooth as any console's: this one loses
-2.51 seconds a day and gains back 2.25 at each midnight.  (Fitted on 12 October, from the
-readings before these, it gave 2.41: the month-long simulation and the log lines below use that,
-and the two figures below a round 2.45.)
+2.41 seconds a day and gained back 2.25 at each midnight until the driver first wrote a new
+jump, 2.75, the quarter-second above its drift, to bring it toward center; every jump written
+since is marked on the figure at the midnight it was first made.  (The log lines below use
+that drift, and the two figures below a round 2.45.)
 
 ### The line through them
 
@@ -453,18 +452,9 @@ days it learns and writes nothing, and the clock slides further behind.  On the 
 the line puts it a little nearer center than it is, and the driver writes 2.50, the
 drift's neighbor toward center, which brings it in only slowly.  Two evenings later the line,
 sharper by then, puts it further out, and the driver writes 2.75, the next quarter out.
-When the clock has crossed the band it writes 2.25.  The clock is never set.
-
-Simulated for a month on six consoles, from that WeatherLinkIP's own (losing 2.41 seconds a day,
-holding a 2.25-second jump) to one that gains a second a day, the clock stays within about
-half a second of center, with four to seven writes a month and no clock set.  Over 100,000
-simulated starts, with clocks up to three seconds off center holding a jump up to a second
-from the one that only cancels their drift, every one was steering within two and a quarter
-days, none was set more than once, and from the fifth day on 99 in 100 stayed within 0.59
-seconds of center; the furthest any strayed was 1.04 seconds, and from the seventh day on,
-0.76.  The same simulation keeping that WeatherLinkIP's console by setting it, as up to 3.2,
-sets it about two and a half times a month, and each set costs
-[about a minute of reception](#what-a-clock-set-costs).
+When the clock has crossed the band it writes 2.25.  The clock is never set.  The figure
+shows how the rule behaves; how close to center a console behind a WeatherLinkIP is kept
+over the months, and how often its jump is written, is for consoles in service to show.
 
 ### A clock set over ethernet
 
@@ -590,13 +580,13 @@ default of 5: see [Configuration](configuration.md#the-clock-and-stdtimesynch).
 At the first clock check after WeeWX starts, the driver says what it found:
 
 ```
-INFO user.vantagenext: Clock: the console's midnight jump is 4.00 s; learning its drift.
+INFO user.vantagenext: Clock: the console's midnight jump is 2.50 s; learning its drift.
 ```
 
 or, resuming:
 
 ```
-INFO user.vantagenext: Clock: STEERING, midnight jump 3.25 s, drift -3.39 s a day.
+INFO user.vantagenext: Clock: STEERING, midnight jump 3.25 s, drift -3.33 s a day.
 ```
 
 At every check, two lines: the driver's, then WeeWX's.
@@ -630,19 +620,19 @@ link's round trip, and one can be an `about` line, half a second off.  Over ethe
 When the drift is first learned:
 
 ```
-INFO user.vantagenext: Clock: drift -3.39 s a day, midnight jump 4.00 s; steering.
+INFO user.vantagenext: Clock: drift -3.32 s a day, midnight jump 2.50 s; steering.
 ```
 
 And once a day, in the evening, after that check's own line, the decision — a jump kept:
 
 ```
-INFO user.vantagenext: Clock is +0.12 s off center (drift -3.39 s a day); midnight jump 3.25 s kept.
+INFO user.vantagenext: Clock is +0.09 s off center (drift -3.33 s a day); midnight jump 3.25 s kept.
 ```
 
 or a jump written (this is the first write in the figure above):
 
 ```
-INFO user.vantagenext: Clock is +0.61 s off center (drift -3.39 s a day); midnight jump 4.00 -> 2.75 s.
+INFO user.vantagenext: Clock is -0.94 s off center (drift -3.32 s a day); midnight jump 2.50 -> 4.25 s.
 ```
 
 When something moved the clock:
@@ -668,11 +658,11 @@ With WeeWX stopped, `weectl device --info` includes the clock:
 
 ```
     CONSOLE CLOCK:
-      Midnight jump (EEPROM 0x2E):  3.50 s
+      Midnight jump (EEPROM 0x2E):  3.25 s
       Driver's clock state:         STEERING
-      Learned drift:                -3.39 s a day
-        2026-10-07 18:15  jump 4.00 -> 2.75 (off center +0.61)
-        2026-10-08 18:15  jump 2.75 -> 3.50 (off center -0.03)
+      Learned drift:                -3.33 s a day
+        2026-10-12 18:25  jump 3.25 -> 3.50 (off center -0.16)
+        2026-10-14 20:42  jump 3.50 -> 3.25 (off center +0.18)
 ```
 
 ## Setting the clock by hand

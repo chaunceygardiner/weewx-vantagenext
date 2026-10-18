@@ -1,10 +1,11 @@
-# A WeatherLinkIP's console, 2026-10-14..16 (Pacific time): the whole-second
-# readings the driver kept, one at each four-hourly clock check but the one
-# that fell in the first ten minutes of 15 October, when the driver reads
-# nothing (the console may be making its jump), each sent after a random wait of up to a second and stamped when the request reached
-# the console.  error is console minus host, with the half second a truncated
-# reading drops on average added back.  The console held a 2.25 s midnight
-# jump throughout, and nothing set its clock.
+# A WeatherLinkIP's console, 2026-10-14..18 (Pacific time): the whole-second
+# readings the driver kept, one at each four-hourly clock check but any that
+# fell in the first ten minutes of a day, when the driver reads nothing (the
+# console may be making its jump), each sent after a random wait of up to a
+# second and stamped when the request reached the console.  error is console
+# minus host, with the half second a truncated reading drops on average added
+# back.  The console's midnight jump is in wlip-jumps.csv; nothing set its
+# clock.
 time,error
 2026-10-14T11:54:12,-0.897
 2026-10-14T15:55:21,-0.752
@@ -19,3 +20,15 @@ time,error
 2026-10-16T08:15:20,-0.600
 2026-10-16T12:15:21,-0.864
 2026-10-16T16:15:21,-1.562
+2026-10-16T20:20:31,-1.170
+2026-10-17T00:25:21,1.121
+2026-10-17T04:30:19,0.110
+2026-10-17T08:30:20,-0.292
+2026-10-17T10:51:04,-0.593
+2026-10-17T14:55:21,-0.411
+2026-10-17T18:55:21,-0.803
+2026-10-17T23:00:20,-1.597
+2026-10-18T03:00:21,0.275
+2026-10-18T07:05:20,0.495
+2026-10-18T11:10:20,0.120
+2026-10-18T15:15:21,-0.331

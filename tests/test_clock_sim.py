@@ -17,7 +17,7 @@ last -- an archive boundary, plus archive_delay, to the next LOOP packet
 (which the console times, every LOOP_SECS at one point of its clock, the
 same for the whole run), plus the archive record's download; through a
 WeatherLinkIP, now and then a download whose wakeup times out first, as
-rpi-imager's do.  So the midnight boundary's own check lands about twenty
+a real one's do.  So the midnight boundary's own check lands about twenty
 seconds into the day, in the jump window, where the driver decides
 nothing; the only checks in the last second before midnight are a
 restart's.
@@ -119,14 +119,14 @@ WLIP_FALLBACK = VantageNext.CLOCK_FALLBACK_THRESHOLD + 0.5 + 1.0
 # follows each archive record -- the LOOP batch is broken at the first
 # packet ARCHIVE_DELAY or more past the boundary (WeeWX's default delay),
 # then the record is downloaded.  The download's seconds are about what the
-# fleet's and rpi-imager's log stamps show (a check 6 to 8 s past the
+# serial consoles' and a WeatherLinkIP's log stamps show (a check 6 to 8 s past the
 # boundary at archive_delay 6 on serial; a record landing 17.3 to 17.7 s
 # past it at 15 through the WeatherLinkIP).
 ARCHIVE_INTERVAL = 300
 ARCHIVE_DELAY = 15
 LOOP_SECS = 2.0
 DOWNLOAD_SECS = {False: 0.3, True: 2.0}            # by ethernet
-# rpi-imager: five downloads in six days whose wakeup timed out first,
+# One WeatherLinkIP: five downloads in six days whose wakeup timed out first,
 # each landing its record (and so the PRE_LOOP after it) about 11 s late.
 WLIP_LATE_DOWNLOAD = 5 / (6 * 86400 / ARCHIVE_INTERVAL)
 WLIP_LATE_SECS = 11.0

@@ -338,7 +338,7 @@ def run_days(station, console, clock, days, record=None, check=CHECK, phase=None
     (check is the engine's interval; the driver's clock_check is told
     separately, as the loader tells it.)  phase: each check lands at that
     point of the CONSOLE's second, as WeeWX's do, starting just after a LOOP
-    packet the console times (measured on rpi-imager, 2026-10-14)."""
+    packet the console times (measured through a WeatherLinkIP, 2026-10-14)."""
     end = clock.t + days * 86400
     while clock.t < end:
         error = station.getTime() - clock.now()
@@ -363,12 +363,12 @@ def readings_on(state, day):
 
 
 FLEET = [   # drift, jump as set 2026-10-04, off center then
-    ('bambi', -3.31, 3.25, 0.81), ('charlemagne', -2.00, 2.00, -0.25),
-    ('cosmo', -3.26, 3.25, -0.93), ('ella', -3.13, 3.25, -0.05),
-    ('judy', -3.55, 3.50, -0.05), ('judygirldog', -3.39, 3.50, -0.54),
-    ('mrpojangles', -3.70, 3.75, -0.53), ('spare', -3.85, 3.75, 0.0),
+    ('console A', -3.31, 3.25, 0.81), ('console B', -2.00, 2.00, -0.25),
+    ('console C', -3.26, 3.25, -0.93), ('console D', -3.13, 3.25, -0.05),
+    ('console E', -3.55, 3.50, -0.05), ('console F', -3.39, 3.50, -0.54),
+    ('console G', -3.70, 3.75, -0.53), ('spare', -3.85, 3.75, 0.0),
     # and as they were before: the creep the jumps used to leave
-    ('charlemagne-untuned', -3.31, 4.00, 1.1), ('judygirldog-untuned', -3.39, 4.00, 0.4),
+    ('console B untuned', -3.31, 4.00, 1.1), ('console F untuned', -3.39, 4.00, 0.4),
 ]
 
 
@@ -397,7 +397,7 @@ def test_every_console_is_steered_within_the_band_and_never_set(tmp_path, name, 
 
 @pytest.mark.parametrize('c0', [2.30, -2.30])
 def test_a_clock_that_starts_off_center_is_brought_in_on_the_first_night(tmp_path, c0):
-    # The spare console as it was handed to weewxd on 2026-10-09: losing
+    # A spare console as it was handed to weewxd on 2026-10-09: losing
     # 3.66 s a day, holding a 3.75 s jump, 2.3 s off center (and the same
     # slow).  Learning leaves it alone; the first decision's write puts it
     # in the band at that midnight, and the next evening's goes back to the
@@ -1163,27 +1163,27 @@ def weectl_set_time(station, tmp_path, monkeypatch):
     configurator.do_options(options, parser, config, False)
 
 
-BAMBI_DRIFT, BAMBI_JUMP = -3.39, 2.50
+DETUNED_DRIFT, DETUNED_JUMP = -3.39, 2.50
 
 
-def bambi_off_center(console):
+def detuned_off_center(console):
     """Where the console stands from the center the driver steps to, by the
     drift and jump that are true of it."""
     t = console.clock.t
     return VantageNext.clock_off_center(console.error, t - vantagenext.startOfDay(t),
-                                        BAMBI_DRIFT, BAMBI_JUMP, vantagenext.day_length(t))
+                                        DETUNED_DRIFT, DETUNED_JUMP, vantagenext.day_length(t))
 
 
-def steered_bambi(tmp_path, off_center_secs):
-    """bambi, detuned: the console holds a 2.50 s jump and loses 3.39 s a day,
+def steered_detuned(tmp_path, off_center_secs):
+    """A detuned Envoy: the console holds a 2.50 s jump and loses 3.39 s a day,
     which the saved state has learned; the day's decision is still due.  The
     clock starts off_center_secs from center.  Returns the station (as weectl
     builds it), console, clock and state path."""
-    drift, jump = BAMBI_DRIFT, BAMBI_JUMP
+    drift, jump = DETUNED_DRIFT, DETUNED_JUMP
     start = datetime.datetime(2026, 10, 6, 14, 30, 0).timestamp()
     clock = FakeClock(start)
     console = SteeredConsole(clock, 0.0, drift, jump)
-    console.error = off_center_secs - bambi_off_center(console)
+    console.error = off_center_secs - detuned_off_center(console)
     state = ClockState(jump, start - 3 * 86400, ClockState.STEERING)
     state.drift = drift
     state.decision_day = '2026-10-05'
@@ -1197,14 +1197,14 @@ def steered_bambi(tmp_path, off_center_secs):
 
 def test_set_time_centers_on_the_learned_drift_and_records_the_step(tmp_path, monkeypatch,
                                                                       capsys):
-    station, console, clock, path = steered_bambi(tmp_path, 3.0)
-    assert bambi_off_center(console) == pytest.approx(3.0)
+    station, console, clock, path = steered_detuned(tmp_path, 3.0)
+    assert detuned_off_center(console) == pytest.approx(3.0)
     weectl_set_time(station, tmp_path, monkeypatch)
     assert 'Clock stepped' in capsys.readouterr().out
     assert len(console.sets) == 1
     # Centered on the drift the driver learned.  Centered as if drift = -jump
     # (no state), the same set lands a whole second off: -1.00.
-    assert bambi_off_center(console) == pytest.approx(0.0, abs=0.1)
+    assert detuned_off_center(console) == pytest.approx(0.0, abs=0.1)
     # The step is in the saved moves, so weewxd carries on instead of
     # finding the clock moved by something it does not know of.
     saved = ClockState.load(str(path))
@@ -1268,7 +1268,7 @@ def test_set_time_with_no_saved_state_creates_nothing(tmp_path, monkeypatch, cap
 
 
 def test_set_time_keeps_the_state_files_owner_and_permissions(tmp_path, monkeypatch, capsys):
-    station, console, clock, path = steered_bambi(tmp_path, 3.0)
+    station, console, clock, path = steered_detuned(tmp_path, 3.0)
     os.chmod(path, 0o640)
     real_stat = os.stat
     weewx_owner = (4321, 4322)
@@ -1295,7 +1295,7 @@ def test_set_time_keeps_the_state_files_owner_and_permissions(tmp_path, monkeypa
 
 def test_set_time_that_cannot_replace_the_state_leaves_it_alone(tmp_path, monkeypatch, capsys,
                                                                 caplog):
-    station, console, clock, path = steered_bambi(tmp_path, 3.0)
+    station, console, clock, path = steered_detuned(tmp_path, 3.0)
     before = path.read_bytes()
 
     def refused(src, dst):
@@ -1324,7 +1324,7 @@ def make_wlip(tmp_path, drift, jump, c0=0.0, **kw):
 
 
 WLIPS = [   # drift, jump, off center at the start
-    ("rpi-imager's", -2.41, 2.25, 0.0),           # its console, fitted 2026-10-12
+    ("a real WeatherLinkIP's", -2.41, 2.25, 0.0),  # fitted 2026-10-12
     ('a jump 1.08 s a day off', -3.33, 2.25, 0.0),
     ('the fastest loser', -3.98, 3.75, -1.0),
     ('a gaining console', 1.00, -1.00, 0.0),
@@ -1373,7 +1373,7 @@ def test_whole_second_readings_locked_to_the_consoles_second_are_dithered(tmp_pa
 
 
 def test_a_weatherlinkip_console_learns_for_two_days_and_is_never_set_meanwhile(tmp_path, caplog):
-    # rpi-imager's console, centered: every check's reading is kept, nothing
+    # A WeatherLinkIP's console, centered: every check's reading is kept, nothing
     # is written or set for two days, and steering begins at the reading that
     # spans them.
     station, console, clock = make_wlip(tmp_path, -2.41, 2.25)
@@ -1402,7 +1402,7 @@ def test_a_weatherlinkip_console_learns_for_two_days_and_is_never_set_meanwhile(
 @pytest.mark.parametrize('c0', [2.30, -2.30])
 def test_a_weatherlinkip_far_off_center_is_steered_as_soon_as_its_readings_make_a_line(tmp_path,
                                                                                      c0):
-    # The spare's start of 2026-10-12, behind a WeatherLinkIP: losing 2.0 s a
+    # A spare console's start of 2026-10-12, behind a WeatherLinkIP: losing 2.0 s a
     # day with a 3.75 s jump (+1.75 a night), 2.3 s off center.  Waiting two
     # days, the max_drift backstop would set it first -- and a set over
     # ethernet relearns, so it would set it again as each two days ended.
@@ -2054,15 +2054,15 @@ def test_the_state_files_of_earlier_3_0_builds_still_load(tmp_path, dropped):
     assert state is not None and not hasattr(state, dropped)
 
 
-def invalid_jump_bambi(tmp_path, saved_jump, fitted_jump):
-    """bambi as steered_bambi, but its 0x2E/0x2F now hold no valid jump (the
+def invalid_jump_detuned(tmp_path, saved_jump, fitted_jump):
+    """The detuned Envoy as steered_detuned, but its 0x2E/0x2F now hold no valid jump (the
     console still makes its 2.50 s).  The saved state holds saved_jump and
     fitted_jump."""
-    drift, jump = BAMBI_DRIFT, BAMBI_JUMP
+    drift, jump = DETUNED_DRIFT, DETUNED_JUMP
     start = datetime.datetime(2026, 10, 6, 14, 30, 0).timestamp()
     clock = FakeClock(start)
     console = SteeredConsole(clock, 0.0, drift, jump, pair=b'\x12\x34')
-    console.error = 3.0 - bambi_off_center(console)
+    console.error = 3.0 - detuned_off_center(console)
     state = ClockState(saved_jump, start - 3 * 86400,
                        ClockState.STEERING if saved_jump is not None else ClockState.FALLBACK)
     state.drift = drift
@@ -2077,18 +2077,18 @@ def invalid_jump_bambi(tmp_path, saved_jump, fitted_jump):
 
 
 @pytest.mark.parametrize('saved_jump, fitted_jump', [
-    (None, BAMBI_JUMP),       # already falling back: the jump it has fitted
-    (BAMBI_JUMP, None),       # steering until now: the jump it held
+    (None, DETUNED_JUMP),       # already falling back: the jump it has fitted
+    (DETUNED_JUMP, None),       # steering until now: the jump it held
 ], ids=['fallback-fitted', 'was-steering'])
 def test_set_time_with_no_valid_jump_centers_on_the_best_guess(tmp_path, monkeypatch, capsys,
                                                                saved_jump, fitted_jump):
-    station, console = invalid_jump_bambi(tmp_path, saved_jump, fitted_jump)
-    assert bambi_off_center(console) == pytest.approx(3.0)
+    station, console = invalid_jump_detuned(tmp_path, saved_jump, fitted_jump)
+    assert detuned_off_center(console) == pytest.approx(3.0)
     weectl_set_time(station, tmp_path, monkeypatch)
     assert 'Clock stepped' in capsys.readouterr().out
     # With the jump taken as 0, the creep is -3.39 s a day instead of -0.89,
     # and the half-day look-ahead lands the clock about 1.25 s from center.
-    assert abs(bambi_off_center(console)) <= 0.5
+    assert abs(detuned_off_center(console)) <= 0.5
 
 
 # ===============================================================================
@@ -2099,7 +2099,7 @@ def test_a_decision_measured_into_the_midnight_window_is_no_reading(tmp_path):
     # Due in the day's last minutes (a start then, with the day's decision
     # not made), begun outside the midnight window and ending inside it: no
     # reading, so nothing written or learned that near the console's jump.
-    drift, jump = BAMBI_DRIFT, BAMBI_JUMP
+    drift, jump = DETUNED_DRIFT, DETUNED_JUMP
     start = datetime.datetime(2026, 10, 6, 23, 58, 59, 600000).timestamp()
     clock = FakeClock(start)
     console = SteeredConsole(clock, 0.0, drift, jump)
@@ -2322,8 +2322,8 @@ def test_a_reading_in_the_last_seconds_before_midnight_is_no_reading(tmp_path):
 
 
 @pytest.mark.parametrize('jump, done', [(3.75, 16), (-1.0, 5), (-8.0, 33)])
-def test_the_simulated_console_slews_its_jump_as_the_spare_was_measured(jump, done):
-    # The spare VP2 console, 2026-10-04: each jump slews in at 0.25 s per
+def test_the_simulated_console_slews_its_jump_as_a_spare_was_measured(jump, done):
+    # A spare VP2 console, 2026-10-04: each jump slews in at 0.25 s per
     # console second from about 00:00:01, done at about these console times.
     start = datetime.datetime(2026, 10, 6, 23, 59, 50).timestamp()
     clock = FakeClock(start)

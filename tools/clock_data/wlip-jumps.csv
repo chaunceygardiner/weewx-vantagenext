@@ -1,0 +1,6 @@
+# The same console's midnight jump: the one it held when the record opens,
+# then each jump the driver wrote, at the time it was written.  A jump written
+# is made at the next midnight.
+time,jump
+2026-10-14T11:54:10,2.25
+2026-10-16T20:20:31,2.75

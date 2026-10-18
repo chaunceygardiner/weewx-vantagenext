@@ -289,7 +289,7 @@ class ClockConsole(vantagenext.BaseWrapper):
 class SteeredConsole(ClockConsole):
     """ClockConsole plus what 3.0 steers: a drift, and a midnight jump held in
     an EEPROM image at 0x2E/0x2F that the driver can read and rewrite.  The
-    jump is made as the spare VP2 console was measured making it (2026-10-04,
+    jump is made as a spare VP2 console was measured making it (2026-10-04,
     3.75, -1, -2, -3, -4 and -8 s): from SLEW_START seconds after its local
     midnight the clock gains (loses, for a negative jump) SLEW_RATE s per
     second OF ITS OWN until the jump is in -- each console second then lasts

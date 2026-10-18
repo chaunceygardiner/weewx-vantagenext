@@ -8,10 +8,10 @@
   fit_clock finds in them.
 - docs/images/clock-midnight.svg: a real console making its midnight jump,
   from the readings in tools/clock_data/midnight.csv.
-- docs/images/clock-sawtooth.svg: steering.  This curve is not sketched: it
-  is a week of a simulated console whose midnight jump is chosen each day by
-  the driver's own choose_jump, centered by its own ideal_clock_error, so the
-  figure cannot show a rule the code does not follow.
+- docs/images/clock-sawtooth.svg: steering.  A real Envoy's clock for the
+  days in tools/clock_data/steered.csv, the readings the driver kept, with
+  the jumps it wrote in steered-jumps.csv and the sawtooth the driver's own
+  fit_clock finds in them.
 - docs/images/clock-wlip-readings.svg: a WeatherLinkIP's console, from the
   whole-second readings in tools/clock_data/wlip.csv, with the line the
   driver's own fit_clock and fitted_error draw through them.
@@ -43,30 +43,12 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO_ROOT, 'bin', 'user'))
 
 import vantagenext  # noqa: E402
-from vantagenext import ClockState, VantageNext, choose_coarse_jump, choose_jump, fit_clock  # noqa: E402
+from vantagenext import ClockState, VantageNext, choose_coarse_jump, fit_clock  # noqa: E402
 
 DATA_DIR = os.path.join(REPO_ROOT, 'tools', 'clock_data')
 
-# One of the consoles this was measured on, with the jump it came with.
-DRIFT = -3.39
-JUMP = 4.00
-DAYS = 7
-# The figure opens at midnight.  The driver learns the drift over the first
-# day (its readings span a midnight at the second day's morning reading), so
-# its first decision is the second day's evening.
-FIRST_DECISION_DAY = 1
-# Where the clock stands when the figure opens.
-START_OFF_CENTER = 0.0
-# The console makes its jump in the first seconds of the day; the driver
-# decides at its first check after the evening slot opens, which with
-# WeeWX's default clock_check of four hours lands anywhere in the slot's
-# first four hours: here, two hours in.
-JUMP_AT = 20.0
-DECIDE_AT = VantageNext.CLOCK_DECISION_OPENS + 2 * 3600.0
-
 W, H = 760, 360
 LEFT, RIGHT, TOP, BOTTOM = 58, 18, 40, 46
-Y_MIN, Y_MAX = -3.0, 3.6
 
 SURFACE = '#fcfcfb'
 INK = '#0b0b0b'
@@ -77,47 +59,93 @@ SERIES = '#2a78d6'
 BAND = '#2a78d6'
 
 
-def x_of(t):
-    return LEFT + (W - LEFT - RIGHT) * t / (DAYS * 86400.0)
+# Steering: one Envoy's clock as the driver kept it, from the morning and
+# evening readings it saved and the jumps it wrote.  The line is the driver's
+# own fit_clock through those readings with those jumps put back, so the
+# figure cannot show a rule the code does not follow.
+STEERED_Y_MIN, STEERED_Y_MAX = -3.5, 2.8
 
 
-def y_of(err):
-    return TOP + (H - TOP - BOTTOM) * (Y_MAX - err) / (Y_MAX - Y_MIN)
+@functools.lru_cache(maxsize=None)
+def steered_readings():
+    """((host time, error), ...) from steered.csv: as the driver kept them."""
+    return tuple((datetime.datetime.fromisoformat(t).timestamp(), float(e))
+                 for t, e in read_csv('steered.csv'))
 
 
-def simulate():
-    """Returns the error curve as a list of (t, error) and the jumps written
-    as (t, error, old jump, new jump)."""
-    error = START_OFF_CENTER + VantageNext.ideal_clock_error(0.0, DRIFT)
-    jump = JUMP
-    points, writes = [(0.0, error)], []
-    t, dt = 0.0, 20.0
-    while t < DAYS * 86400.0:
-        t += dt
-        error += DRIFT * dt / 86400.0
-        into_day = t % 86400.0
-        day = int(t // 86400.0)
-        if abs(into_day - JUMP_AT) < dt / 2.0 and day > 0:
-            points.append((t, error))
-            error += jump
-            points.append((t, error))
-        if abs(into_day - DECIDE_AT) < dt / 2.0 and day >= FIRST_DECISION_DAY:
-            off_center = error - VantageNext.ideal_clock_error(into_day, DRIFT)
-            new = choose_jump(off_center, DRIFT, jump)
-            if new != jump:
-                writes.append((t, error, jump, new))
-                jump = new
-        points.append((t, error))
-    return points, writes
+@functools.lru_cache(maxsize=None)
+def steered_jumps():
+    """((host time, jump), ...) from steered-jumps.csv: the jump the console
+    held when the record opens, then each one the driver wrote, when."""
+    return tuple((datetime.datetime.fromisoformat(t).timestamp(), float(j))
+                 for t, j in read_csv('steered-jumps.csv'))
 
 
-def band_polygon(day):
+def steered_state():
+    """The readings as the driver holds them: a ClockState with the jumps it
+    knows of, its drift fitted by fit_clock."""
+    jumps = steered_jumps()
+    state = ClockState(jumps[0][1], jumps[0][0], ClockState.STEERING)
+    state.jumps = [[t, j] for t, j in jumps]
+    state.readings = [[t, e, 0.02] for t, e in steered_readings()]
+    state.drift = fit_clock(state)[0]
+    return state
+
+
+def steered_x0():
+    return vantagenext.startOfDay(steered_readings()[0][0])
+
+
+def steered_days():
+    """The days the readings span, midnight to midnight."""
+    return vantagenext.nights_between(steered_x0(), steered_readings()[-1][0]) + 1
+
+
+def day_edges(x0, days):
+    """The days + 1 local midnights from x0 on, found as the driver finds
+    them (startOfDay from well inside each day), so a day of 23 or 25 hours
+    is its real length."""
+    edges = [x0]
+    while len(edges) <= days:
+        edges.append(vantagenext.startOfDay(edges[-1] + 36 * 3600.0))
+    return edges
+
+
+def jump_changes(state, edges):
+    """[(midnight, old, new)]: each midnight within the figure at which the
+    console made a different jump from the night before, by the driver's
+    own jump_at."""
+    changes = []
+    for before, midnight in zip(edges[:-2], edges[1:-1]):
+        old, new = state.jump_at(before), state.jump_at(midnight)
+        if new != old:
+            changes.append((midnight, old, new))
+    return changes
+
+
+def steered_edges():
+    return day_edges(steered_x0(), steered_days())
+
+
+def steered_changes():
+    return jump_changes(steered_state(), steered_edges())
+
+
+def steered_x(t):
+    edges = steered_edges()
+    return LEFT + (W - LEFT - RIGHT) * (t - edges[0]) / (edges[-1] - edges[0])
+
+
+def steered_y(err):
+    return TOP + (H - TOP - BOTTOM) * (STEERED_Y_MAX - err) / (STEERED_Y_MAX - STEERED_Y_MIN)
+
+
+def steered_band(start, end, drift):
     """Where the driver keeps the clock: the centered sawtooth, give or take
-    JUMP_BAND."""
+    JUMP_BAND, for the day from one midnight to the next."""
     upper, lower = [], []
-    for into_day in (0.0, 86399.0):
-        center = VantageNext.ideal_clock_error(into_day, DRIFT)
-        t = day * 86400.0 + into_day
+    for t in (start, end - 1.0):
+        center = VantageNext.ideal_clock_error(t - start, drift)
         upper.append((t, center + VantageNext.JUMP_BAND))
         lower.append((t, center - VantageNext.JUMP_BAND))
     return upper + lower[::-1]
@@ -126,50 +154,75 @@ def band_polygon(day):
 def render():
     """The steering figure, as text.  The test suite compares each figure
     with the committed file, so none can fall behind what it is drawn from."""
-    points, writes = simulate()
-    assert len(writes) >= 2, 'the figure is composed around at least two writes: %r' % writes
+    state = steered_state()
+    readings = steered_readings()
+    changes = steered_changes()
+    assert len(changes) >= 2, 'the figure is composed around at least two writes: %r' % changes
+    edges = steered_edges()
+    days = steered_days()
     out = []
     out.append('<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" viewBox="0 0 %d %d" '
-               'role="img" aria-label="Console clock error over a week" font-family="-apple-system,BlinkMacSystemFont,'
-               '\'Segoe UI\',Helvetica,Arial,sans-serif">' % (W, H, W, H))
-    out.append('<title>Console clock error over a week</title>')
-    out.append('<desc>The clock error falls steadily through each day and rises just after '
-               'midnight by the console\'s own jump, a sawtooth.  For the first day the jump '
-               'is the one the console came with, and the sawtooth climbs.  From the second, '
-               'the driver rewrites the jump each night it needs to, and the sawtooth '
-               'stays in the band around center.  The clock is never set.</desc>')
+               'role="img" aria-label="A real console clock\'s error, steered, over %d days" '
+               'font-family="-apple-system,BlinkMacSystemFont,\'Segoe UI\',Helvetica,Arial,sans-serif">'
+               % (W, H, W, H, days))
+    out.append('<title>A real console clock\'s error, steered, over %d days</title>' % days)
+    out.append('<desc>The readings the driver kept of one Davis Envoy\'s clock error for %d days, '
+               'two a day, and the sawtooth its fit draws through them.  The console loses '
+               '%.2f seconds a day.  It held a %.2f-second jump when the record opens, too small, and '
+               'for two days the sawtooth creeps down.  Then the driver writes %.2f, and that midnight '
+               'brings the clock back into the band around center; from then on the jump moves '
+               'between %.2f and %.2f, a night or a few at a time, and the clock stays in the band.  '
+               'The clock is never set.</desc>'
+               % (days, -state.drift, changes[0][1], changes[0][2],
+                  min(new for unused_m, unused_old, new in changes[1:]),
+                  max(new for unused_m, unused_old, new in changes[1:])))
     out.append('<rect width="%d" height="%d" fill="%s"/>' % (W, H, SURFACE))
-    out.append('<text x="%d" y="22" font-size="14" font-weight="600" fill="%s">Console clock error, '
-               'seconds (positive is fast)</text>' % (LEFT, INK))
-    for err in (-2, -1, 0, 1, 2, 3):
-        y = y_of(err)
+    out.append('<text x="%d" y="22" font-size="14" font-weight="600" fill="%s">One Envoy\'s clock error '
+               'while steered, seconds (positive is fast)</text>' % (LEFT, INK))
+    for err in (-3, -2, -1, 0, 1, 2):
+        y = steered_y(err)
         out.append('<line x1="%d" y1="%.1f" x2="%d" y2="%.1f" stroke="%s" stroke-width="1"/>'
                    % (LEFT, y, W - RIGHT, y, MUTED if err == 0 else GRID))
         out.append('<text x="%d" y="%.1f" font-size="12" text-anchor="end" fill="%s">%s</text>'
                    % (LEFT - 8, y + 4, MUTED, '%+d' % err if err else '0'))
-    for day in range(DAYS + 1):
-        x = x_of(day * 86400.0)
+    for i, edge in enumerate(edges):
+        x = steered_x(edge)
         out.append('<line x1="%.1f" y1="%d" x2="%.1f" y2="%d" stroke="%s" stroke-width="1" '
                    'stroke-dasharray="2 3"/>' % (x, TOP, x, H - BOTTOM, GRID))
-        if day < DAYS:
-            out.append('<text x="%.1f" y="%d" font-size="12" text-anchor="middle" fill="%s">day %d</text>'
-                       % (x_of(day * 86400.0 + 43200.0), H - BOTTOM + 18, MUTED, day + 1))
+        if i < days:
+            noon = (edge + edges[i + 1]) / 2.0
+            out.append('<text x="%.1f" y="%d" font-size="12" text-anchor="middle" fill="%s">%s</text>'
+                       % (steered_x(noon), H - BOTTOM + 18, MUTED, time.strftime('%b %-d', time.localtime(noon))))
     out.append('<text x="%.1f" y="%d" font-size="12" text-anchor="middle" fill="%s">dotted lines are '
                'midnight</text>' % ((LEFT + W - RIGHT) / 2.0, H - 8, MUTED))
-    for day in range(DAYS):
+    for start, end in zip(edges, edges[1:]):
         out.append('<polygon points="%s" fill="%s" fill-opacity="0.12"/>'
-                   % (' '.join('%.1f,%.1f' % (x_of(t), y_of(e)) for t, e in band_polygon(day)), BAND))
+                   % (' '.join('%.1f,%.1f' % (steered_x(t), steered_y(e))
+                               for t, e in steered_band(start, end, state.drift)), BAND))
+    # The fitted sawtooth: one straight segment a day, the risers at the
+    # midnights (the line already carries that night's jump at the midnight
+    # itself, so a day's segment ends a second before it).
+    points = []
+    for start, end in zip(edges, edges[1:]):
+        points.append((start, vantagenext.fitted_error(state, start)))
+        points.append((end - 1.0, vantagenext.fitted_error(state, end - 1.0)))
     out.append('<polyline fill="none" stroke="%s" stroke-width="2" stroke-linejoin="round" points="%s"/>'
-               % (SERIES, ' '.join('%.1f,%.1f' % (x_of(t), y_of(e)) for t, e in points)))
-    for i, (t, error, old, new) in enumerate(writes[:2]):
-        x, y = x_of(t), y_of(error)
-        out.append('<circle cx="%.1f" cy="%.1f" r="4" fill="%s" stroke="%s" stroke-width="2"/>'
-                   % (x, y, SERIES, SURFACE))
-        out.append('<text x="%.1f" y="%.1f" font-size="12" fill="%s">jump %.2f &#8594; %.2f s</text>'
-                   % (x + 8, y - 10 - 14 * i, INK_2, old, new))
+               % (SERIES, ' '.join('%.1f,%.1f' % (steered_x(t), steered_y(e)) for t, e in points)))
+    for t, e in readings:
+        out.append('<circle cx="%.1f" cy="%.1f" r="3.2" fill="%s" stroke="%s" stroke-width="1.5"/>'
+                   % (steered_x(t), steered_y(e), SERIES, SURFACE))
+    # The jump made at each midnight it changed, the labels at two fixed
+    # heights above the sawtooth so neighbors do not run together.
+    for i, (midnight, old, new) in enumerate(changes):
+        label = '%.2f &#8594; %.2f' % (old, new) if i == 0 else '%.2f' % new
+        out.append('<text x="%.1f" y="%.1f" font-size="12" fill="%s">%s</text>'
+                   % (steered_x(midnight) + 5, steered_y(2.25 + 0.3 * (i % 2)), INK_2, label))
+    out.append('<text x="%.1f" y="%.1f" font-size="12" text-anchor="middle" fill="%s">dots: the readings '
+               'the driver kept; line: its fit, drift %.2f s a day; figures: the jump it wrote for that '
+               'night</text>' % ((LEFT + W - RIGHT) / 2.0, steered_y(-2.95), INK_2, state.drift))
     out.append('<text x="%.1f" y="%.1f" font-size="12" text-anchor="middle" fill="%s">shaded: the band '
                'the driver keeps the clock in, the centered sawtooth give or take %g s</text>'
-               % ((LEFT + W - RIGHT) / 2.0, y_of(-2.65), INK_2, VantageNext.JUMP_BAND))
+               % ((LEFT + W - RIGHT) / 2.0, steered_y(-3.25), INK_2, VantageNext.JUMP_BAND))
     out.append('</svg>')
     return '\n'.join(out) + '\n'
 
@@ -211,8 +264,13 @@ def week_fit():
     return drift, jump, offset
 
 
+def week_edges():
+    return day_edges(WEEK_START.timestamp(), WEEK_DAYS)
+
+
 def week_x(t):
-    return LEFT + (W - LEFT - RIGHT) * (t - WEEK_START.timestamp()) / (WEEK_DAYS * 86400.0)
+    edges = week_edges()
+    return LEFT + (W - LEFT - RIGHT) * (t - edges[0]) / (edges[-1] - edges[0])
 
 
 WEEK_Y_MIN, WEEK_Y_MAX = -2.5, 3.0
@@ -226,6 +284,7 @@ def render_week():
     """The real week, as text."""
     drift, jump, offset = week_fit()
     t0 = WEEK_START.timestamp()
+    edges = week_edges()
     out = []
     out.append('<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" viewBox="0 0 %d %d" '
                'role="img" aria-label="A real console clock\'s error over a week" font-family="-apple-system,'
@@ -245,21 +304,20 @@ def render_week():
                    % (LEFT, y, W - RIGHT, y, MUTED if err == 0 else GRID))
         out.append('<text x="%d" y="%.1f" font-size="12" text-anchor="end" fill="%s">%s</text>'
                    % (LEFT - 8, y + 4, MUTED, '%+d' % err if err else '0'))
-    for day in range(WEEK_DAYS + 1):
-        x = week_x(t0 + day * 86400.0)
+    for i, edge in enumerate(edges):
+        x = week_x(edge)
         out.append('<line x1="%.1f" y1="%d" x2="%.1f" y2="%d" stroke="%s" stroke-width="1" '
                    'stroke-dasharray="2 3"/>' % (x, TOP, x, H - BOTTOM, GRID))
-        if day < WEEK_DAYS:
-            label = time.strftime('%b %-d', time.localtime(t0 + day * 86400.0 + 43200.0))
+        if i < WEEK_DAYS:
+            noon = (edge + edges[i + 1]) / 2.0
             out.append('<text x="%.1f" y="%d" font-size="12" text-anchor="middle" fill="%s">%s</text>'
-                       % (week_x(t0 + day * 86400.0 + 43200.0), H - BOTTOM + 18, MUTED, label))
+                       % (week_x(noon), H - BOTTOM + 18, MUTED, time.strftime('%b %-d', time.localtime(noon))))
     out.append('<text x="%.1f" y="%d" font-size="12" text-anchor="middle" fill="%s">dotted lines are '
                'midnight</text>' % ((LEFT + W - RIGHT) / 2.0, H - 8, MUTED))
     # The fitted sawtooth: one straight segment a day.
-    for day in range(WEEK_DAYS):
-        a, b = t0 + day * 86400.0, t0 + (day + 1) * 86400.0
-        ea = offset + jump * day + drift * day
-        eb = ea + drift
+    for day, (a, b) in enumerate(zip(edges, edges[1:])):
+        ea = offset + jump * day + drift * (a - t0) / 86400.0
+        eb = offset + jump * day + drift * (b - t0) / 86400.0
         out.append('<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="%s" stroke-width="1.5" '
                    'stroke-opacity="0.45"/>' % (week_x(a), week_y(ea), week_x(b), week_y(eb), SERIES))
     for t, e in week_readings():
@@ -335,8 +393,8 @@ def render_midnight():
 SERIES_2 = '#eb6834'
 
 # The readings: a WeatherLinkIP's console, its whole-second readings fitted
-# by the driver's own fit_clock and fitted_error.
-WLIP_JUMP = 2.25
+# by the driver's own fit_clock and fitted_error, with the jumps it held and
+# the driver wrote (wlip-jumps.csv) put back.
 WLIP_Y_MIN, WLIP_Y_MAX = -2.5, 2.0
 
 
@@ -347,11 +405,29 @@ def wlip_readings():
             for t, e in read_csv('wlip.csv'))
 
 
+@functools.lru_cache(maxsize=None)
+def wlip_jumps():
+    """((host time, jump), ...) from wlip-jumps.csv: the jump the console
+    held when the record opens, then each one the driver wrote, when."""
+    return tuple((datetime.datetime.fromisoformat(t).timestamp(), float(j))
+                 for t, j in read_csv('wlip-jumps.csv'))
+
+
+def wlip_edges():
+    return day_edges(wlip_x0(), wlip_days())
+
+
+def wlip_changes():
+    return jump_changes(wlip_state(), wlip_edges())
+
+
 def wlip_state():
-    """The readings as the driver holds them: a coarse ClockState, the
-    console's jump in force from before the first reading."""
+    """The readings as the driver holds them: a coarse ClockState with the
+    jumps it knows of."""
     readings = wlip_readings()
-    state = ClockState(WLIP_JUMP, readings[0][0] - 1.0, ClockState.STEERING)
+    jumps = wlip_jumps()
+    state = ClockState(jumps[0][1], jumps[0][0], ClockState.STEERING)
+    state.jumps = [[t, j] for t, j in jumps]
     state.coarse = True
     state.readings = [[t, e, None] for t, e in readings]
     state.drift = fit_clock(state)[0]
@@ -369,7 +445,8 @@ def wlip_days():
 
 
 def wlip_x(t):
-    return LEFT + (W - LEFT - RIGHT) * (t - wlip_x0()) / (wlip_days() * 86400.0)
+    edges = wlip_edges()
+    return LEFT + (W - LEFT - RIGHT) * (t - edges[0]) / (edges[-1] - edges[0])
 
 
 def wlip_y(err):
@@ -380,7 +457,7 @@ def render_wlip_readings():
     """The real readings and the line through them, as text."""
     state = wlip_state()
     readings = wlip_readings()
-    t0 = wlip_x0()
+    edges = wlip_edges()
     days = wlip_days()
     out = []
     out.append('<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" viewBox="0 0 %d %d" '
@@ -388,13 +465,16 @@ def render_wlip_readings():
                'font-family="-apple-system,BlinkMacSystemFont,\'Segoe UI\',Helvetica,Arial,sans-serif">'
                % (W, H, W, H))
     out.append('<title>A WeatherLinkIP console\'s whole-second clock readings</title>')
+    changes = wlip_changes()
     out.append('<desc>The %d whole-second readings the driver kept of a console behind a '
                'WeatherLinkIP, one at each four-hourly clock check but any that fell in the first ten '
                'minutes of a day, each good only to half a second '
                'either way, and the line the driver fits through them: the sawtooth of a clock that '
-               'loses %.2f seconds a day and gains back %.2f at each midnight.  The readings scatter '
-               'around the line; the line is known far better than any one of them.</desc>'
-               % (len(readings), -state.drift, WLIP_JUMP))
+               'loses %.2f seconds a day and gains back its jump at each midnight, %.2f seconds when '
+               'the record opens.  The readings scatter around the line; the line is known far better '
+               'than any one of them.  Where the driver wrote a new jump, the figure says so at the '
+               'midnight it was first made.</desc>'
+               % (len(readings), -state.drift, wlip_jumps()[0][1]))
     out.append('<rect width="%d" height="%d" fill="%s"/>' % (W, H, SURFACE))
     out.append('<text x="%d" y="22" font-size="14" font-weight="600" fill="%s">A WeatherLinkIP console\'s '
                'clock error, seconds (positive is fast)</text>' % (LEFT, INK))
@@ -404,14 +484,14 @@ def render_wlip_readings():
                    % (LEFT, y, W - RIGHT, y, MUTED if err == 0 else GRID))
         out.append('<text x="%d" y="%.1f" font-size="12" text-anchor="end" fill="%s">%s</text>'
                    % (LEFT - 8, y + 4, MUTED, '%+d' % err if err else '0'))
-    for day in range(days + 1):
-        x = wlip_x(t0 + day * 86400.0)
+    for i, edge in enumerate(edges):
+        x = wlip_x(edge)
         out.append('<line x1="%.1f" y1="%d" x2="%.1f" y2="%d" stroke="%s" stroke-width="1" '
                    'stroke-dasharray="2 3"/>' % (x, TOP, x, H - BOTTOM, GRID))
-        if day < days:
-            label = time.strftime('%b %-d', time.localtime(t0 + day * 86400.0 + 43200.0))
+        if i < days:
+            noon = (edge + edges[i + 1]) / 2.0
             out.append('<text x="%.1f" y="%d" font-size="12" text-anchor="middle" fill="%s">%s</text>'
-                       % (wlip_x(t0 + day * 86400.0 + 43200.0), H - BOTTOM + 18, MUTED, label))
+                       % (wlip_x(noon), H - BOTTOM + 18, MUTED, time.strftime('%b %-d', time.localtime(noon))))
     out.append('<text x="%.1f" y="%d" font-size="12" text-anchor="middle" fill="%s">dotted lines are '
                'midnight</text>' % ((LEFT + W - RIGHT) / 2.0, H - 8, MUTED))
     # The line: where the driver's fit puts the clock, one segment a day,
@@ -432,6 +512,10 @@ def render_wlip_readings():
                    % (x, wlip_y(e + 0.5), x, wlip_y(e - 0.5), SERIES))
         out.append('<circle cx="%.1f" cy="%.1f" r="4" fill="%s" stroke="%s" stroke-width="2"/>'
                    % (x, wlip_y(e), SERIES, SURFACE))
+    for midnight, old, new in changes:
+        x, y = wlip_x(midnight), wlip_y(vantagenext.fitted_error(state, midnight))
+        out.append('<text x="%.1f" y="%.1f" font-size="12" fill="%s">jump %.2f &#8594; %.2f s</text>'
+                   % (x + 10, y - 18, INK_2, old, new))
     out.append('<text x="%.1f" y="%.1f" font-size="12" text-anchor="middle" fill="%s">dots: the readings, '
                'each good to half a second either way (the bars); line: the driver\'s fit, drift %.2f s '
                'a day</text>' % ((LEFT + W - RIGHT) / 2.0, wlip_y(1.7), INK_2, state.drift))

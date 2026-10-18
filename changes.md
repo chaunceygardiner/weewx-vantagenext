@@ -21,10 +21,7 @@
   one out, when that would creep too slowly to bring it in).  A clock
   the line puts more than a second off center is steered as soon as there is
   a line, half a day and a midnight in, since waiting could let max_drift set
-  it.  Simulated for a month on six consoles: within half a second of center,
-  four to seven writes a month, no clock set; kept by setting, as up to 3.2,
-  the same simulation sets that WeatherLinkIP's console about two and a half
-  times a month.
+  it.
 - Upgrading, a WeatherLinkIP's clock.json is not carried over: some of its
   readings were stamped when the logger's answer arrived, three quarters of a
   second late.  The driver learns the console afresh and steers it two days
@@ -50,6 +47,12 @@
   decision slot is warned over ethernet too.
 - weectl device --info shows a WeatherLinkIP's state as steered "from
   whole-second readings (ethernet)".
+- The manual's steering figure is a real console's two weeks, drawn from the
+  readings the driver kept and the jumps it wrote, and its account of the
+  midnight reception loss says what it was: it came with [StdArchive]
+  archive_delay set short (3 seconds for two years on this site, and still
+  at 6), and at WeeWX's default of 15 it has not been seen here or reported.
+  Leave archive_delay at its default.
 
 ## 3.2 2026-10-14
 - A WeatherLinkIP is not steered.  Measured on one: the logger holds every

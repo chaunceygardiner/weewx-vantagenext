@@ -464,11 +464,19 @@ class TestConstants:
             assert '](images/%s)' % name in pages()['clock.md'], name
         # The page's account of each figure, against the figure's own numbers.
         page = ' '.join(pages()['clock.md'].split())
-        assert 'loses %.2f seconds a day and came with a %.2f-second jump' % (
-            -figure.DRIFT, figure.JUMP) in page
-        (unused_t, unused_error, old, new) = figure.simulate()[1][0]
-        assert 'it writes a jump of %.2f seconds' % new in page
-        assert 'midnight jump %.2f -> %.2f s.' % (old, new) in page
+        steered = figure.steered_state()
+        changes = figure.steered_changes()
+        assert 'an Envoy that loses %.2f seconds a day, found holding a %.2f-second jump' % (
+            -steered.drift, changes[0][1]) in page
+        creep = round(changes[0][1], 2) - round(-steered.drift, 2)
+        assert 'a creep of %s seconds a day' % ('%+.2f' % creep).replace('-', '\u2212') in page
+        assert '![%d days of one Envoy' % figure.steered_days() in page
+        assert 'it writes a jump of %.2f seconds' % changes[0][2] in page
+        assert 'midnight jump %.2f -> %.2f s.' % (changes[0][1], changes[0][2]) in page
+        later = sorted({new for unused_m, unused_old, new in changes[1:]})
+        assert 'the jump moves between %.2f and %.2f, the quarter-seconds either side of the drift' % (
+            later[0], later[-1]) in page
+        assert later[0] <= -steered.drift <= later[-1]
         drift, jump, unused_offset = figure.week_fit()
         assert 'Each day this console loses %.2f seconds and each midnight it gains back %.2f, so the ' \
                'whole sawtooth climbs %.2f seconds a day' % (-drift, jump, drift + jump) in page
@@ -477,8 +485,11 @@ class TestConstants:
         # A WeatherLinkIP: the real readings' fit, the rule night by night,
         # and the steered run's writes, each as the page tells it.
         state = figure.wlip_state()
-        assert 'this one loses %.2f seconds a day and gains back %.2f at each midnight' % (
-            -state.drift, figure.WLIP_JUMP) in page
+        changes = figure.wlip_changes()
+        assert len(changes) >= 1
+        assert 'this one loses %.2f seconds a day and gained back %.2f at each midnight until the driver ' \
+               'first wrote a new jump, %.2f' % (-state.drift, changes[0][1], changes[0][2]) in page
+        assert 'Clock: drift %.2f s a day, midnight jump %.2f s; steering.' % (state.drift, changes[0][1]) in page
         assert 'The console loses %.2f seconds a day and came with a %.2f-second jump. From %.1f seconds ' \
                'behind center' % (-figure.RULE_DRIFT, figure.RULE_JUMP, -figure.RULE_STARTS[0]) in page
         far = [new for unused_n, unused_c, held, new in figure.rule_nights(figure.RULE_STARTS[0]) if new != held]
