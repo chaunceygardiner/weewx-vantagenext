@@ -265,12 +265,16 @@ That console, 2.3 seconds off center, is about 4.1 seconds fast just after midni
 1.8.  The backstop compares the clock with the computer's time at every clock check: a check
 that finds it more than `max_drift` out sets it to center at once
 ([The backstop](#the-backstop)).  So a clock off center by more than about `max_drift` less
-half its drift — 3.2 seconds, for that console — can be set by the backstop while the driver
-learns, if a clock check lands near its widest, or in the very check that makes the first
-decision.  Set while the driver learns, the console keeps its jump and the first decision
-brings the clock the rest of the way in; set in the check that decides, it is left holding
-the jump that only cancels the drift, so that night's jump does not correct it again.  One
-closer than that is never set, and the first decision brings it in.
+half its drift — 3.2 seconds, for that console — can be set by the backstop before the first
+jump the driver chooses has been made, and so can one somewhat closer if the jump it holds is
+far from its drift: each midnight while the driver learns then carries it further out.  The
+set can come while the driver learns, if a clock check lands near the clock's widest, or at
+any check from the one that makes the first decision until that night's midnight, while the
+clock is still going out and the jump that brings it in is yet to come.  Set while the driver
+learns, the console keeps its jump and the first decision brings the clock the rest of the
+way in; set once the driver has decided, it is left holding the jump that only cancels the
+drift, so that night's jump does not correct it again.  A clock the backstop does not reach
+is brought in by the first decision.
 
 ## What to expect
 
@@ -301,7 +305,7 @@ closer than that is never set, and the first decision brings it in.
   either.  Whether WeeWX's default of 15 seconds would is [not yet known](#midnight).
 - **The backstop never fires** on a console being steered.  It is there for a console whose
   clock something else has moved, and for one so far off center at the start that the backstop
-  reaches it before the first decision
+  reaches it before the first jump the driver chooses has been made
   ([A clock that starts off center](#a-clock-that-starts-off-center)).
 
 ## When something changes
@@ -332,8 +336,9 @@ been seen:
   3.25 seconds, and was measured at 3.25 the next night.  On the Vantage Pro2, negative and
   zero jumps were made too, and writing one cost it no reception.
 - **Behind a WeatherLinkIP:** a console steered through one since October 2026.  A jump
-  written through the logger reads back as written; one made at midnight has not yet been
-  seen.
+  written through the logger reads back as written and is made at the next midnight: the
+  first one written, 2.75 seconds in place of 2.25, moved the fitted clock the extra half
+  second the next day, and the next evening's decision kept it.
 - **Not yet seen:** a Vantage Vue, an original Vantage Pro, and any other firmware.
 
 The driver does not take any of this on trust.  It reads the jump and its check byte when WeeWX
@@ -441,8 +446,8 @@ nears the far side the jump goes to 2.25, the other neighbor, and later back to 
 ![Ten days of a console behind a WeatherLinkIP: two days of learning with the sawtooth sliding down, then three jumps written over the next six days, the clock coming into the band around center and staying near it, never set](images/clock-wlip-steering.svg)
 
 The figure is ten days of the real driver, the code that runs under WeeWX, against a
-simulated console behind a simulated WeatherLinkIP that holds every answer three quarters of
-a second.  The console loses 2.45 seconds a day, came with a 2.25-second jump, and
+simulated console behind a simulated WeatherLinkIP that holds the answer to every clock
+reading three quarters of a second.  The console loses 2.45 seconds a day, came with a 2.25-second jump, and
 starts three tenths of a second behind center; the dots are the readings the driver kept.  For two
 days it learns and writes nothing, and the clock slides further behind.  On the third evening
 the line puts it a little nearer center than it is, and the driver writes 2.50, the
@@ -574,8 +579,9 @@ set so its learning stays whole.  While the driver is steering, the set centers 
 the jump that only cancels the drift and writes that jump back at once: a jump steering wrote
 to bring the clock in is stale once the set has done it, and left in the console it would
 carry the clock its correction past center at midnight.  With a console it is steering, the
-backstop never fires on its own; before the first decision, or in the same clock check as it,
-it can set a clock that starts more than about `max_drift` less half its drift off center
+backstop never fires on its own; until the first jump the driver chooses has been made, it
+can set a clock that starts more than about `max_drift` less half its drift off center, or
+somewhat less if its jump is far from its drift
 ([A clock that starts off center](#a-clock-that-starts-off-center)).  Leave it at WeeWX's
 default of 5: see [Configuration](configuration.md#the-clock-and-stdtimesynch).
 

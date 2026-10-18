@@ -197,9 +197,10 @@ class ClockConsole(vantagenext.BaseWrapper):
     GETTIME answer takes reply_secs more to land: ~5 ms on a serial line,
     ~0.75 s through a WeatherLinkIP, whose delay is on the reply (measured
     2026-10-10), so a reading stamped on arrival read the console about
-    that much slow.  Only the GETTIME answer models the hold: a real
-    WeatherLinkIP holds every answer, but no decision in the driver depends
-    on how late the other ACKs land.
+    that much slow.  Only the GETTIME answer models the hold here (a
+    SteeredConsole given a wlip_rng holds every answer, as a real
+    WeatherLinkIP does; no decision in the driver depends on how late the
+    other ACKs land).
 
     The driver's real wakeup / ACK / CRC logic runs against it."""
 
@@ -293,9 +294,30 @@ class SteeredConsole(ClockConsole):
     midnight the clock gains (loses, for a negative jump) SLEW_RATE s per
     second OF ITS OWN until the jump is in -- each console second then lasts
     0.75 s, or 1.25 s, of the host's -- done at about 00:00:16 for 3.75 s
-    and 00:00:33 for -8; and for its first MUTE_SECS after midnight it
-    answers nothing.  The jump is the one held as the slew begins.  A
-    SETTIME that puts the clock past a midnight is not a crossing.
+    and 00:00:33 for -8; and from its midnight until SILENCE_SECS after it
+    it holds whatever is sent and takes it up when the silence ends (a
+    Vantage Pro2 console, 2026-10-18: wakeups sent 0.25 to 2.5 s after its midnight were
+    answered 3.25 to 3.32 s after it, and a GETTIME straight after answered
+    at once).  The jump is the one held as the slew begins.  A SETTIME or a
+    move that puts the clock past a midnight is not a crossing: what a real
+    console does then is not known, and the driver never sets the clock
+    within a minute of midnight (_near_the_jump), so only a move by
+    something else can.
+
+    Off unless asked for, so that a test gets the console it names:
+    wander, the day-to-day sd in s/day of a drift that wanders (each day's
+    drift, by the console's own local date, is `drift` plus an AR(1) term
+    kept WANDER_KEEP of the day before; measured on the fleet
+    2026-10-11..17: daily drifts scattering 0.015 to 0.037 s/day, trends of
+    up to about 0.1 s/day over a week; what it does over months is not
+    measured), drawn from wander_rng.  wlip_rng: every answer held as a
+    WeatherLinkIP holds it -- a GETTIME's by reply_secs, drawn from
+    WLIP_GETTIME_HOLD for each GETTIME; any other's by WLIP_OTHER_HOLD
+    (measured 2026-10-10: a GETTIME's 0.74 to 0.82 s, 5 of 5; a bare
+    wakeup's 0.50 s).  dst=False: a console set to manual
+    daylight saving time that is never changed by hand -- when the host
+    changes its clocks, this one does not, and reads an hour off until it
+    is set.
 
     A console whose pair is not a value and its complement goes on making
     `jump`, the one it was built with (what a real one does is not known;
@@ -311,9 +333,18 @@ class SteeredConsole(ClockConsole):
 
     def __init__(self, clock, error, drift, jump, garble_writes=0,
                  pair=None, nak_writes=0, fail_readbacks=0, slow_hours=None, lose_write_acks=0,
-                 **kw):
+                 wander=0.0, wander_rng=None, wlip_rng=None, dst=True, **kw):
         super().__init__(clock, error, **kw)
         self.drift = drift
+        assert bool(wander) == (wander_rng is not None), 'wander and wander_rng go together'
+        self.wander = wander
+        self.wander_rng = wander_rng
+        self.wander_from = datetime.date.fromtimestamp(clock.t + error)   # the console's first day
+        self.wanders = []             # each day's wander term, from wander_from
+        self.wlip_rng = wlip_rng
+        self.dst = dst
+        self.host_offset = time.localtime(clock.t).tm_gmtoff
+        self.midnight_host = None     # host time of the last midnight crossed
         self.eeprom = bytearray(vantagenext.jump_encode(jump) if pair is None else pair)
         self.first_jump = jump
         self.garble_writes = garble_writes
@@ -335,16 +366,44 @@ class SteeredConsole(ClockConsole):
 
     SLEW_START = 1.0
     SLEW_RATE = 0.25
-    MUTE_SECS = 3.5
+    SILENCE_SECS = 3.3
+    WANDER_KEEP = 0.9
+    WLIP_GETTIME_HOLD = (0.74, 0.82)
+    WLIP_OTHER_HOLD = 0.50
 
     @staticmethod
     def _midnight_after(console_ts):
         day = datetime.datetime.fromtimestamp(console_ts).date() + datetime.timedelta(days=1)
         return datetime.datetime.combine(day, datetime.time(0)).timestamp()
 
+    def _wander_on(self, day):
+        while len(self.wanders) <= day:
+            before = self.wanders[-1] if self.wanders else 0.0
+            self.wanders.append(self.WANDER_KEEP * before + self.wander * self.wander_rng.gauss(0.0, 1.0))
+        return self.wanders[day]
+
+    def current_drift(self, t=None):
+        """The drift at host time t (default: the console's last moment):
+        the day's, by the console's local date."""
+        if not self.wander:
+            return self.drift
+        t = self.t_last if t is None else t
+        day = (datetime.date.fromtimestamp(t + self.error) - self.wander_from).days
+        return self.drift + self._wander_on(max(day, 0))
+
     def _run(self, secs):
         """The clock runs secs of host time: its drift, and any slew."""
-        self.error += self.drift * secs / 86400.0
+        t, end = self.t_last, self.t_last + secs
+        while t < end:
+            step_end = end
+            if self.wander:
+                # To the console's next local midnight, where its day's
+                # drift changes, or to the end.
+                step_end = min(end, self._midnight_after(t + self.error) - self.error)
+                if step_end <= t:
+                    step_end = end
+            self.error += self.current_drift(t) * (step_end - t) / 86400.0
+            t = step_end
         if self.slewing:
             step = math.copysign(min(abs(self.slewing), self._host_rate() * secs), self.slewing)
             self.error += step
@@ -363,22 +422,57 @@ class SteeredConsole(ClockConsole):
     def tick(self):
         """Bring the clock up to the host's time: every slew begun and finished
         since the last exchange, however long WeeWX was away."""
-        while self.t_last < self.clock.t:
+        while not self.dst:
+            change = self._offset_change(self.t_last, self.clock.t)
+            if change is None:
+                break
+            # The host changed its clocks; this console did not, so from
+            # then it reads the old offset's time.
+            self._advance(change)
+            offset = time.localtime(change).tm_gmtoff
+            self.error -= offset - self.host_offset
+            self.host_offset = offset
+            self.next_midnight = self._midnight_after(change + self.error)
+        self._advance(self.clock.t)
+
+    def _offset_change(self, a, b):
+        """The first moment after a, up to b, that the host's UTC offset
+        differs from host_offset, to the second; or None."""
+        t = a
+        while t < b:
+            nxt = min(b, t + 86400.0)
+            if time.localtime(nxt).tm_gmtoff != self.host_offset:
+                lo, hi = t, nxt
+                while hi - lo > 1.0:
+                    mid = (lo + hi) / 2.0
+                    if time.localtime(mid).tm_gmtoff != self.host_offset:
+                        hi = mid
+                    else:
+                        lo = mid
+                return hi
+            t = nxt
+        return None
+
+    def _advance(self, to):
+        """The clock run on to host time `to`: its drift, and every slew
+        begun and finished on the way."""
+        while self.t_last < to:
             if self.slewing:
-                # To the end of this slew, or now.
-                self._run(min(self.clock.t - self.t_last, abs(self.slewing) / self._host_rate()))
+                # To the end of this slew, or `to`.
+                self._run(min(to - self.t_last, abs(self.slewing) / self._host_rate()))
                 continue
             # To the next slew's start (the clock's next midnight + SLEW_START,
-            # its drift over a day a fraction of a second), or now.
+            # its drift over a day a fraction of a second), or `to`.
             start = self.next_midnight + self.SLEW_START - self.error
-            if start > self.clock.t:
-                self._run(self.clock.t - self.t_last)
+            if start > to:
+                self._run(to - self.t_last)
                 break
             self._run(max(start - self.t_last, 0.0))
             jump = self.held_jump()
             if jump is None:
                 jump = self.first_jump
             self.slewing = jump
+            self.midnight_host = start - self.SLEW_START
             self.jumps_made.append((self.next_midnight, jump))
             self.next_midnight = self._midnight_after(self.next_midnight + 3600)
 
@@ -391,19 +485,30 @@ class SteeredConsole(ClockConsole):
         self.slewing = 0.0
         self.next_midnight = self._midnight_after(self.console_time())
 
-    def mute(self):
-        """In the first MUTE_SECS after the clock's midnight it answers nothing."""
-        midnight = self.next_midnight
-        if self.jumps_made:
-            midnight = self.jumps_made[-1][0]
-        return midnight <= self.console_time() < midnight + self.MUTE_SECS
+    def silence_end(self):
+        """The host time the console's midnight silence ends, if the host is
+        in it now: the midnight crossed, or the one about to be (its slew not
+        yet begun)."""
+        t = self.clock.t
+        for midnight in (self.midnight_host, self.next_midnight - self.error):
+            if midnight is not None and midnight <= t < midnight + self.SILENCE_SECS:
+                return midnight + self.SILENCE_SECS
+        return None
 
     def write(self, data):
         self.tick()
-        if self.mute() and not self.awaiting_time and not self.awaiting_eeprom:
-            self.clock.t += self.io_secs
-            self.pending = [weewx.WeeWxIOError('no answer')]
-            return
+        end = self.silence_end()
+        if end is not None:
+            # Held: the console takes it up when its silence ends.
+            self.clock.t = end
+            self.tick()
+        if self.wlip_rng is not None and data == b'GETTIME\n':
+            self.reply_secs = self.wlip_rng.uniform(*self.WLIP_GETTIME_HOLD)
+        self._write(data)
+        if self.wlip_rng is not None and data != b'GETTIME\n':
+            self.clock.t += self.WLIP_OTHER_HOLD    # the answer, held
+
+    def _write(self, data):
         if self.slow_hours is not None:
             hour = datetime.datetime.fromtimestamp(self.console_time()).hour
             self.reply_secs = WLIP_REPLY_SECS if self.slow_hours[0] <= hour < self.slow_hours[1] else self.fast_reply

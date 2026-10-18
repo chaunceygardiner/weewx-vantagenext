@@ -160,10 +160,12 @@ zip).  **No weather station is needed**: console I/O is simulated at the byte le
 the driver's real wake-up, acknowledgment, checksum and retry logic runs against scripted
 console responses, and the suite is safe to run anywhere.  It covers the console protocol,
 packet decoding, the clock keeping (weeks of simulated days against a console that drifts,
-slews in its midnight jump, falls silent at midnight and truncates its time, as the real
-ones were measured to, or answers through a WeatherLinkIP that holds every answer; and a
-randomized simulation that puts a console through months of restarts, power losses, read
-errors and midnight checks, run apart on a serial line, through a WeatherLinkIP, and with
+slews in its midnight jump, holds what is sent for three seconds after its midnight and
+truncates its time, as the real ones were measured to, or answers through a WeatherLinkIP
+that holds every answer; and a randomized simulation that puts a console through months
+of restarts (some in the last second before midnight), power losses, sets by hand and read
+errors, with WeeWX's clock checks timed as WeeWX times them, run apart on a serial line,
+through a WeatherLinkIP, and with
 the console's logger replaced partway — `VNEXT_SIM_SEEDS=50` runs fifty of each instead of
 two), daylight-saving handling, the installer's config stanza, and a full WeeWX engine
 round trip into a temporary database.  A further

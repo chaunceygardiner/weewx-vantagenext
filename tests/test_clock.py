@@ -2306,8 +2306,8 @@ def test_a_reading_in_the_last_seconds_before_midnight_is_no_reading(tmp_path):
     # A console that gains time is ahead of the host every evening, and may
     # be into its jump before the host's midnight: a reading then can hold
     # part of a jump the fit does not expect.  (Measured, the slew is slow
-    # and the console silent for its first 3.5 s, so the part is a few
-    # tenths of a second at most -- but none of it is wanted.)  So a check
+    # and the console holds what is sent for its first 3.3 s, so the part is
+    # a few tenths of a second at most -- but none of it is wanted.)  So a check
     # in the day's last minute takes no reading at all.
     station, console, clock = make(tmp_path, 7.0, -7.0)
     run_days(station, console, clock, 5)
@@ -2339,18 +2339,45 @@ def test_the_simulated_console_slews_its_jump_as_the_spare_was_measured(jump, do
     assert console.error == pytest.approx(jump - 3.3 * 70 / 86400, abs=0.01)
 
 
-def test_the_simulated_console_is_silent_just_after_its_midnight():
-    # The spare answered nothing for 3 to 4 s after its midnight.
+def test_the_simulated_console_holds_what_is_sent_just_after_its_midnight():
+    # A Vantage Pro2 console (2026-10-18), four midnights: a wakeup sent 0.25 to 2.5 s
+    # after its midnight was answered 3.25 to 3.32 s after it, and a GETTIME
+    # straight after at once; one sent later was answered at once.
     start = datetime.datetime(2026, 10, 6, 23, 59, 59).timestamp()
     clock = FakeClock(start)
     console = SteeredConsole(clock, 0.0, -3.3, 3.25)
+    midnight = start + 1.0
     clock.sleep(2.0)                                   # its 00:00:01
     console.write(b'\n')
-    with pytest.raises(weewx.WeeWxIOError):
-        console.read(1)
-    clock.sleep(4.0)                                   # its 00:00:05
+    assert console.read(2) == b'\n\r'
+    assert clock.t == pytest.approx(midnight + SteeredConsole.SILENCE_SECS, abs=0.01)
+    console.write(b'GETTIME\n')
+    assert console.read(1) == b'\x06'
+    assert midnight + SteeredConsole.SILENCE_SECS <= clock.t < midnight + SteeredConsole.SILENCE_SECS + 0.01
+    clock.sleep(2.0)                                   # its 00:00:05
+    sent = clock.t
     console.write(b'\n')
     assert console.read(2) == b'\n\r'
+    assert clock.t < sent + 0.01
+
+
+def test_a_simulated_console_with_dst_off_reads_an_hour_off_after_the_change_and_jumps_every_midnight():
+    # Left alone across the fall-back night (WeeWX down, nothing asking),
+    # a console set to manual daylight saving time makes every midnight's
+    # jump as the one set to automatic does, and is then an hour ahead of
+    # the host: it never fell back.
+    start = datetime.datetime(2026, 10, 30, 12, 0).timestamp()
+    end = datetime.datetime(2026, 11, 3, 12, 0).timestamp()
+    consoles = []
+    for dst in (True, False):
+        clock = FakeClock(start)
+        console = SteeredConsole(clock, 0.5, -3.3, 3.25, dst=dst)
+        clock.sleep(end - start)
+        console.tick()
+        consoles.append(console)
+    auto, manual = consoles
+    assert len(auto.jumps_made) == len(manual.jumps_made) == 4
+    assert manual.error - auto.error == pytest.approx(3600.0, abs=1e-6)
 
 
 @pytest.mark.parametrize('kind', ['learning', 'steering', 'fallback', 'coarse-learning',

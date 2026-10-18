@@ -2255,9 +2255,9 @@ class VantageNext(weewx.drivers.AbstractDevice):
     # No decisions this long after local midnight: the jump may be in progress...
     CLOCK_JUMP_WINDOW = 600
     # ...nor this long before it: a console AHEAD of the host (a gaining one,
-    # every evening) begins its jump before the host's midnight -- silent for
-    # its first 3.5 s, then slewing -- and max_drift keeps it within seconds
-    # of the host.
+    # every evening) begins its jump before the host's midnight -- slewing
+    # from one second in, and holding what is sent for its first 3.3 s --
+    # and max_drift keeps it within seconds of the host.
     CLOCK_PRE_MIDNIGHT = 60
     # The least time between an unforced set and the set attempt before it...
     CLOCK_MIN_SET_INTERVAL = 20 * 3600
