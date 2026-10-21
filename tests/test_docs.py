@@ -492,6 +492,10 @@ class TestConstants:
         assert 'In %d readings from %s no clock was more than %.2f seconds from center' % (
             figure.fleet_count(), figure.fleet_span(), figure.fleet_largest()) in page
         assert any(figure.fleet_changes().values())
+        readme = ' '.join(read('README.md').split())
+        assert '](docs/images/clock-fleet.svg)' in readme
+        assert '%d readings from %s, none more than %.2f seconds from center' % (
+            figure.fleet_count(), figure.fleet_span(), figure.fleet_largest()) in readme
         assert 'A jump of 3.75 seconds takes' in page
         assert abs(figure.midnight_readings()[-1][1] - 3.75) < 0.05
         # A WeatherLinkIP: the real readings' fit and the rule night by

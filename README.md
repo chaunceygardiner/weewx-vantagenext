@@ -65,6 +65,12 @@ problems below.
   logger holds every answer too long for a precise reading, so the driver steers it from
   the line through days of whole-second readings.  The clock of a console the driver cannot
   steer, or one lost to a power failure, is still set.
+
+  ![Seven Envoys' clocks, steered, 15 to 20 October, one row each: no reading more than 0.19 seconds from center, and a marker at each midnight a console made a new jump](docs/images/clock-fleet.svg)
+
+  The author's seven Envoys: 285 readings from 15 to 20 October, none more than 0.19 seconds
+  from center, and none of the clocks set.
+
   The manual
   lists the consoles steering has been seen on
   ([Which consoles](https://chaunceygardiner.github.io/weewx-vantagenext/clock.html#which-consoles)).
