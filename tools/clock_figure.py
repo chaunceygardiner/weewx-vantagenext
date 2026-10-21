@@ -12,11 +12,12 @@
   days in tools/clock_data/steered.csv, the readings the driver kept, with
   the jumps it wrote in steered-jumps.csv and the sawtooth the driver's own
   fit_clock finds in them.
+- docs/images/clock-fleet.svg: seven Envoys steered, a precise reading at
+  each clock check of how far each clock stood from center, from tools/clock_data/fleet.csv,
+  with the jumps written in fleet-jumps.csv.
 - docs/images/clock-wlip-readings.svg: a WeatherLinkIP's console, from the
   whole-second readings in tools/clock_data/wlip.csv, with the line the
   driver's own fit_clock and fitted_error draw through them.
-- docs/images/clock-wlip-steering.svg: a WeatherLinkIP steered, ten days of
-  the real driver against the test suite's simulated console and logger.
 - docs/images/clock-wlip-rule.svg: choose_coarse_jump night by night, with
   no reading noise.
 
@@ -31,7 +32,6 @@ import datetime
 import functools
 import os
 import sys
-import tempfile
 import time
 
 # Midnights, days and DST windows are local time: draw them where the data
@@ -395,7 +395,12 @@ SERIES_2 = '#eb6834'
 # The readings: a WeatherLinkIP's console, its whole-second readings fitted
 # by the driver's own fit_clock and fitted_error, with the jumps it held and
 # the driver wrote (wlip-jumps.csv) put back.
-WLIP_Y_MIN, WLIP_Y_MAX = -2.5, 2.0
+WLIP_Y_MIN, WLIP_Y_MAX = -2.5, 2.6
+# The caption's baseline, above every reading's bar (render_wlip_readings
+# asserts it), and a jump label's width: one that would run past the right
+# edge is drawn back from it.
+WLIP_CAPTION = 2.3
+WLIP_LABEL_W = 115
 
 
 @functools.lru_cache(maxsize=None)
@@ -515,157 +520,11 @@ def render_wlip_readings():
     for midnight, old, new in changes:
         x, y = wlip_x(midnight), wlip_y(vantagenext.fitted_error(state, midnight))
         out.append('<text x="%.1f" y="%.1f" font-size="12" fill="%s">jump %.2f &#8594; %.2f s</text>'
-                   % (x + 10, y - 18, INK_2, old, new))
+                   % (min(x + 10, W - RIGHT - WLIP_LABEL_W), y - 18, INK_2, old, new))
+    assert max(e for t, e in readings) + 0.5 < WLIP_CAPTION - 0.1, 'a bar reaches the caption'
     out.append('<text x="%.1f" y="%.1f" font-size="12" text-anchor="middle" fill="%s">dots: the readings, '
                'each good to half a second either way (the bars); line: the driver\'s fit, drift %.2f s '
-               'a day</text>' % ((LEFT + W - RIGHT) / 2.0, wlip_y(1.7), INK_2, state.drift))
-    out.append('</svg>')
-    return '\n'.join(out) + '\n'
-
-
-# The steering: a simulated console behind a simulated WeatherLinkIP, kept by
-# the REAL driver -- its getTime and setTime, on WeeWX's checks, against the
-# test suite's SteeredConsole, the logger holding every answer three quarters
-# of a second, every reading dithered by the suite's seeded generator -- so
-# the figure cannot show a rule the code does not follow.  The console is
-# much like the WeatherLinkIP's above, its drift rounded to 2.45 s a day,
-# starting three tenths of a second behind center.
-WLIP_SIM_DRIFT = -2.45
-WLIP_SIM_JUMP = 2.25
-WLIP_SIM_OFF_CENTER = -0.3
-WLIP_SIM_DAYS = 10
-# The run starts just after midnight, past the console's mute, and checks
-# every four hours, WeeWX's default clock_check.
-WLIP_SIM_START = datetime.datetime(2026, 10, 5, 0, 15, 20)
-WLIP_SIM_CHECK = 14400
-WLIP_SIM_MAX_DRIFT = 5
-WLIP_SIM_Y_MIN, WLIP_SIM_Y_MAX = -2.5, 3.0
-
-
-@functools.lru_cache(maxsize=None)
-def simulate_wlip():
-    """(curve, readings, writes, steering): the console's true error every
-    ten minutes as (t, error); the readings the driver kept, (t, error); the
-    jumps it wrote, (t, error, old, new); and when it began steering."""
-    tests = os.path.join(REPO_ROOT, 'tests')
-    if tests not in sys.path:
-        sys.path.insert(0, tests)
-    import weewx
-    from common import FakeClock, SteeredConsole, clock_station
-
-    start = WLIP_SIM_START.timestamp()
-    with tempfile.TemporaryDirectory() as tmp:
-        clock = FakeClock(start)
-        console = SteeredConsole(clock, VantageNext.ideal_clock_error(
-            start - vantagenext.startOfDay(start), WLIP_SIM_DRIFT) + WLIP_SIM_OFF_CENTER,
-            WLIP_SIM_DRIFT, WLIP_SIM_JUMP, io_secs=0.004, reply_secs=0.75)
-        station = clock_station(clock, console, _clock=None)
-        station._clock_path = os.path.join(tmp, 'vantagenext', 'clock.json')
-        station.time_change_windows = VantageNext.derive_time_change_windows(
-            start - 86400, start + 400 * 86400)
-        station._ethernet = True
-        curve, next_check = [], start
-        end = start + WLIP_SIM_DAYS * 86400
-        while clock.t < end:
-            if clock.t >= next_check:
-                # StdTimeSynch: getTime, and setTime past max_drift; an
-                # error is logged and the next check tries again.
-                try:
-                    if abs(station.getTime() - clock.now()) > WLIP_SIM_MAX_DRIFT:
-                        station.setTime()
-                except weewx.WeeWxIOError:
-                    pass
-                next_check += WLIP_SIM_CHECK
-            console.tick()
-            curve.append((clock.t, console.error))
-            clock.sleep(min(600.0, max(next_check - clock.t, 1.0)))
-        state = station._clock
-        assert console.sets == [], console.sets
-        steering = [t for t, text in state.log if text.startswith('STEERING')]
-        assert len(steering) == 1, state.log
-        readings = [(t, e) for t, e, unused_gap in state.readings]
-        assert readings[0][0] == min(t for t, e in readings) and len(readings) > 40
-        writes, old = [], WLIP_SIM_JUMP
-        for t, new in console.jump_writes:
-            error = min(curve, key=lambda p: abs(p[0] - t))[1]
-            writes.append((t, error, old, new))
-            old = new
-    return tuple(curve), tuple(readings), tuple(writes), steering[0]
-
-
-def wlip_sim_x(t):
-    return LEFT + (W - LEFT - RIGHT) * (t - WLIP_SIM_START.timestamp()) / (WLIP_SIM_DAYS * 86400.0)
-
-
-def wlip_sim_y(err):
-    return TOP + (H - TOP - BOTTOM) * (WLIP_SIM_Y_MAX - err) / (WLIP_SIM_Y_MAX - WLIP_SIM_Y_MIN)
-
-
-def render_wlip_steering():
-    """The steered WeatherLinkIP, as text."""
-    curve, readings, writes, steering = simulate_wlip()
-    assert len(writes) >= 2, 'the figure is composed around at least two writes: %r' % writes
-    start = WLIP_SIM_START.timestamp()
-    out = []
-    out.append('<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" viewBox="0 0 %d %d" '
-               'role="img" aria-label="A WeatherLinkIP console steered from whole-second readings" '
-               'font-family="-apple-system,BlinkMacSystemFont,\'Segoe UI\',Helvetica,Arial,sans-serif">'
-               % (W, H, W, H))
-    out.append('<title>A WeatherLinkIP console steered from whole-second readings</title>')
-    out.append('<desc>Ten simulated days of a console behind a WeatherLinkIP, kept by the driver.  '
-               'For the first two days it learns from its whole-second readings, the dots, and '
-               'writes nothing.  Then each evening it decides from the line through them, and '
-               'rewrites the midnight jump when the clock would leave the band around center: '
-               '%d writes, and the clock is never set.</desc>' % len(writes))
-    out.append('<rect width="%d" height="%d" fill="%s"/>' % (W, H, SURFACE))
-    out.append('<text x="%d" y="22" font-size="14" font-weight="600" fill="%s">Console clock error behind a '
-               'WeatherLinkIP, seconds (positive is fast)</text>' % (LEFT, INK))
-    out.append('<rect x="%.1f" y="%d" width="%.1f" height="%d" fill="%s" fill-opacity="0.35"/>'
-               % (wlip_sim_x(start), TOP, wlip_sim_x(steering) - wlip_sim_x(start), H - TOP - BOTTOM, GRID))
-    out.append('<text x="%.1f" y="%.1f" font-size="12" text-anchor="middle" fill="%s">learning</text>'
-               % ((wlip_sim_x(start) + wlip_sim_x(steering)) / 2.0, wlip_sim_y(2.1), INK_2))
-    for err in (-2, -1, 0, 1, 2):
-        y = wlip_sim_y(err)
-        out.append('<line x1="%d" y1="%.1f" x2="%d" y2="%.1f" stroke="%s" stroke-width="1"/>'
-                   % (LEFT, y, W - RIGHT, y, MUTED if err == 0 else GRID))
-        out.append('<text x="%d" y="%.1f" font-size="12" text-anchor="end" fill="%s">%s</text>'
-                   % (LEFT - 8, y + 4, MUTED, '%+d' % err if err else '0'))
-    for day in range(1, WLIP_SIM_DAYS + 1):
-        # The run opens just after a midnight: the first line drawn is the next.
-        x = wlip_sim_x(vantagenext.startOfDay(start) + day * 86400.0)
-        out.append('<line x1="%.1f" y1="%d" x2="%.1f" y2="%d" stroke="%s" stroke-width="1" '
-                   'stroke-dasharray="2 3"/>' % (x, TOP, x, H - BOTTOM, GRID))
-    for day in range(WLIP_SIM_DAYS):
-        out.append('<text x="%.1f" y="%d" font-size="12" text-anchor="middle" fill="%s">day %d</text>'
-                   % (wlip_sim_x(start + day * 86400.0 + 43200.0), H - BOTTOM + 18, MUTED, day + 1))
-    out.append('<text x="%.1f" y="%d" font-size="12" text-anchor="middle" fill="%s">dotted lines are '
-               'midnight</text>' % ((LEFT + W - RIGHT) / 2.0, H - 8, MUTED))
-    # The band, from the day steering began.
-    first_day = int((steering - start) // 86400.0)
-    for day in range(first_day, WLIP_SIM_DAYS):
-        upper, lower = [], []
-        for into_day in (0.0, 86399.0):
-            t = vantagenext.startOfDay(start) + day * 86400.0 + into_day
-            center = VantageNext.ideal_clock_error(into_day, WLIP_SIM_DRIFT)
-            upper.append((t, center + VantageNext.COARSE_BAND))
-            lower.append((t, center - VantageNext.COARSE_BAND))
-        out.append('<polygon points="%s" fill="%s" fill-opacity="0.12"/>'
-                   % (' '.join('%.1f,%.1f' % (wlip_sim_x(t), wlip_sim_y(e))
-                               for t, e in upper + lower[::-1]), BAND))
-    out.append('<polyline fill="none" stroke="%s" stroke-width="2" stroke-linejoin="round" points="%s"/>'
-               % (SERIES, ' '.join('%.1f,%.1f' % (wlip_sim_x(t), wlip_sim_y(e)) for t, e in curve)))
-    for t, e in readings:
-        out.append('<circle cx="%.1f" cy="%.1f" r="2.4" fill="%s"/>' % (wlip_sim_x(t), wlip_sim_y(e), INK_2))
-    for t, error, old, new in writes:
-        x, y = wlip_sim_x(t), wlip_sim_y(error)
-        out.append('<circle cx="%.1f" cy="%.1f" r="4" fill="%s" stroke="%s" stroke-width="2"/>'
-                   % (x, y, SERIES, SURFACE))
-        out.append('<text x="%.1f" y="%.1f" font-size="12" fill="%s" stroke="%s" stroke-width="4" '
-                   'paint-order="stroke">%.2f &#8594; %.2f</text>' % (x + 8, y - 8, INK_2, SURFACE, old, new))
-    out.append('<text x="%.1f" y="%.1f" font-size="12" text-anchor="middle" fill="%s">line: the clock; '
-               'dots: the whole-second readings kept; shaded: the band, give or take %g s; '
-               'labels: jumps written</text>'
-               % ((LEFT + W - RIGHT) / 2.0, wlip_sim_y(2.65), INK_2, VantageNext.COARSE_BAND))
+               'a day</text>' % ((LEFT + W - RIGHT) / 2.0, wlip_y(WLIP_CAPTION), INK_2, state.drift))
     out.append('</svg>')
     return '\n'.join(out) + '\n'
 
@@ -764,13 +623,148 @@ def render_wlip_rule():
     return '\n'.join(out) + '\n'
 
 
+# The fleet: seven Envoys at one site, a precise reading at each clock check
+# of how far each clock stood from center, one row a console, with the band the
+# evening decision keeps each night's landing in (the driver's JUMP_BAND)
+# and the midnights each made a new jump (the driver's own jump_at).
+FLEET_Y_MAX = 0.30
+FLEET_ROW_H, FLEET_ROW_GAP = 40, 8
+NUMBERS = ('none', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten')
+
+
+@functools.lru_cache(maxsize=None)
+def fleet_readings():
+    """{console: ((host time, off center), ...)} from fleet.csv."""
+    readings = {}
+    for console, t, off in read_csv('fleet.csv'):
+        readings.setdefault(console, []).append((datetime.datetime.fromisoformat(t).timestamp(), float(off)))
+    return {c: tuple(r) for c, r in sorted(readings.items())}
+
+
+@functools.lru_cache(maxsize=None)
+def fleet_jumps():
+    """{console: ((host time, jump), ...)} from fleet-jumps.csv: the jump each
+    held when the record opens, then each one the driver wrote, when."""
+    jumps = {}
+    for console, t, j in read_csv('fleet-jumps.csv'):
+        jumps.setdefault(console, []).append((datetime.datetime.fromisoformat(t).timestamp(), float(j)))
+    return {c: tuple(j) for c, j in sorted(jumps.items())}
+
+
+def fleet_x0():
+    return vantagenext.startOfDay(min(r[0][0] for r in fleet_readings().values()))
+
+
+def fleet_days():
+    """The days the readings span, midnight to midnight."""
+    return vantagenext.nights_between(fleet_x0(), max(r[-1][0] for r in fleet_readings().values())) + 1
+
+
+def fleet_edges():
+    return day_edges(fleet_x0(), fleet_days())
+
+
+def fleet_changes():
+    """{console: [(midnight, old, new)]}: the midnights each made a new jump."""
+    changes = {}
+    for console, jumps in fleet_jumps().items():
+        state = ClockState(jumps[0][1], jumps[0][0], ClockState.STEERING)
+        state.jumps = [[t, j] for t, j in jumps]
+        changes[console] = jump_changes(state, fleet_edges())
+    return changes
+
+
+def fleet_span():
+    """'15 to 20 October': the dates of the first and last readings."""
+    first = datetime.date.fromtimestamp(min(r[0][0] for r in fleet_readings().values()))
+    last = datetime.date.fromtimestamp(max(r[-1][0] for r in fleet_readings().values()))
+    if (first.year, first.month) == (last.year, last.month):
+        return '%d to %d %s' % (first.day, last.day, last.strftime('%B'))
+    return '%d %s to %d %s' % (first.day, first.strftime('%B'), last.day, last.strftime('%B'))
+
+
+def fleet_largest():
+    return max(abs(off) for readings in fleet_readings().values() for unused_t, off in readings)
+
+
+def fleet_count():
+    return sum(len(readings) for readings in fleet_readings().values())
+
+
+def fleet_x(t):
+    edges = fleet_edges()
+    return LEFT + (W - LEFT - RIGHT) * (t - edges[0]) / (edges[-1] - edges[0])
+
+
+def render_fleet():
+    """The fleet, as text."""
+    readings = fleet_readings()
+    changes = fleet_changes()
+    assert sorted(readings) == sorted(fleet_jumps()), 'every console has its readings and its jumps'
+    largest, count, days, span = fleet_largest(), fleet_count(), fleet_days(), fleet_span()
+    assert largest <= FLEET_Y_MAX, 'a reading off the rows: %.2f' % largest
+    edges = fleet_edges()
+    rows_bottom = TOP + len(readings) * FLEET_ROW_H + (len(readings) - 1) * FLEET_ROW_GAP
+    height = rows_bottom + 84
+    band = VantageNext.JUMP_BAND
+    out = []
+    out.append('<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" viewBox="0 0 %d %d" '
+               'role="img" aria-label="%d steered consoles\' distance from center, %s" '
+               'font-family="-apple-system,BlinkMacSystemFont,\'Segoe UI\',Helvetica,Arial,sans-serif">'
+               % (W, height, W, height, len(readings), span))
+    out.append('<title>%d steered consoles\' distance from center, %s</title>' % (len(readings), span))
+    out.append('<desc>A precise reading at each clock check of how far each of %d Davis Envoys at one '
+               'site stood from the center of its daily drift, %d readings from %s, one row a '
+               'console.  None is more than %.2f seconds from center; the band the driver keeps each night\'s landing in '
+               'is %g seconds either side of center.  A marker above a row shows a midnight at which that '
+               'console made a new jump.  No clock was set.</desc>'
+               % (len(readings), count, span, largest, band))
+    out.append('<rect width="%d" height="%d" fill="%s"/>' % (W, height, SURFACE))
+    out.append('<text x="%d" y="22" font-size="14" font-weight="600" fill="%s">%s Envoys, steered: how far '
+               'each clock is from center, seconds</text>' % (LEFT, INK, NUMBERS[len(readings)].capitalize()))
+    for i, edge in enumerate(edges):
+        x = fleet_x(edge)
+        out.append('<line x1="%.1f" y1="%d" x2="%.1f" y2="%d" stroke="%s" stroke-width="1" '
+                   'stroke-dasharray="2 3"/>' % (x, TOP - 4, x, rows_bottom + 4, GRID))
+        if i < days:
+            noon = (edge + edges[i + 1]) / 2.0
+            out.append('<text x="%.1f" y="%d" font-size="12" text-anchor="middle" fill="%s">%s</text>'
+                       % (fleet_x(noon), rows_bottom + 20, MUTED, time.strftime('%b %-d', time.localtime(noon))))
+    for row, console in enumerate(readings):
+        top = TOP + row * (FLEET_ROW_H + FLEET_ROW_GAP)
+
+        def y(off, top=top):
+            return top + FLEET_ROW_H * (FLEET_Y_MAX - off) / (2 * FLEET_Y_MAX)
+        out.append('<rect x="%d" y="%.1f" width="%d" height="%.1f" fill="%s" fill-opacity="0.12"/>'
+                   % (LEFT, y(band), W - LEFT - RIGHT, y(-band) - y(band), BAND))
+        out.append('<line x1="%d" y1="%.1f" x2="%d" y2="%.1f" stroke="%s" stroke-width="1"/>'
+                   % (LEFT, y(0), W - RIGHT, y(0), MUTED))
+        out.append('<text x="%d" y="%.1f" font-size="12" font-weight="600" text-anchor="end" fill="%s">%s</text>'
+                   % (LEFT - 30, y(0) + 4, INK_2, console))
+        for off in (band, -band):
+            out.append('<text x="%d" y="%.1f" font-size="10" text-anchor="end" fill="%s">%+.2f</text>'
+                       % (LEFT - 4, y(off) + 3, MUTED, off))
+        for midnight, unused_old, unused_new in changes[console]:
+            out.append('<path d="M%.1f,%.1f l-3.5,-5 h7 z" fill="%s"/>' % (fleet_x(midnight), top + 1, INK_2))
+        for t, off in readings[console]:
+            out.append('<circle cx="%.1f" cy="%.1f" r="2.4" fill="%s"/>' % (fleet_x(t), y(off), SERIES))
+    center = (LEFT + W - RIGHT) / 2.0
+    out.append('<text x="%.1f" y="%d" font-size="12" text-anchor="middle" fill="%s">dots: a precise reading at '
+               'each clock check (%d, none more than %.2f s off); shaded: the band, give or take %g s</text>'
+               % (center, rows_bottom + 42, INK_2, count, largest, band))
+    out.append('<text x="%.1f" y="%d" font-size="12" text-anchor="middle" fill="%s">&#9660; a new jump made at '
+               'that midnight; dotted lines are midnight</text>' % (center, rows_bottom + 62, INK_2))
+    out.append('</svg>')
+    return '\n'.join(out) + '\n'
+
+
 IMAGES = os.path.join(REPO_ROOT, 'docs', 'images')
 FIGURES = {
     'clock-sawtooth.svg': render,
+    'clock-fleet.svg': render_fleet,
     'clock-week.svg': render_week,
     'clock-midnight.svg': render_midnight,
     'clock-wlip-readings.svg': render_wlip_readings,
-    'clock-wlip-steering.svg': render_wlip_steering,
     'clock-wlip-rule.svg': render_wlip_rule,
 }
 

@@ -1,4 +1,4 @@
-# A WeatherLinkIP's console, 2026-10-14..18 (Pacific time): the whole-second
+# A WeatherLinkIP's console, 2026-10-14..20 (Pacific time): the whole-second
 # readings the driver kept, one at each four-hourly clock check but any that
 # fell in the first ten minutes of a day, when the driver reads nothing (the
 # console may be making its jump), each sent after a random wait of up to a
@@ -32,3 +32,16 @@ time,error
 2026-10-18T07:05:20,0.495
 2026-10-18T11:10:20,0.120
 2026-10-18T15:15:21,-0.331
+2026-10-18T19:15:21,-0.471
+2026-10-18T23:20:20,-1.058
+2026-10-19T03:20:21,1.511
+2026-10-19T07:20:22,1.025
+2026-10-19T11:25:20,0.572
+2026-10-19T15:25:20,-0.147
+2026-10-19T19:25:21,-0.386
+2026-10-19T23:25:22,-1.039
+2026-10-20T03:30:20,0.660
+2026-10-20T07:35:20,0.921
+2026-10-20T11:35:20,-0.318
+2026-10-20T15:35:21,-0.215
+2026-10-20T19:35:20,-0.997

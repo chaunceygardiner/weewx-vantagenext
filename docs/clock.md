@@ -187,8 +187,8 @@ Some guards:
   progress, **nor in the last minute before it** (a console ahead of the computer begins its
   jump a few seconds early), **nor inside a [time change window](dst.md)**.  No jump is
   written from half past eleven at night until midnight, so a new value never lands as the
-  console rolls over — except the one put back after a clock set behind a WeatherLinkIP, up
-  to a minute before midnight ([A clock set over ethernet](#a-clock-set-over-ethernet)).
+  console rolls over — except the one put back after a clock set, up to a minute before
+  midnight ([The backstop](#the-backstop)).
 - **Every jump written is read back**, and the driver reads the console's jump again before
   every reading it keeps, so it always acts on the jump the console holds.  A write it could not
   confirm — the read-back failed, the console's answer to the write was lost, or WeeWX
@@ -306,6 +306,15 @@ is brought in by the first decision.
   reaches it before the first jump the driver chooses has been made
   ([A clock that starts off center](#a-clock-that-starts-off-center)).
 
+Here is a whole site: seven Envoys, each with its own drift and its own jump, and a precise
+reading at every clock check since 15 October 2026, the first night every jump in force was
+one an evening decision had chosen:
+
+![Seven Envoys' clocks, steered, 15 to 20 October, one row each: no reading more than 0.19 seconds from center, and a marker at each midnight a console made a new jump](images/clock-fleet.svg)
+
+In 285 readings from 15 to 20 October no clock was more than 0.19 seconds from center, and none
+was set.  The markers in each row are the midnights that console made a new jump.
+
 ## When something changes
 
 The driver recovers by itself from anything that changes the console or its clock:
@@ -336,7 +345,8 @@ been seen:
 - **Behind a WeatherLinkIP:** a console steered through one since October 2026.  A jump
   written through the logger reads back as written and is made at the next midnight: the
   first one written, 2.75 seconds in place of 2.25, moved the fitted clock the extra half
-  second the next day, and the next evening's decision kept it.
+  second the next day, and the next evening's decision kept it.  The second, 2.25 in place of
+  2.75, was made at its next midnight the same way.
 - **Not yet seen:** a Vantage Vue, an original Vantage Pro, and any other firmware.
 
 The driver does not take any of this on trust.  It reads the jump and its check byte when WeeWX
@@ -377,8 +387,7 @@ console's second every time: measured on a WeatherLinkIP, its readings sat withi
 a second of a line, where readings spread over the second scatter by three tenths.  Each
 would then drop much the same fraction, an offset the line takes for where the clock is, of
 up to half a second.  Sent after a random wait of up to a second, the readings land all over
-the console's second and the fractions average out (simulated: an offset of a third of a
-second, without the wait, comes to a few hundredths).
+the console's second and the fractions average out.
 
 Here are the readings one WeatherLinkIP's console gave the driver, as it kept them, and the
 line it fits through them:
@@ -388,9 +397,15 @@ line it fits through them:
 Each dot is good only to half a second either way; the line through a few days of them is
 good to a tenth or two.  It is the same sawtooth as any console's: this one loses
 2.41 seconds a day and gained back 2.25 at each midnight until the driver first wrote a new
-jump, 2.75, the quarter-second above its drift, to bring it toward center; every jump written
-since is marked on the figure at the midnight it was first made.  (The log lines below use
-that drift, and the two figures below a round 2.45.)
+jump, 2.75, to bring it toward center: one past 2.50, the drift's neighbor, which would have
+brought it in too slowly ([below](#the-nightly-decision)).  Each jump written
+is marked on the figure at the midnight it was first made.  The driver wrote 2.75 on the
+evening of 16 October with the clock 0.77 seconds behind center, and kept it for two evenings
+as the clock came in, 0.39 and then 0.05 seconds behind.  On 19 October, with the clock
+0.38 seconds ahead, it wrote 2.25, the quarter-second below the drift, and the console made
+it that midnight; the next evening the line put the clock 0.11 seconds ahead, inside the
+band, and the jump was kept.  Nothing set the clock.  (The log lines below use that drift,
+and the figure below a round 2.45.)
 
 ### The line through them
 
@@ -440,22 +455,6 @@ neighbor on the slow side.  From 0.8 seconds behind, that neighbor would creep o
 hundredths a night, too slowly, so 2.75 is written; the clock crosses the band, and as it
 nears the far side the jump goes to 2.25, the other neighbor, and later back to 2.50.
 
-### What steering looks like
-
-![Ten days of a console behind a WeatherLinkIP: two days of learning with the sawtooth sliding down, then three jumps written over the next six days, the clock coming into the band around center and staying near it, never set](images/clock-wlip-steering.svg)
-
-The figure is ten days of the real driver, the code that runs under WeeWX, against a
-simulated console behind a simulated WeatherLinkIP that holds the answer to every clock
-reading three quarters of a second.  The console loses 2.45 seconds a day, came with a 2.25-second jump, and
-starts three tenths of a second behind center; the dots are the readings the driver kept.  For two
-days it learns and writes nothing, and the clock slides further behind.  On the third evening
-the line puts it a little nearer center than it is, and the driver writes 2.50, the
-drift's neighbor toward center, which brings it in only slowly.  Two evenings later the line,
-sharper by then, puts it further out, and the driver writes 2.75, the next quarter out.
-When the clock has crossed the band it writes 2.25.  The clock is never set.  The figure
-shows how the rule behaves; how close to center a console behind a WeatherLinkIP is kept
-over the months, and how often its jump is written, is for consoles in service to show.
-
 ### A clock set over ethernet
 
 A clock set lands only to the whole second over ethernet, and reads back no better, so where
@@ -467,17 +466,10 @@ same way, as part of where the set landed, rather than learned afresh.
 
 Until four readings have followed the set, about sixteen hours at the default `clock_check`
 (one or two place the clock only to a few tenths), the console holds the jump for a clock at
-center, where the set put it: the one that only cancels the drift.  A set while steering
-centers the clock for that jump, and a jump steering wrote to bring the clock in is put back
-to it at once — otherwise the console would correct again at midnight, after the set has done
-it (the same on a serial console: [The backstop](#the-backstop)).  That write may come as
-late as the set itself, up to a minute before midnight, later than any other: the backstop
-sets the clock at its widest, often late in the evening.  A set that
-runs on past midnight writes nothing then, while the console makes its jump; the next
-evening's decision writes it.  `weectl device --set-time` writes it too.  A write that fails
-after a set, from either, does not count toward
-[falling back](#when-the-driver-falls-back-to-setting-the-clock): the next evening's decision
-recovers from it; and for a set that could not write it, the evening's decision does.
+center, where the set put it: the one that only cancels the drift.  A set while steering writes
+that jump back at once, as on a serial console ([The backstop](#the-backstop)).  A set that
+runs on past midnight writes nothing then, while the console makes its jump, and the next
+evening's decision writes it, as it does for any set that could not.
 
 ### Upgrading, and one limit
 
@@ -520,7 +512,8 @@ by setting it:
 
 - **Its memory does not hold a valid jump** — the two bytes at `0x2E` are not a value and its
   check, or the value is outside −8 to +8 seconds — so the jump is not known.
-- **Writing the jump fails**, or the jump doesn't read back as written, twice in a row.
+- **Writing the jump fails**, or the jump doesn't read back as written, twice in a row.  The
+  write that follows a clock set does not count ([The backstop](#the-backstop)).
 
 Either can happen over serial, USB or ethernet.  Falling back is logged: at the first clock
 check for a console with no valid jump, and as a warning when it happens later; and its reason
@@ -568,7 +561,11 @@ has lost power, say — is set to the center at once, in any state, and the driv
 set so its learning stays whole.  While the driver is steering, the set centers the clock for
 the jump that only cancels the drift and writes that jump back at once: a jump steering wrote
 to bring the clock in is stale once the set has done it, and left in the console it would
-carry the clock its correction past center at midnight.  With a console it is steering, the
+carry the clock its correction past center at midnight.  That write may come as late as the
+set itself, up to a minute before midnight, later than any other, since the backstop sets a
+clock at its widest, often late in the evening; and one that fails does not count toward
+[falling back](#when-the-driver-falls-back-to-setting-the-clock): the next evening's decision
+recovers from it.  `weectl device --set-time` does the same.  With a console it is steering, the
 backstop never fires on its own; until the first jump the driver chooses has been made, it
 can set a clock that starts more than about `max_drift` less half its drift off center, or
 somewhat less if its jump is far from its drift

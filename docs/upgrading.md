@@ -35,8 +35,9 @@ carried over: the driver learns the console afresh and steers it two days after 
 (sooner, for a clock more than a second off center), setting nothing meanwhile but by the
 [`max_drift` backstop](clock.md#the-backstop); the log says `Clock: connected over ethernet`
 at the first clock check.  A `[StdTimeSynch]` `clock_check` longer than
-about 23 hours is now warned over ethernet too.  A serial or USB console carries on exactly
-as it was.
+about 23 hours is now warned over ethernet too.  A serial or USB console's `clock.json` is
+carried over, and it carries on steering as it was; only a forced set changes, which now
+also puts back the jump that only cancels the drift ([The backstop](clock.md#the-backstop)).
 
 ## To 3.2 and 3.1
 

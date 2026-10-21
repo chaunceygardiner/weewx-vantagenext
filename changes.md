@@ -1,6 +1,6 @@
 # weewx-vantagenext change history
 
-## 3.3 UNRELEASED
+## 3.3 2026-10-20
 - A forced set while steering a serial or USB console (WeeWX's max_drift
   backstop, or weectl device --set-time) centers the clock for the jump that
   only cancels the drift and writes that jump back at once, as a
@@ -8,9 +8,9 @@
   its first evening decision could be set by the backstop in the same clock
   check, after the decision had written a jump to bring it in: the set did the
   correcting, and the stale jump carried the clock about two seconds past
-  center at midnight, costing a third night (found by simulation, in 9 of 189
-  such starts).  A write that fails after a set no longer counts toward
-  falling back; the next evening's decision recovers from it.
+  center at midnight, costing a third night.  A write that fails after a set
+  no longer counts toward falling back; the next evening's decision recovers
+  from it.
 - A WeatherLinkIP is steered.  It cannot be read precisely (its logger holds
   every answer for half a second or more), so the driver keeps a whole-second
   reading at every clock check (one in 50 minutes at most) and steers from the
@@ -28,7 +28,7 @@
   after the restart (sooner, for a clock more than a second off center),
   setting nothing meanwhile but by the max_drift backstop.
   A console moved between serial or USB and ethernet is learned afresh too,
-  either way.  A serial or USB console carries on exactly as it was.
+  either way.  A serial or USB console's clock.json is carried over.
 - A clock set over ethernet (the backstop, weectl device --set-time, or the
   driver falling back) lands only to the whole second and reads back no
   better, so where it really put the clock is learned from the readings that
@@ -47,12 +47,11 @@
   decision slot is warned over ethernet too.
 - weectl device --info shows a WeatherLinkIP's state as steered "from
   whole-second readings (ethernet)".
-- The manual's steering figure is a real console's two weeks, drawn from the
-  readings the driver kept and the jumps it wrote, and its account of the
-  midnight reception loss says what it was: it came with [StdArchive]
-  archive_delay set short (3 seconds for two years on this site, and still
-  at 6), and at WeeWX's default of 15 it has not been seen here or reported.
-  Leave archive_delay at its default.
+- The manual's steering figure is a real console's 13 days, drawn from the
+  readings the driver kept and the jumps it wrote; a new figure shows seven
+  Envoys at one site steered side by side, no reading more than 0.19
+  seconds from center and none of the clocks set; and the manual's account of the
+  midnight reception loss is rewritten.
 
 ## 3.2 2026-10-14
 - A WeatherLinkIP is not steered.  Measured on one: the logger holds every

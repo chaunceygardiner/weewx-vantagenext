@@ -2209,10 +2209,11 @@ class VantageNext(weewx.drivers.AbstractDevice):
     COARSE_LANDING_READINGS = 4
     # No jump is written from this far into the day until midnight...
     JUMP_NO_WRITE_AFTER = 23.5 * 3600
-    # ...but for the one written back after a set while coarse (_backstop),
-    # for as long as the set itself may be made, until CLOCK_PRE_MIDNIGHT
-    # before midnight: the set has just put the console within a second or
-    # two of the host, and a write through a WeatherLinkIP takes 1.7 s.
+    # ...but for the one written back after a set while steering (_backstop),
+    # serial or coarse, for as long as the set itself may be made, until
+    # CLOCK_PRE_MIDNIGHT before midnight: the set has just put the console
+    # within a second or two of the host, and even a write through a
+    # WeatherLinkIP, 1.7 s, lands well before the console's midnight.
     JUMP_WRITE_BACK_BEFORE = 86400 - 60
     # This many failed writes in a row mean FALLBACK.
     JUMP_WRITE_FAILS = 2
