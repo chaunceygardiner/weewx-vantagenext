@@ -91,22 +91,23 @@ That is why the driver steers the jump instead of setting the clock.
 
 ### Midnight
 
-**With `archive_delay` set short, the console loses its transmitter just after midnight about
-one night in fifteen**, for two to five minutes, occasionally longer.  This site ran WeeWX's
-`archive_delay` at 3 seconds for two years, which puts the archive download a fraction of a
-second after the console's [three-second silence at its own midnight](recovery.md#the-consoles-midnight),
-inside whatever it is still finishing, and the archives show the loss every month at a steady
-rate: each of the four consoles with an archive of its own since February lost 5 to 8 percent
-of nights.  The record for the first five minutes of the day reads anywhere from about 60
+**Now and then the console loses its transmitter just after midnight**, for two to five
+minutes, occasionally longer.  This site ran WeeWX's `archive_delay` at 3 seconds for two
+years, which puts the archive download a fraction of a second after the console's
+[three-second silence at its own midnight](recovery.md#the-consoles-midnight), inside whatever
+it is still finishing, and the archives show the loss every month at a steady rate: each of
+the four consoles with an archive of its own since February lost 5 to 8 percent of nights,
+about one night in fifteen.  The record for the first five minutes of the day reads anywhere from about 60
 percent down to almost nothing, with the records either side at 100.  It did not depend on the
 weather, on the size of that night's jump, on whether WeeWX was restarted, or on what the other
 consoles did that night, and clock sets are not the cause: the loss was the same on a console
 whose clock was never set, and it went on after the driver stopped setting the clock.  On some
 of those nights the console also stopped sending LOOP packets two to three minutes into the
-day.  Moving the download to 6 seconds did not stop it, and one console that had its clock read
-repeatedly across its midnight lost eight minutes.  At WeeWX's default of 15 seconds, twelve
-seconds clear of the silence, it has not been seen on this site and has not been reported.
-Leave `archive_delay` at its default.  Averaged over every night at 3 seconds the loss cost
+day.  Moving the download to 6 seconds did not stop it, nor did WeeWX's default of 15 seconds,
+twelve seconds clear of the silence, and one console that had its clock read repeatedly across
+its midnight lost eight minutes.  Whether a longer `archive_delay` makes the loss any
+rarer is not known: this site has run too few nights at 6 and at 15 seconds to tell either
+from 3.  Averaged over every night at 3 seconds the loss cost
 about a dozen seconds of reception, and a low record at five past midnight is not a failing
 link.
 
@@ -298,9 +299,9 @@ is brought in by the first decision.
   year.  A
   Vantage Pro2 console keeps its settings in the EEPROM built into its microcontroller, an
   Atmel ATmega128L, which is rated for 100,000 writes: at that rate, more than 500 years.
-- **The midnight loss is a matter of `archive_delay`, not of steering.**  Steering removes
-  the cost of clock sets; the console's loss of its transmitter after midnight came with a
-  short `archive_delay`, and at WeeWX's default it [has not been seen](#midnight).
+- **The midnight loss is not a matter of steering.**  Steering removes the cost of clock
+  sets; the console's loss of its transmitter after midnight
+  [went on after the driver stopped setting the clock](#midnight).
 - **The backstop never fires** on a console being steered.  It is there for a console whose
   clock something else has moved, and for one so far off center at the start that the backstop
   reaches it before the first jump the driver chooses has been made
