@@ -116,19 +116,31 @@ running with:
 
 ```
 INFO user.vantagenext: Driver version is 3.3
-INFO user.vantagenext: max_tries          : 4
-INFO user.vantagenext: iss_id             : None
-INFO user.vantagenext: model_type         : 2
-INFO user.vantagenext: Option loop_request: 1
+INFO user.vantagenext: type               : serial (weewx.conf)
+INFO user.vantagenext: port               : /dev/vantage (weewx.conf)
+INFO user.vantagenext: baudrate           : 19200 (default)
+INFO user.vantagenext: timeout            : 4.5 s (default)
+INFO user.vantagenext: wait_before_retry  : 1.2 s (default)
+INFO user.vantagenext: command_delay      : 0.5 s (default)
+INFO user.vantagenext: max_tries          : 4 (default)
+INFO user.vantagenext: iss_id             : read from the console (default)
+INFO user.vantagenext: model_type         : 2 (default)
+INFO user.vantagenext: loop_request       : 1 (default)
 INFO user.vantagenext: time change windows derived from the OS timezone database
 INFO user.vantagenext: time_change_window : 2026: 2026-11-01 00:55:00-2026-11-01 02:05:00
 ...
 INFO user.vantagenext: ISS ID is 1
+INFO user.vantagenext: Hardware name: Vantage Pro2
 INFO user.vantagenext: Clock: the console's midnight jump is 4.00 s; learning its drift.
 ```
 
-`iss_id : None` is not a fault: it means the option is not set, and the `ISS ID is ...`
-line a moment later says what the driver read from the console.  The `time_change_window`
+Every option the driver reads is listed with the value it is using, and after it whether
+that value came from `weewx.conf` or is the default.  An option you set that shows
+`(default)` is misspelled, or is in some section other than `[VantageNext]`.  A WeatherLinkIP
+lists `host`, `tcp_port` and `tcp_send_delay` in place of `port` and `baudrate`.
+
+`iss_id : read from the console` is not a fault: it means the option is not set, and the
+`ISS ID is ...` line a moment later says what the driver read.  The `time_change_window`
 lines are explained in [Daylight-saving time changes](dst.md), and the `Clock:` line, at the
 first clock check, in [Keeping the console clock](clock.md#the-clock-lines-in-the-log).
 

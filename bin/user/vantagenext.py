@@ -1127,7 +1127,8 @@ class VantageNext(weewx.drivers.AbstractDevice):
             to process the command [Optional. Default is 0.5]
 
             timeout: How long to wait before giving up on a response from the
-            serial port. [Optional. Default is 4]
+            serial port. [Optional. Default is 4.5, and a smaller value is
+            raised to 4.5]
 
             wait_before_retry: How long to wait before retrying. [Optional.
             Default is 1.2 seconds]
@@ -1165,20 +1166,6 @@ class VantageNext(weewx.drivers.AbstractDevice):
 
         self.hardware_type = None
 
-        # These come from the configuration dictionary:
-        self.max_tries = to_int(vp_dict.get('max_tries', 4))
-        self.iss_id = to_int(vp_dict.get('iss_id'))
-        self.model_type = to_int(vp_dict.get('model_type', 2))
-
-        log.info('max_tries          : %d', self.max_tries)
-        # iss_id is None when not configured (it is guessed in _setup), so %s.
-        log.info('iss_id             : %s', self.iss_id)
-        log.info('model_type         : %d', self.model_type)
-
-        if self.model_type not in (1, 2):
-            raise weewx.UnsupportedFeature("Unknown model_type (%d)" % self.model_type)
-        self.loop_request = to_int(vp_dict.get('loop_request', 1))
-        log.info("Option loop_request: %d", self.loop_request)
         if 'dst_periods' in vp_dict:
             log.warning('The [[dst_periods]] section in weewx.conf is obsolete and IGNORED: '
                         'DST time change windows are derived from the OS timezone database. '
@@ -1194,6 +1181,29 @@ class VantageNext(weewx.drivers.AbstractDevice):
                             "learns the console's drift, reads its midnight jump from the "
                             'console, and keeps the clock centered by rewriting the jump.  '
                             'Please delete the option.', obsolete)
+
+        # Get an appropriate port, depending on the connection type (this logs
+        # the port's options):
+        self.port = VantageNext._port_factory(vp_dict)
+        # Over ethernet (a WeatherLinkIP) every clock reading is to the whole
+        # second, and the clock is steered from their fit: see _clock_state.
+        self._ethernet = VantageNext._connection_type(vp_dict) == 'ethernet'
+
+        # These come from the configuration dictionary:
+        self.max_tries = to_int(vp_dict.get('max_tries', 4))
+        self.iss_id = to_int(vp_dict.get('iss_id'))
+        self.model_type = to_int(vp_dict.get('model_type', 2))
+
+        VantageNext._log_option(vp_dict, 'max_tries', self.max_tries)
+        # iss_id is None when not configured: _setup reads it from the console.
+        VantageNext._log_option(vp_dict, 'iss_id',
+                                'read from the console' if self.iss_id is None else self.iss_id)
+        VantageNext._log_option(vp_dict, 'model_type', self.model_type)
+
+        if self.model_type not in (1, 2):
+            raise weewx.UnsupportedFeature("Unknown model_type (%d)" % self.model_type)
+        self.loop_request = to_int(vp_dict.get('loop_request', 1))
+        VantageNext._log_option(vp_dict, 'loop_request', self.loop_request)
         # FALLBACK's parameters until the first clock check reads the console.
         self.clock_drift_secs = 0.0
         self.day_start_jump = 0.0
@@ -1208,12 +1218,6 @@ class VantageNext(weewx.drivers.AbstractDevice):
         self.save_day_rain = None
         self.max_dst_jump = 7200
 
-        # Get an appropriate port, depending on the connection type:
-        self.port = VantageNext._port_factory(vp_dict)
-        # Over ethernet (a WeatherLinkIP) every clock reading is to the whole
-        # second, and the clock is steered from their fit: see _clock_state.
-        self._ethernet = VantageNext._connection_type(vp_dict) == 'ethernet'
-
         # Open it up:
         self.port.openPort()
         # GETTIME's time on the wire, at the rate the port was opened with.
@@ -1221,7 +1225,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
 
         # Read the EEPROM and fill in properties in this instance
         self._setup()
-        log.debug("Hardware name: %s", self.hardware_name)
+        log.info("Hardware name: %s", self.hardware_name)
 
         self.pkt_count = 0
         self.on_bad_read = False
@@ -4194,31 +4198,51 @@ class VantageNext(weewx.drivers.AbstractDevice):
 
     @staticmethod
     def _port_factory(vp_dict):
-        """Produce a serial or ethernet port object"""
+        """Produce a serial or ethernet port object, logging its options"""
 
-        timeout = float(vp_dict.get('timeout', MIN_READ_TIMEOUT))
-        if timeout < MIN_READ_TIMEOUT:
-            log.info("timeout %.1f s in weewx.conf is raised to %.1f s, the least a read can "
-                     "wait for the console's first packet after its midnight.",
-                     timeout, MIN_READ_TIMEOUT)
-            timeout = MIN_READ_TIMEOUT
+        configured = float(vp_dict.get('timeout', MIN_READ_TIMEOUT))
+        timeout = max(configured, MIN_READ_TIMEOUT)
         wait_before_retry = float(vp_dict.get('wait_before_retry', 1.2))
         command_delay = float(vp_dict.get('command_delay', 0.5))
 
         connection_type = VantageNext._connection_type(vp_dict)
 
+        given = any(key in vp_dict for key in ('type', 'connection_type'))
+        VantageNext._log_option(vp_dict, 'type', connection_type,
+                                'weewx.conf' if given else 'default')
         if connection_type == "serial":
             port = vp_dict['port']
             baudrate = int(vp_dict.get('baudrate', 19200))
-            return SerialWrapper(port, baudrate, timeout,
-                                 wait_before_retry, command_delay)
+            VantageNext._log_option(vp_dict, 'port', port)
+            VantageNext._log_option(vp_dict, 'baudrate', baudrate)
+            wrapper = SerialWrapper(port, baudrate, timeout,
+                                    wait_before_retry, command_delay)
         elif connection_type == "ethernet":
             hostname = vp_dict['host']
             tcp_port = int(vp_dict.get('tcp_port', 22222))
             tcp_send_delay = float(vp_dict.get('tcp_send_delay', 0.5))
-            return EthernetWrapper(hostname, tcp_port, timeout, tcp_send_delay,
-                                   wait_before_retry, command_delay)
-        raise weewx.UnsupportedFeature(connection_type)
+            VantageNext._log_option(vp_dict, 'host', hostname)
+            VantageNext._log_option(vp_dict, 'tcp_port', tcp_port)
+            VantageNext._log_option(vp_dict, 'tcp_send_delay', '%s s' % tcp_send_delay)
+            wrapper = EthernetWrapper(hostname, tcp_port, timeout, tcp_send_delay,
+                                      wait_before_retry, command_delay)
+        else:
+            raise weewx.UnsupportedFeature(connection_type)
+        VantageNext._log_option(vp_dict, 'timeout', '%s s' % timeout,
+                                "weewx.conf says %s s; raised to %s s, the least a read can wait "
+                                "for the console's first packet after its midnight"
+                                % (configured, MIN_READ_TIMEOUT) if timeout != configured else None)
+        VantageNext._log_option(vp_dict, 'wait_before_retry', '%s s' % wait_before_retry)
+        VantageNext._log_option(vp_dict, 'command_delay', '%s s' % command_delay)
+        return wrapper
+
+    @staticmethod
+    def _log_option(vp_dict, name, value, source=None):
+        """Log an option at startup: the value the driver uses, and where it came
+        from (weewx.conf, or the default)."""
+        if source is None:
+            source = 'weewx.conf' if name in vp_dict else 'default'
+        log.info('%-19s: %s (%s)', name, value, source)
 
     def _unpackLoopPacket(self, raw_loop_buffer):
         """Decode a raw Davis LOOP packet, returning the results as a dictionary in physical units.

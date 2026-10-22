@@ -1543,6 +1543,48 @@ class TestInit:
         station = VantageNext(type='serial', port='/dev/vantage')
         assert station.iss_id == 3
 
+    def test_the_obsolete_options_are_warned_about_before_a_port_that_cannot_be_made(
+            self, caplog):
+        # A broken connection stops the driver at startup; the warnings about
+        # options it ignores are logged first, so they are not lost with it.
+        with caplog.at_level(logging.INFO, logger='vantagenext'):
+            with pytest.raises(weewx.UnsupportedFeature):
+                VantageNext(type='Serail', port='/dev/vantage', dst_periods={},
+                            clock_drift_secs='-2.0')
+        lines = [r.getMessage() for r in caplog.records]
+        assert [line.split(' option')[0].split(' section')[0] for line in lines
+                if 'obsolete' in line] == ['The [[dst_periods]]', 'The clock_drift_secs']
+        assert lines[-1] == 'type               : serail (weewx.conf)'
+
+    def test_every_option_is_logged_at_startup_with_where_it_came_from(self, monkeypatch,
+                                                                         caplog):
+        # The real _port_factory runs; only the serial port it makes is scripted.
+        transmitter_data = bytearray(16)
+        transmitter_data[4] = 4  # channel 3, type 4 = wind
+        port = ScriptedWrapper([WAKE, ACK, b'\x10'] + setup_reads()[1:]
+                               + eeprom_reads(b'\x04', b'\x00', bytes(transmitter_data)))
+        monkeypatch.setattr(vantagenext, 'SerialWrapper', lambda *args: port)
+        with caplog.at_level(logging.INFO, logger='vantagenext'):
+            VantageNext(type='serial', port='/dev/vantage', timeout='6', max_tries='5',
+                        loop_request='1')
+        lines = [r.getMessage() for r in caplog.records]
+        first = lines.index('Driver version is %s' % vantagenext.DRIVER_VERSION)
+        assert lines[first + 1:first + 11] == [
+            'type               : serial (weewx.conf)',
+            'port               : /dev/vantage (weewx.conf)',
+            'baudrate           : 19200 (default)',
+            'timeout            : 6.0 s (weewx.conf)',
+            'wait_before_retry  : 1.2 s (default)',
+            'command_delay      : 0.5 s (default)',
+            'max_tries          : 5 (weewx.conf)',
+            'iss_id             : read from the console (default)',
+            'model_type         : 2 (default)',
+            'loop_request       : 1 (weewx.conf)',
+        ]
+        assert lines[first + 11] == 'time change windows derived from the OS timezone database'
+        assert 'ISS ID is 3' in lines
+        assert 'Hardware name: Vantage Pro2' in lines
+
     @staticmethod
     def _guessed_iss_id(monkeypatch, use_tx, station_list):
         port = ScriptedWrapper(

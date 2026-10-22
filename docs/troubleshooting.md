@@ -118,7 +118,7 @@ driver falling back:
 |---|---|
 | `get_packet: Expected 99 chars; got .... (...)` | A truncated LOOP packet; a new batch was started at once.  Routine. |
 | `LOOP gap ... s across the console's midnight (the read waited ... s of its ... s timeout).` | Once a night: how long the console's own midnight silence held the LOOP stream, and how much of it the read waited out.  See [the recovery page](recovery.md#the-consoles-midnight). |
-| `timeout ... s in weewx.conf is raised to ... s, the least a read can wait for the console's first packet after its midnight.` | At startup: `timeout` is set below 4.5 in weewx.conf and 4.5 is used.  Delete the line or raise it. |
+| `timeout            : 4.5 s (weewx.conf says ... s; raised to 4.5 s, the least a read can wait for the console's first packet after its midnight)` | At startup: `timeout` is set below 4.5 in weewx.conf and 4.5 is used.  Delete the line or raise it. |
 | `genDavisLoopPackets: repeated bad read.` | The packet after a truncated one was truncated too. |
 | `LOOP try #...; error: ...` | A LOOP packet failed for another reason and is being retried. |
 | `LOOP max tries (...) exceeded.` followed by `genLoopPackets: Error: .... (try ...)` | Every retry failed; a new batch is being started. |

@@ -1,5 +1,15 @@
 # weewx-vantagenext change history
 
+## 3.4 UNRELEASED
+- The driver logs every option it reads at startup, with the value it uses and
+  whether that came from weewx.conf or is the default: the connection's (type,
+  port and baudrate, or host, tcp_port and tcp_send_delay, then timeout,
+  wait_before_retry and command_delay) as well as max_tries, iss_id,
+  model_type and loop_request.  Before, only those last four were logged, and
+  the timeout only when it was raised to 4.5 seconds; that is now said on the
+  timeout's own line.  The console's hardware name is logged too.  An option
+  set in the wrong section, or misspelled, now shows as the default.
+
 ## 3.3 2026-10-20
 - A forced set while steering a serial or USB console (WeeWX's max_drift
   backstop, or weectl device --set-time) centers the clock for the jump that

@@ -33,7 +33,7 @@ below, the hardware catch-up, the loop-gust bookkeeping, the units, the observat
 | **Finding the ISS when `iss_id` is not set** | Considers every channel — and an unconfigured channel's type reads as "iss", so a free channel below the real ISS can win, and `rxCheckPercent` is gauged against the wrong transmitter. | Considers only channels the console is listening to, and logs the result. |
 | **Rain in a LOOP packet** | Day-rain subtraction, inline. | `weewx.wxformulas.calculate_delta`; a momentary dashed day-rain value neither crashes the driver nor loses rain. |
 | **The year 2028** | The console's year byte is packed signed, which holds no more than 127: from 2028-01-01 every clock set raises an error that WeeWX does not catch, and the console's year reads as 1772. | Unsigned (3.0). |
-| **Startup logging** | Quiet. | The options in force, the time change windows and the ISS id, at INFO. |
+| **Startup logging** | Quiet. | At INFO: every option the driver reads, with the value in force and whether it came from `weewx.conf` or is the default; the time change windows; the ISS id and the console's hardware name. |
 | **The console's midnight** | The console sends nothing for about three seconds after its own midnight, a gap of about four seconds between packets, and a four-second read timeout logs a read error for it on about half of all nights. | The read timeout's floor is 4.5 seconds, and a `LOOP gap ... s` line records each night's silence (3.1; the gap since 3.2).  See [The console's midnight](recovery.md#the-consoles-midnight). |
 
 ## Decoding

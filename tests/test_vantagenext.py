@@ -822,6 +822,30 @@ class TestPortFactory:
         with pytest.raises(weewx.UnsupportedFeature):
             VantageNext._port_factory({'type': 'carrier_pigeon'})
 
+    def test_an_ethernet_ports_options_are_logged_with_where_they_came_from(self, caplog):
+        with caplog.at_level(logging.INFO, logger='vantagenext'):
+            VantageNext._port_factory({'type': 'ethernet', 'host': '1.2.3.4', 'timeout': '4',
+                                       'tcp_send_delay': '1', 'command_delay': '0.25'})
+        assert [r.getMessage() for r in caplog.records] == [
+            'type               : ethernet (weewx.conf)',
+            'host               : 1.2.3.4 (weewx.conf)',
+            'tcp_port           : 22222 (default)',
+            'tcp_send_delay     : 1.0 s (weewx.conf)',
+            "timeout            : 4.5 s (weewx.conf says 4.0 s; raised to 4.5 s, the least a "
+            "read can wait for the console's first packet after its midnight)",
+            'wait_before_retry  : 1.2 s (default)',
+            'command_delay      : 0.25 s (weewx.conf)',
+        ]
+
+    @pytest.mark.parametrize('vp_dict, source', [
+        ({'port': '/dev/vantage'}, 'default'),
+        ({'connection_type': 'serial', 'port': '/dev/vantage'}, 'weewx.conf'),
+    ])
+    def test_the_connection_types_source_counts_either_keyword(self, caplog, vp_dict, source):
+        with caplog.at_level(logging.INFO, logger='vantagenext'):
+            VantageNext._port_factory(vp_dict)
+        assert caplog.records[0].getMessage() == 'type               : serial (%s)' % source
+
 
 class Terminate(Exception):
     """Stand-in for weewxd's Terminate, which its SIGTERM handler raises on
@@ -1105,10 +1129,16 @@ class TestMidnightGap:
         with caplog.at_level(logging.INFO, logger='vantagenext'):
             VantageNext._port_factory({'type': 'serial', 'port': '/dev/vantage', 'timeout': '4'})
             VantageNext._port_factory({'type': 'serial', 'port': '/dev/vantage'})
+            VantageNext._port_factory({'type': 'serial', 'port': '/dev/vantage', 'timeout': '4.5'})
             VantageNext._port_factory({'type': 'serial', 'port': '/dev/vantage', 'timeout': '6'})
-        lines = [r.getMessage() for r in caplog.records if 'raised' in r.getMessage()]
-        assert lines == ["timeout 4.0 s in weewx.conf is raised to 4.5 s, the least a read can wait "
-                         "for the console's first packet after its midnight."]
+        lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith('timeout ')]
+        assert lines == [
+            "timeout            : 4.5 s (weewx.conf says 4.0 s; raised to 4.5 s, the least a "
+            "read can wait for the console's first packet after its midnight)",
+            'timeout            : 4.5 s (default)',
+            'timeout            : 4.5 s (weewx.conf)',
+            'timeout            : 6.0 s (weewx.conf)',
+        ]
 
     def test_a_packet_with_no_known_packet_before_it_is_not_the_end_of_a_gap(self, caplog):
         # However long its read took.
