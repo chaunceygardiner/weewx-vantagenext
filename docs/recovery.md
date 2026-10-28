@@ -196,6 +196,27 @@ The driver does not give up on LOOP data.  A console that has truly gone away â€
 powered off â€” produces these lines for as long as it stays away, and the stream resumes by
 itself when it comes back.
 
+Here is a real one.  On 27 October 2026 the USB hub of the computer a spare console is
+attached to disabled the console's port (the kernel logged `disabled by hub (EMI?)`), and the
+console's USB adapter came back a moment later as `/dev/ttyUSB1` instead of `/dev/ttyUSB0`,
+with udev moving `/dev/vantage` to it.  The port the driver held was dead: reads returned
+nothing and writes failed with an I/O error.  Five batches failed in 24 seconds, the driver
+opened `/dev/vantage` again, and LOOP data resumed:
+
+```
+ERROR user.vantagenext: Unable to wake up Vantage console
+ERROR user.vantagenext: 5 LOOP batches in a row failed; closing the port and opening it again.
+INFO user.vantagenext: The port is open again.
+```
+
+WeeWX never restarted.  The archive record for that minute was written 24 seconds late and
+complete, because with `record_generation = hardware`, WeeWX's default, the console keeps
+its own archive whatever the link is doing, and WeeWX downloads every record it has not yet
+stored.  The built-in driver recovers from this too, but by way of WeeWX: three failed
+batches raise the error, WeeWX waits a minute and restarts, and opening the port is then part
+of loading the driver.  An adapter that has not come back by then stops WeeWX altogether,
+unless `loop_on_init` is set in weewx.conf or something else restarts it.
+
 ## At boot
 
 If the serial port cannot be opened when WeeWX starts, the driver waits five seconds and
