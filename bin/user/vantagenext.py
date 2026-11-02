@@ -782,6 +782,13 @@ def day_length(t):
     return end - start
 
 
+def next_day_length(t):
+    """The length, in seconds, of the local day after the one t falls in,
+    found from well inside it (a day that begins at 01:00, where a zone
+    changes its clocks at midnight, included)."""
+    return day_length(day_bounds(t)[1] + 43200)
+
+
 def clock_secs(t):
     """The time of day on the clock at t, in seconds: 23:35 is 84900 whatever
     the day's length.  Not the time since the day began -- on a 23-hour
@@ -956,10 +963,22 @@ def landing_pending(state, t):
     return since is not None and since < VantageNext.COARSE_LANDING_READINGS
 
 
-def cancel_jump(drift, day_secs=86400.0):
-    """The jump that only cancels the drift, for a day of day_secs (23 or 25
-    hours on a time change day): the jump for a clock at center."""
-    return min(max(round_to_quarter(-drift * day_secs / 86400.0), JUMP_MIN), JUMP_MAX)
+def midnight_drift(drift, day_secs=86400.0, next_secs=86400.0):
+    """What a midnight's jump has to make up: the drift of the half day on
+    either side of it.  day_secs is the length of the day the midnight ends,
+    next_secs of the day it begins; on either side of a time change, one of
+    them is 23 or 25 hours.  Each day is centered on its own length
+    (ideal_clock_error), so an ordinary midnight between two 24-hour days
+    makes up a day's drift exactly."""
+    return drift * ((day_secs + next_secs) / 2.0) / 86400.0
+
+
+def cancel_jump(drift, day_secs=86400.0, next_secs=86400.0):
+    """The jump that only cancels the drift across the midnight that ends a
+    day of day_secs and begins one of next_secs (midnight_drift): the jump
+    for a clock at center."""
+    return min(max(round_to_quarter(-midnight_drift(drift, day_secs, next_secs)),
+                   JUMP_MIN), JUMP_MAX)
 
 
 def _set_unread(state, t):
@@ -1028,21 +1047,23 @@ def fit_doubt(drift, jump, residuals):
     return None
 
 
-def choose_jump(off_center, drift, jump, day_secs=86400.0):
+def choose_jump(off_center, drift, jump, day_secs=86400.0, next_secs=86400.0):
     """The jump to hold for the coming midnight.  Left alone while it keeps
     the clock within JUMP_BAND of center; otherwise the quarter-second
     within JUMP_MIN..JUMP_MAX that brings it nearest the center, however far
     off it is: the off-center distance comes from a precise reading, good to
     a few hundredths of a second, of where the clock is.  day_secs is the
-    length of the day that midnight ends: on a time change day, 23 or 25
-    hours, the console drifts for an hour less or more."""
-    lost = drift * day_secs / 86400.0
+    length of the day that midnight ends, next_secs of the day it begins:
+    the jump makes up the drift of the half day on either side
+    (midnight_drift), so a 23- or 25-hour day is centered on its own
+    length, from the jump that begins it to the one that ends it."""
+    lost = midnight_drift(drift, day_secs, next_secs)
     if abs(off_center + lost + jump) <= VantageNext.JUMP_BAND:
         return jump
     return min(max(round_to_quarter(-lost - off_center), JUMP_MIN), JUMP_MAX)
 
 
-def choose_coarse_jump(off_center, drift, jump, day_secs=86400.0):
+def choose_coarse_jump(off_center, drift, jump, day_secs=86400.0, next_secs=86400.0):
     """choose_jump for a console read only to the whole second, whose
     off-center distance comes from the fit (fitted_error), good to a tenth
     or two.  Left alone while the jump keeps the clock within COARSE_BAND of
@@ -1059,8 +1080,12 @@ def choose_coarse_jump(off_center, drift, jump, day_secs=86400.0):
     COARSE_REACH after COARSE_REACH_NIGHTS gives way to the next quarter
     out.  (Not a floor on the creep: a near-zero creep is the right jump to
     hold for a clock in the band.)  Beyond COARSE_FAR, choose_jump's: the
-    quarter-second that brings it nearest the center, in one night."""
-    lost = drift * day_secs / 86400.0
+    quarter-second that brings it nearest the center, in one night.
+    day_secs and next_secs as choose_jump's.  The COARSE_REACH projection
+    takes this midnight's drift for every night, so beside a time change
+    it is out by a half hour's drift on a night or two: well inside a fit's
+    tenth or two."""
+    lost = midnight_drift(drift, day_secs, next_secs)
     if abs(off_center + lost + jump) <= VantageNext.COARSE_BAND:
         return jump
     if abs(off_center) > VantageNext.COARSE_FAR:
@@ -1731,17 +1756,25 @@ class VantageNext(weewx.drivers.AbstractDevice):
     # 1 and 2 make the error a sawtooth: it falls by |drift| over the day and
     # rises by the jump at midnight.  The driver keeps it CENTERED on zero,
     # +|drift|/2 just after the jump sliding to -|drift|/2 just before the
-    # next (ideal_clock_error).  How far the clock stands from that line is
-    # its OFF-CENTER distance, which holds all day and changes at midnight by
-    # the CREEP, drift + jump.
+    # next (ideal_clock_error).  A time change day of 23 or 25 hours is
+    # centered on its own length, half of ITS drift either side of zero
+    # (3.4): measured on a 24-hour line, its sawtooth would lean by
+    # drift/48, toward the drift's side on a 25-hour day.  How far the clock
+    # stands from that line is its OFF-CENTER distance, which holds all day
+    # and changes at midnight by the CREEP: the jump plus the drift of the
+    # half day on either side (midnight_drift) -- drift + jump on an
+    # ordinary night.
     #
     # It steers by the jump, never by SETTIME (3).  Once a day, in the
     # evening -- on the first precise reading after the decision slot opens
     # (_decision_opens) -- it chooses the jump for the coming midnight, a few
     # hours off (choose_jump): the one it holds, while that keeps the clock
     # within JUMP_BAND of center; otherwise the quarter-second that brings it
-    # back, for the length of the day that midnight ends (23 or 25 hours on a
-    # time change day).  The off-center distance moves only at midnight, so
+    # back, for the half day on either side of that midnight: the day it
+    # ends and the day it begins, either of which may be a time change day
+    # of 23 or 25 hours.  So the jump that begins a time change day centers
+    # it, and the one that ends it brings the next day in.  The off-center
+    # distance moves only at midnight, so
     # the evening's reading says what the morning's did, and everything
     # learned since -- a relearn, a set, a sharper drift -- goes into that
     # night's jump.  The band is narrow, so the
@@ -2006,6 +2039,8 @@ class VantageNext(weewx.drivers.AbstractDevice):
     #     test_no_write_lands_before_midnight_on_the_spring_forward_day
     #     test_a_decision_made_late_in_the_evening_writes_nothing_until_the_next_evening
     #     test_a_time_change_day_is_steered_for_its_real_length
+    #     test_the_jump_before_a_time_change_centers_the_day_it_begins
+    #     test_a_weatherlinkip_is_measured_from_the_time_change_days_own_center
     #     test_chile_decides_before_its_evening_window_on_both_nights
     #     test_a_reading_that_runs_into_an_evening_window_writes_nothing
     #     test_a_write_every_two_days_at_most_whatever_the_drift
@@ -2053,6 +2088,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
     #     test_an_evening_after_a_set_holds_the_jump_that_only_cancels_the_drift
     #     test_a_set_while_coarse_writes_back_the_jump_that_only_cancels_the_drift
     #     test_the_write_back_allows_for_a_time_change_day
+    #     test_a_forced_set_on_a_time_change_day_centers_on_that_days_own_center
     #     test_the_write_back_says_where_the_set_left_the_clock
     #     test_a_set_that_ends_past_the_limit_still_writes_back
     #     test_a_set_that_runs_past_midnight_writes_nothing_back
@@ -2125,7 +2161,10 @@ class VantageNext(weewx.drivers.AbstractDevice):
     # FALLBACK's rule.  The decision (clock_step) is a pure function
     # of the off-center distance, looking half a day's creep ahead
     # (clock_off_center; the creep of the day as long as it really is,
-    # day_creep):
+    # day_creep).  Its center is the 24-hour line on every day: it centers
+    # nothing day by day, only steps whole seconds past a threshold, so on a
+    # time change day its off-center figure differs from steering's by
+    # drift/48, which moves a step only at the edge of a whole second:
     #
     #   within CLOCK_FALLBACK_THRESHOLD   do nothing.
     #   beyond it                         step a whole number of seconds to the
@@ -2328,10 +2367,13 @@ class VantageNext(weewx.drivers.AbstractDevice):
         time.sleep(secs)
 
     @staticmethod
-    def ideal_clock_error(secs_into_day, clock_drift_secs):
+    def ideal_clock_error(secs_into_day, clock_drift_secs, day_secs=86400.0):
         """The error, in seconds, that a perfectly centered console clock shows
-        this far into the local day."""
-        return -clock_drift_secs / 2.0 + clock_drift_secs * secs_into_day / 86400.0
+        this far into the local day.  day_secs is the length of that day: a
+        time change day of 23 or 25 hours is centered on its own length, its
+        sawtooth even about zero (steering; FALLBACK keeps the 24-hour line,
+        clock_off_center)."""
+        return clock_drift_secs * (secs_into_day - day_secs / 2.0) / 86400.0
 
     @staticmethod
     def clock_off_center(error, secs_into_day, clock_drift_secs, day_start_jump,
@@ -2725,7 +2767,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
         the write after a set, whose failure the next evening's decision
         recovers from (from weectl, or the backstop), does not count toward
         FALLBACK; the evening's own write does."""
-        cancel = cancel_jump(state.drift, day_length(t))
+        cancel = cancel_jump(state.drift, day_length(t), next_day_length(t))
         pending = state.pending_jump[1] if state.pending_jump is not None else None
         if state.jump == cancel and pending in (None, cancel):
             return None
@@ -2768,7 +2810,8 @@ class VantageNext(weewx.drivers.AbstractDevice):
             # for the learned drift (what every decision line reports), not
             # FALLBACK's, which looks half a day's creep ahead for a jump the
             # console will keep.
-            off_center = error - VantageNext.ideal_clock_error(now - startOfDay(now), state.drift)
+            off_center = error - VantageNext.ideal_clock_error(now - startOfDay(now), state.drift,
+                                                               day_length(now))
         else:
             off_center = VantageNext.clock_off_center(
                 error, now - startOfDay(now), self.clock_drift_secs, self.day_start_jump,
@@ -2814,7 +2857,8 @@ class VantageNext(weewx.drivers.AbstractDevice):
                                                       datetime.datetime.fromtimestamp(t))):
             # Where the set left the clock, by steering's measure, as every
             # other decision line says it.
-            landed = error + moved - VantageNext.ideal_clock_error(t - startOfDay(t), state.drift)
+            landed = error + moved - VantageNext.ideal_clock_error(t - startOfDay(t), state.drift,
+                                                                   day_length(t))
             self._hold_for_landing(state, t, landed, ', after a set: the jump that only cancels it',
                                    count_failure=False)
             self._save_clock()                 # what the write did (weectl saves nothing else)
@@ -2856,7 +2900,8 @@ class VantageNext(weewx.drivers.AbstractDevice):
         if near:
             return error, VantageNext._jump_refusal(near, False)
         secs = t - startOfDay(t)
-        off_center = error - VantageNext.ideal_clock_error(secs, self.clock_drift_secs)
+        off_center = error - VantageNext.ideal_clock_error(secs, self.clock_drift_secs,
+                                                           day_length(t))
         if gap is None:
             log.info("Clock is about %+.2f s off center (one reading, good to +-0.5 s; %s, "
                      "midnight jump %.2f s).", off_center, state.state.lower(), jump)
@@ -2947,7 +2992,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
                          "place the clock; until then the midnight jump is %.2f s, the one "
                          "that only cancels the drift.", readings_since_last_set(state) or 0,
                          VantageNext.COARSE_LANDING_READINGS,
-                         cancel_jump(state.drift, day_length(t)))
+                         cancel_jump(state.drift, day_length(t), next_day_length(t)))
                 written = self._hold_for_landing(
                     state, t, off_center,
                     ', the evening after a set: the jump that only cancels it')
@@ -2962,12 +3007,16 @@ class VantageNext(weewx.drivers.AbstractDevice):
             elif state.coarse:
                 # Where the clock is comes from the fit, good to a tenth or
                 # two; this check's reading alone is good to half a second.
-                off_center = fitted - VantageNext.ideal_clock_error(secs, state.drift)
-                new = choose_coarse_jump(off_center, state.drift, jump, day_length(t))
+                off_center = fitted - VantageNext.ideal_clock_error(secs, state.drift,
+                                                                    day_length(t))
+                new = choose_coarse_jump(off_center, state.drift, jump, day_length(t),
+                                         next_day_length(t))
                 how = ', fitted to %d whole-second readings' % len(state.readings)
             else:
-                off_center = error - VantageNext.ideal_clock_error(secs, state.drift)
-                new = choose_jump(off_center, state.drift, jump, day_length(t))
+                off_center = error - VantageNext.ideal_clock_error(secs, state.drift,
+                                                                   day_length(t))
+                new = choose_jump(off_center, state.drift, jump, day_length(t),
+                                  next_day_length(t))
                 how = ''
             if new == jump and how is not None:
                 log.info("Clock is %+.2f s off center (drift %+.2f s a day%s); midnight jump "
@@ -2989,7 +3038,8 @@ class VantageNext(weewx.drivers.AbstractDevice):
         fitted = fitted_error(state, t)
         if fitted is None:
             return False
-        return abs(fitted - VantageNext.ideal_clock_error(t - startOfDay(t), drift)) > VantageNext.COARSE_FAR
+        return (abs(fitted - VantageNext.ideal_clock_error(t - startOfDay(t), drift, day_length(t)))
+                > VantageNext.COARSE_FAR)
 
     def _decision_opens(self, t):
         """The time of day on the clock from which the day's decision is made,

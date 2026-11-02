@@ -145,7 +145,7 @@ def steered_band(start, end, drift):
     JUMP_BAND, for the day from one midnight to the next."""
     upper, lower = [], []
     for t in (start, end - 1.0):
-        center = VantageNext.ideal_clock_error(t - start, drift)
+        center = VantageNext.ideal_clock_error(t - start, drift, end - start)
         upper.append((t, center + VantageNext.JUMP_BAND))
         lower.append((t, center - VantageNext.JUMP_BAND))
     return upper + lower[::-1]

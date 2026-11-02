@@ -296,7 +296,9 @@ def test_a_state_holding_nan_is_never_saved(tmp_path, caplog):
 # ===============================================================================
 
 def ideal(t, drift):
-    return VantageNext.ideal_clock_error(t - vantagenext.startOfDay(t), drift)
+    """The centered line at t, for the day t is in as long as it really is."""
+    return VantageNext.ideal_clock_error(t - vantagenext.startOfDay(t), drift,
+                                         vantagenext.day_length(t))
 
 
 def off_center(console, drift):
@@ -828,35 +830,221 @@ def test_no_write_lands_before_midnight_on_the_spring_forward_day(tmp_path):
     assert len(console.jump_writes) > writes
 
 
-@pytest.mark.parametrize('off_center, drift, jump, day_secs, chosen', [
-    (0.0, -3.36, 3.25, 86400, 3.25),    # -0.11 a night: within the band, kept
-    (0.0, -3.36, 3.25, 90000, 3.50),    # the 25-hour day loses 3.50: -0.25, out
-    (0.0, -3.36, 3.50, 86400, 3.50),    # +0.14: kept
-    (0.0, -3.36, 3.50, 82800, 3.25),    # the 23-hour day loses 3.22: +0.28, out
+@pytest.mark.parametrize('off_center, drift, jump, day_secs, next_secs, chosen', [
+    (0.0, -3.36, 3.25, 86400, 86400, 3.25),     # -0.11 a night: within the band, kept
+    # Either side of a time change the midnight makes up the drift of the
+    # half day on each side: 24.5 hours of it beside a 25-hour day.
+    (0.0, -3.36, 3.25, 90000, 86400, 3.25),     # -3.43: -0.18, kept
+    (0.0, -3.36, 3.25, 86400, 90000, 3.25),     # the same from the other side
+    (-0.10, -3.30, 3.25, 86400, 90000, 3.50),   # -0.22, out: the night before the fall back
+    (-0.10, -3.30, 3.25, 86400, 86400, 3.25),   # -0.15 on an ordinary night: kept
+    (0.0, -3.36, 3.50, 86400, 86400, 3.50),     # +0.14: kept
+    (0.0, -3.36, 3.50, 82800, 86400, 3.25),     # 23.5 hours lose 3.29: +0.21, out
+    (0.10, -3.20, 3.25, 86400, 82800, 3.00),    # +0.22, out: the night before spring forward
 ])
-def test_choose_jump_allows_for_the_length_of_the_day(off_center, drift, jump, day_secs, chosen):
-    assert vantagenext.choose_jump(off_center, drift, jump, day_secs) == chosen
+def test_choose_jump_allows_for_the_length_of_the_day(off_center, drift, jump, day_secs,
+                                                       next_secs, chosen):
+    assert vantagenext.choose_jump(off_center, drift, jump, day_secs, next_secs) == chosen
+
+
+@pytest.mark.parametrize('day_secs', [90000, 82800, 88200, 84600])
+@pytest.mark.parametrize('drift', [-3.36, 1.20])
+def test_a_time_change_day_is_centered_on_its_own_length(day_secs, drift):
+    # The centered line of a 23- or 25-hour day (or Lord Howe's 23.5 and
+    # 24.5) runs from half that day's drift on one side of zero to half on
+    # the other: even about zero, whichever way the console drifts.
+    start = VantageNext.ideal_clock_error(0, drift, day_secs)
+    end = VantageNext.ideal_clock_error(day_secs, drift, day_secs)
+    assert start == pytest.approx(-drift * day_secs / 172800.0)
+    assert end == pytest.approx(-start)
+    assert VantageNext.ideal_clock_error(day_secs / 2.0, drift, day_secs) == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize('tz, day, hours, next_hours', [
+    ('America/Los_Angeles', (2026, 10, 31, 12), 24, 25),
+    ('America/Los_Angeles', (2026, 11, 1, 12), 25, 24),
+    ('America/Los_Angeles', (2027, 3, 13, 12), 24, 23),
+    ('America/Los_Angeles', (2027, 3, 14, 12), 23, 24),
+    ('America/Los_Angeles', (2027, 3, 15, 12), 24, 24),
+    # Chile changes at midnight: the day after the spring forward begins at 01:00.
+    ('America/Santiago', (2027, 4, 2, 12), 24, 25),
+    ('America/Santiago', (2027, 4, 3, 12), 25, 24),
+    ('America/Santiago', (2027, 9, 4, 12), 24, 23),
+    ('America/Santiago', (2027, 9, 5, 12), 23, 24),
+    ('Australia/Lord_Howe', (2027, 4, 3, 12), 24, 24.5),
+    ('Australia/Lord_Howe', (2027, 10, 2, 12), 24, 23.5),
+])
+def test_the_next_days_length(set_tz, tz, day, hours, next_hours):
+    set_tz(tz)
+    t = datetime.datetime(*day).timestamp()
+    assert vantagenext.day_length(t) == hours * 3600
+    assert vantagenext.next_day_length(t) == next_hours * 3600
+
+
+@pytest.mark.parametrize('drift, day_secs, next_secs, cancel', [
+    (-3.36, 86400, 86400, 3.25),
+    (-3.36, 86400, 90000, 3.50),    # 24.5 hours of drift: 3.43
+    (-3.36, 90000, 86400, 3.50),
+    (-3.36, 86400, 82800, 3.25),    # 23.5 hours: 3.29
+    (1.20, 86400, 90000, -1.25),    # a gaining console: 1.225
+])
+def test_the_jump_that_only_cancels_the_drift_takes_both_days(drift, day_secs, next_secs, cancel):
+    assert vantagenext.cancel_jump(drift, day_secs, next_secs) == cancel
+
+
+@pytest.mark.parametrize('off_center, ordinary, before_fall_back', [
+    (-0.27, 3.25, 3.50),    # -0.32 on an ordinary night, in the band; -0.39 beside the change, out
+    (-1.05, 4.25, 4.50),    # beyond COARSE_FAR: the quarter nearest center, 4.35 or 4.42
+])
+def test_choose_coarse_jump_takes_both_days(off_center, ordinary, before_fall_back):
+    assert vantagenext.choose_coarse_jump(off_center, -3.30, 3.25, 86400, 86400) == ordinary
+    assert vantagenext.choose_coarse_jump(off_center, -3.30, 3.25, 86400, 90000) == before_fall_back
 
 
 def test_a_time_change_day_is_steered_for_its_real_length(tmp_path, monkeypatch):
     # A 25-hour day loses an hour's more drift, a 23-hour day an hour's less:
     # 0.14 s at 3.31 a day, most of the band.  Each day's decision is made for
-    # the length of the day its midnight ends.
+    # the lengths of the day its midnight ends and the day it begins.  (The
+    # arguments only: the tests below are what show the clock centered.)
     lengths = {}
     choose = vantagenext.choose_jump
 
-    def recording(off_center, drift, jump, day_secs=86400.0):
-        lengths[datetime.date.fromtimestamp(clock.t).isoformat()] = day_secs
-        return choose(off_center, drift, jump, day_secs)
+    def recording(off_center, drift, jump, day_secs=86400.0, next_secs=86400.0):
+        lengths[datetime.date.fromtimestamp(clock.t).isoformat()] = (day_secs, next_secs)
+        return choose(off_center, drift, jump, day_secs, next_secs)
     monkeypatch.setattr(vantagenext, 'choose_jump', recording)
     for start, days in ((datetime.datetime(2026, 10, 28, 14, 30), 7),
                         (datetime.datetime(2027, 3, 10, 14, 30), 7)):
         station, console, clock = make(tmp_path / start.strftime('%Y'), -3.31, 3.25, 0.0,
                                        start=start.timestamp())
         run_days(station, console, clock, days)
-    assert lengths['2026-11-01'] == 25 * 3600
-    assert lengths['2027-03-14'] == 23 * 3600
-    assert lengths['2026-10-31'] == lengths['2026-11-02'] == lengths['2027-03-15'] == 86400
+    hours = {day: (a / 3600, b / 3600) for day, (a, b) in lengths.items()}
+    assert hours['2026-10-31'] == (24, 25) and hours['2026-11-01'] == (25, 24)
+    assert hours['2026-11-02'] == (24, 24)
+    assert hours['2027-03-13'] == (24, 23) and hours['2027-03-14'] == (23, 24)
+    assert hours['2027-03-15'] == (24, 24)
+
+
+def run_until(station, console, clock, when, **kw):
+    """run_days, up to the first check at or after `when`."""
+    run_days(station, console, clock, (when.timestamp() - clock.t) / 86400.0, **kw)
+
+
+def decisions(monkeypatch, name='choose_jump'):
+    """Every decision the driver makes, by date: (off_center, drift, held,
+    day_secs, next_secs, chosen), from the real function, watched."""
+    made = {}
+    choose = getattr(vantagenext, name)
+
+    def watched(off_center, drift, jump, day_secs=86400.0, next_secs=86400.0):
+        chosen = choose(off_center, drift, jump, day_secs, next_secs)
+        made[datetime.date.fromtimestamp(watched.clock.t).isoformat()] = (
+            off_center, drift, jump, day_secs, next_secs, chosen)
+        return chosen
+    monkeypatch.setattr(vantagenext, name, watched)
+    return watched, made
+
+
+@pytest.mark.parametrize('first, sat, sun, mon, drift, c0, steps', [
+    # Fall back: losing 3.30 s a day and holding 3.25, the clock 0.10 s low
+    # on Saturday.  Counting only Saturday's 24 hours that night, the jump
+    # would be kept, and the 25-hour Sunday would sit 0.22 s low of its own
+    # center; with half of Sunday's hour, 3.50 is written and Sunday sits
+    # at +0.03.  Sunday's evening keeps it (+0.16 by Monday, in the band).
+    ('2026-10-28', '2026-10-31', '2026-11-01', '2026-11-02', -3.30, 0.05,
+     (-0.10, 3.50, 0.03, 3.50, 0.16)),
+    # Spring forward: losing 3.20 s a day and holding 3.25, the clock 0.10
+    # s high on Saturday.  One-sided, kept, and the 23-hour Sunday sits
+    # 0.22 s high; two-sided, 3.00 is written and Sunday sits at -0.03,
+    # where Sunday's evening keeps it (-0.17 by Monday).
+    ('2027-03-10', '2027-03-13', '2027-03-14', '2027-03-15', -3.20, -0.05,
+     (0.10, 3.00, -0.03, 3.00, -0.17)),
+])
+def test_the_jump_before_a_time_change_centers_the_day_it_begins(tmp_path, monkeypatch, first,
+                                                                sat, sun, mon, drift, c0, steps):
+    sat_off, sat_jump, sun_off, sun_jump, mon_off = steps
+    watched, made = decisions(monkeypatch)
+    station, console, clock = make(
+        tmp_path, drift, 3.25, c0,
+        start=datetime.datetime.fromisoformat(first + ' 14:30').timestamp())
+    watched.clock = clock
+    noon = {d: datetime.datetime.fromisoformat(d + ' 12:00') for d in (sun, mon)}
+    run_until(station, console, clock, noon[sun])
+    # 1. Where the test starts, so that anything else that moves fails here,
+    # by name: the drift learned, Saturday's reading, the jump held.
+    off, learned, held, day_secs, next_secs, chosen = made[sat]
+    assert learned == pytest.approx(drift, abs=0.01)
+    assert off == pytest.approx(sat_off, abs=0.02)
+    assert held == 3.25
+    assert (day_secs, next_secs) == (86400, vantagenext.day_length(noon[sun].timestamp()))
+    # 2. Saturday writes for half of the time change day.
+    assert chosen == sat_jump and console.held_jump() == sat_jump
+    # 3. The time change day sits where its own center is.
+    assert off_center(console, drift) == pytest.approx(sun_off, abs=0.05)
+    run_until(station, console, clock, noon[mon])
+    # 4. Sunday's evening measures it from that same center -- not from a
+    # 24-hour line, which with the half hour already counted would count it
+    # twice -- and keeps the jump.
+    off, unused, held, day_secs, next_secs, chosen = made[sun]
+    assert off == pytest.approx(sun_off, abs=0.02)
+    assert (day_secs, next_secs) == (vantagenext.day_length(noon[sun].timestamp()), 86400)
+    assert held == chosen == sun_jump
+    # 5. And Monday, an ordinary day, where that leaves it.
+    assert off_center(console, drift) == pytest.approx(mon_off, abs=0.05)
+    assert console.sets == []
+
+
+def test_a_weatherlinkip_is_measured_from_the_time_change_days_own_center(tmp_path, monkeypatch):
+    # The decision of a console read to the whole second is made from its
+    # fit, measured from the same center: on the 25-hour day, that day's own.
+    watched, made = decisions(monkeypatch, 'choose_coarse_jump')
+    measured = {}
+    fitted = vantagenext.fitted_error
+
+    def watching(state, t):
+        error = fitted(state, t)
+        if error is not None and state.drift is not None:   # steering asks at the decision
+            measured[datetime.date.fromtimestamp(t).isoformat()] = (
+                error - VantageNext.ideal_clock_error(t - vantagenext.startOfDay(t), state.drift,
+                                                      vantagenext.day_length(t)))
+        return error
+    monkeypatch.setattr(vantagenext, 'fitted_error', watching)
+    station, console, clock = make_wlip(
+        tmp_path, -2.41, 2.25, start=datetime.datetime(2026, 10, 24, 14, 30).timestamp())
+    watched.clock = clock
+    run_until(station, console, clock, datetime.datetime(2026, 11, 2, 12, 0))
+    assert station._clock.state == ClockState.STEERING and console.sets == []
+    hours = {d: (made[d][3] / 3600, made[d][4] / 3600) for d in ('2026-10-31', '2026-11-01')}
+    assert hours == {'2026-10-31': (24, 25), '2026-11-01': (25, 24)}
+    # The decision's distance is the fit's, less the 25-hour day's own
+    # centered line: 24 hours' would put it 0.05 s higher.
+    assert made['2026-11-01'][0] == pytest.approx(measured['2026-11-01'], abs=1e-9)
+
+
+def test_a_forced_set_on_a_time_change_day_centers_on_that_days_own_center(tmp_path):
+    # The set moves whole seconds, so the center it aims at decides the
+    # step only at the edge between two: 1.47 s behind the 24-hour line is
+    # 1.54 s behind the 25-hour day's own center, 0.07 s lower at 3.36 s a
+    # day, so the set steps 2 s, not 1.
+    when = datetime.datetime(2026, 11, 1, 18, 30).timestamp()
+    clock = FakeClock(when)
+    secs = when - vantagenext.startOfDay(when)
+    console = SteeredConsole(clock, VantageNext.ideal_clock_error(secs, -3.36) - 1.47,
+                             -3.36, 3.25, io_secs=0.004, reply_secs=0.005)
+    state = ClockState(3.25, when - 3 * 86400, ClockState.STEERING)
+    state.drift = -3.36
+    path = tmp_path / 'vantagenext' / 'clock.json'
+    state.save(str(path))
+    station = clock_station(clock, console, _clock=None)
+    station._clock_path = str(path)
+    station.time_change_windows = VantageNext.derive_time_change_windows(
+        when - 86400, when + 400 * 86400)
+    console.tick()
+    before = console.error
+    station.setTime()
+    assert len(console.sets) == 1
+    assert console.error - before == pytest.approx(2.0, abs=0.05)
+    assert off_center(console, -3.36) == pytest.approx(0.46, abs=0.05)
 
 
 def test_fallback_and_the_backstop_measure_a_time_change_day_for_its_real_length(tmp_path,
@@ -1732,11 +1920,12 @@ def coarse_steered(tmp_path, when, drift, held):
     return station, console, clock
 
 
-@pytest.mark.parametrize('day, written', [((2026, 10, 31), 2.25), ((2026, 11, 1), 2.50)])
+@pytest.mark.parametrize('day, written', [((2026, 10, 30), 2.25), ((2026, 10, 31), 2.50),
+                                         ((2026, 11, 1), 2.50)])
 def test_the_write_back_allows_for_a_time_change_day(tmp_path, day, written):
-    # Losing 2.35 s a day: 2.25 cancels a 24-hour day's drift, but the
-    # day the clocks fall back is 25 hours, and 2.45 s are lost by its
-    # midnight: 2.50.
+    # Losing 2.35 s a day: 2.25 cancels an ordinary midnight's drift.  The
+    # midnights either side of the 25-hour day the clocks fall back make up
+    # 24.5 hours of it, half of each day beside them: 2.40, so 2.50.
     station, console, unused = coarse_steered(
         tmp_path, datetime.datetime(*day, 18, 30), -2.35, 7.00)
     station.setTime()
@@ -2594,33 +2783,35 @@ def test_a_state_file_naming_the_reading_day_as_3_0_did_still_loads():
 
 @pytest.mark.parametrize('start, lengths', [
     # Fall back, 2026-04-04 (Saturday, 25 hours; window 22:55 .. 00:05).
-    (datetime.datetime(2026, 3, 29, 14, 30), {'2026-04-03': 24, '2026-04-04': 25, '2026-04-05': 24}),
+    (datetime.datetime(2026, 3, 29, 14, 30),
+     {'2026-04-03': (24, 25), '2026-04-04': (25, 24), '2026-04-05': (24, 24)}),
     # Spring forward, the night of 2026-09-05 (Saturday, 24 hours; window
     # 23:55 .. 01:05); Sunday begins at 01:00 and is 23 hours long.
-    (datetime.datetime(2026, 8, 30, 14, 30), {'2026-09-05': 24, '2026-09-06': 23, '2026-09-07': 24}),
+    (datetime.datetime(2026, 8, 30, 14, 30),
+     {'2026-09-05': (24, 23), '2026-09-06': (23, 24), '2026-09-07': (24, 24)}),
 ])
 def test_chile_decides_before_its_evening_window_on_both_nights(tmp_path, set_tz, monkeypatch,
                                                                 start, lengths):
     # The console's midnight is where the clock changes.  At WeeWX's default
     # clock_check every day is decided, in the evening, before the window, for
-    # the real length of the day its midnight ends; the jump written is the
-    # jump made; and the clock is never set.
+    # the real lengths of the day its midnight ends and the day it begins;
+    # the jump written is the jump made; and the clock is never set.
     set_tz('America/Santiago')
     decided = {}
     choose = vantagenext.choose_jump
 
-    def recording(off_center, drift, jump, day_secs=86400.0):
+    def recording(off_center, drift, jump, day_secs=86400.0, next_secs=86400.0):
         decided[datetime.date.fromtimestamp(clock.t).isoformat()] = (
-            datetime.datetime.fromtimestamp(clock.t), day_secs)
-        return choose(off_center, drift, jump, day_secs)
+            datetime.datetime.fromtimestamp(clock.t), (day_secs, next_secs))
+        return choose(off_center, drift, jump, day_secs, next_secs)
     monkeypatch.setattr(vantagenext, 'choose_jump', recording)
     station, console, clock = make(tmp_path, -3.31, 3.50, 0.3, start=start.timestamp())
     station.clock_check = 14400
     run_days(station, console, clock, 12, check=14400)
     assert station._clock.state == ClockState.STEERING and console.sets == []
     for day, hours in lengths.items():
-        when, day_secs = decided[day]
-        assert day_secs == hours * 3600, day
+        when, (day_secs, next_secs) = decided[day]
+        assert (day_secs / 3600, next_secs / 3600) == hours, day
         assert 18 <= when.hour < 23, (day, when)
         assert not VantageNext.inTimeChangeWindow(station.time_change_windows, when)
     # Every day from the first decision on was decided.

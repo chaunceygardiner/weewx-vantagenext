@@ -9,6 +9,14 @@
   the timeout only when it was raised to 4.5 seconds; that is now said on the
   timeout's own line.  The console's hardware name is logged too.  An option
   set in the wrong section, or misspelled, now shows as the default.
+- A 23- or 25-hour time change day is now centered on its own length.  Each
+  of the two jumps beside the day, the one that begins it (chosen the evening
+  before) and the one that ends it, now makes up half of its extra or missing
+  hour, so the day's drift is shared evenly either side of center.  Before,
+  the jump that ends the day made up the whole hour and the one that begins
+  it none of it, and a console that loses time spent the fall back day low by
+  a forty-eighth of its daily drift (0.07 seconds at 3.3 seconds a day), and
+  the spring forward day as much high.
 
 ## 3.3 2026-10-20
 - A forced set while steering a serial or USB console (WeeWX's max_drift

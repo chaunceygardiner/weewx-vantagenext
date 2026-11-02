@@ -206,7 +206,8 @@ class Sim:
             (From the evening decision it is that day's decision.)"""
             if not self.setting:
                 return hold(state, t, *args, **kw)
-            cancel = vantagenext.cancel_jump(state.drift, vantagenext.day_length(t))
+            cancel = vantagenext.cancel_jump(state.drift, vantagenext.day_length(t),
+                                             vantagenext.next_day_length(t))
             first = len(self.console.jump_writes)
             try:
                 result = hold(state, t, *args, **kw)

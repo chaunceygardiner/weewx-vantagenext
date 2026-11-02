@@ -155,9 +155,11 @@ tonight's jump — a few hours off — would leave the clock:
 - **Within 0.19 seconds of center:** it leaves the jump alone.
 - **Further out:** it writes the quarter-second jump that brings the clock back, however far
   off it is, within the console's −8 to +8 seconds
-  ([below](#a-clock-that-starts-off-center)).  On the day of a time change it allows for the
-  day's real length, 23 or 25 hours:
-  for a console that loses 3.3 seconds a day, an hour's drift is a seventh of a second.
+  ([below](#a-clock-that-starts-off-center)).  Around a time change it allows for the day's
+  real length, 23 or 25 hours, on both evenings: the evening before, so that the jump that
+  begins the day centers it, and the evening of the day itself, so that the next day is
+  centered too.  The hour more or less is shared evenly either side of center: for a console
+  that loses 3.3 seconds a day, an hour's drift is a seventh of a second.
 
 A jump moves in quarter-seconds, so no choice can land the clock closer to center than an
 eighth of a second, and few consoles drift by an exact quarter-second.  So the jump settles on
