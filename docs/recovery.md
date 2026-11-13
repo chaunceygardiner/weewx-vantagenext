@@ -186,10 +186,18 @@ ERROR user.vantagenext: 5 LOOP batches in a row failed; closing the port and ope
 INFO user.vantagenext: The port is open again.
 ```
 
-A port that will not open is tried again about once a minute until it does:
+A port that will not open is tried again every five seconds until it does.  The first
+failure is logged, and then one line once a minute while they go on:
 
 ```
-ERROR user.vantagenext: Could not open the port again: [Errno 111] Connection refused.  Trying again in 60 seconds.
+ERROR user.vantagenext: Could not open the port again: [Errno 111] Connection refused.  Trying again in 5 seconds.
+```
+
+When the port opens after failing, the line says how many attempts it took and how long it
+was from closing the port to opening it.  The failed batches before that are not in it.
+
+```
+INFO user.vantagenext: The port is open again.  It took 25 tries over 133 seconds.
 ```
 
 The driver does not give up on LOOP data.  A console that has truly gone away — unplugged,
@@ -217,6 +225,27 @@ batches raise the error, WeeWX waits a minute and restarts, and opening the port
 of loading the driver.  An adapter that has not come back by then stops WeeWX altogether,
 unless `loop_on_init` is set in weewx.conf or something else restarts it.
 
+And a network one.  On 13 November 2026 an update to the network's switches took them all
+offline for about four minutes, and with them the connection between a WeeWX computer and
+its WeatherLinkIP.  The reads timed out from 08:35:33, five batches failed, and at 08:37:31
+the driver closed the connection and began opening it again:
+
+```
+ERROR user.vantagenext: 5 LOOP batches in a row failed; closing the port and opening it again.
+ERROR user.vantagenext: Could not open the port again: [Errno -3] Temporary failure in name resolution.  Trying again in 60 seconds.
+ERROR user.vantagenext: Could not open the port again: [Errno -3] Temporary failure in name resolution.  Trying again in 60 seconds.
+ERROR user.vantagenext: Could not open the port again: [Errno 113] No route to host.  Trying again in 60 seconds.
+INFO user.vantagenext: The port is open again.
+```
+
+The computer had its network address back at 08:39:09 and the WeatherLinkIP at 08:39:43.
+The driver then still tried only once a minute, and opened the connection at 08:40:36, 53
+seconds after it could have.  That wait is why a port is now tried every five seconds.  No
+archive record was lost: the 08:40 record was downloaded from the console 29 seconds late
+and complete.  What was lost was the LOOP data in between.  WeeWX never restarted; under the
+built-in driver its restart would have come while the network was still down, and stopped
+it.
+
 ## At boot
 
 If the serial port cannot be opened when WeeWX starts, the driver waits five seconds and
@@ -228,8 +257,8 @@ INFO user.vantagenext: Could not open serial port /dev/vantage, sleeping 5s and 
 
 This is for a udev symlink such as `/dev/vantage` that is not there yet when WeeWX starts
 early in a boot.  If the second attempt fails too, WeeWX handles it as it would for any
-driver.  The same line appears with each attempt when the driver is [opening the port
-again](#any-other-error), each attempt then taking five seconds longer.
+driver.  It is for startup only: when the driver is [opening the port
+again](#any-other-error), it does its own retrying.
 
 ## The archive download is different
 

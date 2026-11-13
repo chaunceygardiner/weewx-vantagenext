@@ -139,7 +139,7 @@ class ScriptedWrapper(vantagenext.BaseWrapper):
         self.writes = []
         self.flushes = 0
 
-    def openPort(self):
+    def openPort(self, reopening=False):
         pass
 
     def closePort(self):
@@ -225,7 +225,7 @@ class ClockConsole(vantagenext.BaseWrapper):
         self.gettimes = 0
         self.sets = []
 
-    def openPort(self):
+    def openPort(self, reopening=False):
         pass
 
     def closePort(self):

@@ -375,6 +375,18 @@ class TestLogMessages:
 
 class TestConstants:
 
+    def test_the_recovery_pages_reopen_numbers_are_the_drivers(self):
+        page = ' '.join(pages()['recovery.md'].split())
+        words = {5: 'five', 10: 'ten'}
+        assert 'A port that will not open is tried again every %s seconds until it does.' % \
+            words.get(VantageNext.REOPEN_WAIT, '?') in page
+        assert 'Trying again in %d seconds.' % VantageNext.REOPEN_WAIT in page
+        assert VantageNext.REOPEN_LOG_EVERY == 60  # "once a minute", on both pages
+        assert 'The first failure is logged, and then one line once a minute' in page
+        rows = ' '.join(pages()['troubleshooting.md'].split())
+        assert 'It is tried every %s seconds until it opens; this line comes at the first ' \
+            'failure and then once a minute.' % words.get(VantageNext.REOPEN_WAIT, '?') in rows
+
     def test_the_clock_pages_numbers_are_the_drivers(self):
         page = ' '.join(pages()['clock.md'].split())
         for phrase in (

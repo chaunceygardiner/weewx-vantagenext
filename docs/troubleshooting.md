@@ -123,10 +123,11 @@ driver falling back:
 | `LOOP try #...; error: ...` | A LOOP packet failed for another reason and is being retried. |
 | `LOOP max tries (...) exceeded.` followed by `genLoopPackets: Error: .... (try ...)` | Every retry failed; a new batch is being started. |
 | `... LOOP batches in a row failed; closing the port and opening it again.` | Five batches failed in a row, so the port may be dead: a dropped WeatherLinkIP connection, a USB adapter that came back as a new device.  See [the recovery page](recovery.md#any-other-error). |
-| `The port is open again.` | The reopen worked; LOOP batches go on from here. |
-| `Could not open the port again: ....  Trying again in ... seconds.` | The console, the adapter or the WeatherLinkIP is still not there.  It is tried again until it opens. |
+| `The port is open again.` | The reopen worked at its first attempt; LOOP batches go on from here. |
+| `The port is open again.  It took ... tries over ... seconds.` | The reopen worked after the port had failed to open: how many attempts it took, and how long from closing the port to opening it.  The failed batches before the reopen are not in that time. |
+| `Could not open the port again: ....  Trying again in ... seconds.` | The console, the adapter or the WeatherLinkIP is still not there.  It is tried every five seconds until it opens; this line comes at the first failure and then once a minute. |
 | `DMPAFT try #...; error: ...` / `DMPAFT max tries (...) exceeded.` | The same, while downloading archive records.  This one is handed to WeeWX. |
-| `Could not open serial port ..., sleeping 5s and trying again.` | The port was not ready at startup, or when it was being opened again. |
+| `Could not open serial port ..., sleeping 5s and trying again.` | The port was not ready at startup. |
 | `ISS ID is ...` | At startup: the ISS configured, or found in the transmitter table. |
 | `LOOP try #...; error: Unknown LOOP packet type ...` | The console sent a packet type the driver does not decode.  It is retried like any other bad packet; see the `LOOP try` row. |
 | `Unknown bucket type ...` | The console's rain collector setting is not one of the three known.  Rain values are left empty, and the line repeats several times with every packet; check `weectl device --info`. |

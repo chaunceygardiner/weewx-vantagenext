@@ -19,6 +19,7 @@ faked.  Run from the repo root with the WeeWX venv's Python:
 import datetime
 import itertools
 import logging
+import socket
 import struct
 
 import pytest
@@ -928,7 +929,8 @@ class _ConnectStub(_ClosableStub):
 
 class TestEthernetOpenPort:
     """A socket whose connect fails is closed: the reopen loop calls openPort
-    about once a minute while the logger cannot be reached."""
+    every REOPEN_WAIT seconds while the logger cannot be reached.  It logs its
+    own failures, so with reopening=True openPort logs none."""
 
     def _wrapper(self, monkeypatch, error):
         import socket
@@ -940,41 +942,100 @@ class TestEthernetOpenPort:
         monkeypatch.setattr(socket, 'socket', make)
         return VantageNext._port_factory({'type': 'ethernet', 'host': '192.0.2.1'}), made
 
+    @pytest.mark.parametrize('reopening', [False, True])
     @pytest.mark.parametrize('error', [ConnectionRefusedError(111, 'Connection refused'),
-                                       TimeoutError('timed out')])
-    def test_a_failed_connect_closes_its_socket(self, monkeypatch, error):
+                                       TimeoutError('timed out'),
+                                       # What a reopen met on 2026-11-13, the network down.
+                                       socket.gaierror(-3, 'Temporary failure in name resolution')])
+    def test_a_failed_connect_closes_its_socket(self, monkeypatch, caplog, error, reopening):
         wrapper, made = self._wrapper(monkeypatch, error)
-        with pytest.raises(weewx.WeeWxIOError):
-            wrapper.openPort()
+        with caplog.at_level(logging.INFO), pytest.raises(weewx.WeeWxIOError):
+            wrapper.openPort(reopening=reopening)
         assert len(made) == 1 and made[0].closed
         assert not hasattr(wrapper, 'socket')
+        logged = [r.getMessage() for r in caplog.records]
+        assert logged == ([] if reopening else
+                          ['Socket error while opening port 22222 to ethernet host 192.0.2.1.'])
 
+    @pytest.mark.parametrize('reopening', [False, True])
     @pytest.mark.parametrize('exc_class', [Terminate, KeyboardInterrupt])
-    def test_a_shutdown_during_connect_closes_it_and_passes_through(self, monkeypatch, exc_class):
+    def test_a_shutdown_during_connect_closes_it_and_passes_through(self, monkeypatch, exc_class,
+                                                                    reopening):
         wrapper, made = self._wrapper(monkeypatch, exc_class('stop'))
         with pytest.raises(exc_class):
-            wrapper.openPort()
+            wrapper.openPort(reopening=reopening)
         assert made[0].closed
 
 
-class _ReopenPort:
-    """Records closePort and openPort; each scripted error is raised by the
-    call it is given to, in turn."""
+class TestSerialOpenPort:
+    """The boot retry (a /dev/vantage link not there yet) is for startup.  The
+    reopen loop does its own retrying, so with reopening=True a port that will
+    not open raises at once, with no sleep and no line."""
 
-    def __init__(self, open_errors=(), close_error=None):
+    MISSING = '/nonexistent/vantage-test-port'
+
+    def _open(self, monkeypatch, caplog, **kwargs):
+        import serial
+        sleeps = []
+        monkeypatch.setattr(vantagenext.time, 'sleep', sleeps.append)
+        wrapper = vantagenext.SerialWrapper(self.MISSING, 19200, 4.5, 1.2, 0.5)
+        with caplog.at_level(logging.INFO), pytest.raises(serial.SerialException):
+            wrapper.openPort(**kwargs)
+        return sleeps, [r.getMessage() for r in caplog.records]
+
+    def test_reopening_raises_at_once(self, monkeypatch, caplog):
+        assert self._open(monkeypatch, caplog, reopening=True) == ([], [])
+
+    def test_otherwise_it_waits_five_seconds_and_tries_once_more(self, monkeypatch, caplog):
+        assert self._open(monkeypatch, caplog) == (
+            [5], ['Could not open serial port %s, sleeping 5s and trying again.' % self.MISSING])
+
+
+class _ReopenPort:
+    """Records closePort and openPort (and, apart, each openPort's reopening
+    argument); each scripted error is raised by the call it is given to, in
+    turn.  Given a _Monotonic, each call also takes the time it is given."""
+
+    def __init__(self, open_errors=(), close_error=None, clock=None,
+                 close_secs=0.0, fail_secs=0.0, open_secs=0.0):
         self.calls = []
+        self.open_reopening = []
         self.open_errors = list(open_errors)
         self.close_error = close_error
+        self.clock = clock
+        self.close_secs, self.fail_secs, self.open_secs = close_secs, fail_secs, open_secs
+
+    def _take(self, secs):
+        if self.clock is not None:
+            self.clock.now += secs
 
     def closePort(self):
         self.calls.append('close')
+        self._take(self.close_secs)
         if self.close_error:
             raise self.close_error
 
-    def openPort(self):
+    def openPort(self, reopening=False):
         self.calls.append('open')
+        self.open_reopening.append(reopening)
         if self.open_errors:
+            self._take(self.fail_secs)
             raise self.open_errors.pop(0)
+        self._take(self.open_secs)
+
+
+class _Monotonic:
+    """Stands in for vantagenext._monotonic; time.sleep advances it."""
+
+    def __init__(self, monkeypatch):
+        self.now = 1000.0
+        self.sleeps = []
+        monkeypatch.setattr(vantagenext, '_monotonic', lambda: self.now)
+        monkeypatch.setattr(vantagenext.time, 'sleep', self.sleep)
+
+    def sleep(self, secs):
+        self.sleeps.append(secs)
+        self.now += secs
 
 
 def _play_batches(station, script):
@@ -1030,17 +1091,59 @@ class TestReopenPort:
 
     def test_a_port_that_will_not_open_is_tried_again_until_it_does(self, monkeypatch, caplog):
         import serial
-        sleeps = []
-        monkeypatch.setattr(vantagenext.time, 'sleep', sleeps.append)
+        clock = _Monotonic(monkeypatch)
         station = bare_station(port=_ReopenPort(open_errors=[
             weewx.WeeWxIOError('Connection refused'), serial.SerialException('no such device')]))
         _play_batches(station, [self.FAIL] * 5 + [['packet']])
         with caplog.at_level(logging.INFO):
             assert next(station.genLoopPackets()) == 'packet'
         assert station.port.calls == ['close', 'open', 'open', 'open']
-        assert sleeps == [VantageNext.REOPEN_WAIT] * 2 == [60, 60]
-        assert 'Could not open the port again: no such device.  Trying again in 60 seconds.' in \
-            [r.getMessage() for r in caplog.records]
+        assert station.port.open_reopening == [True, True, True]
+        assert clock.sleeps == [VantageNext.REOPEN_WAIT] * 2 == [5, 5]
+        lines = [r.getMessage() for r in caplog.records]
+        # The second failure is 5 s after the first, so only the first is logged.
+        assert [line for line in lines if line.startswith('Could not open')] == \
+            ['Could not open the port again: Connection refused.  Trying again in 5 seconds.']
+        assert lines[-1] == 'The port is open again.  It took 3 tries over 10 seconds.'
+
+    def test_a_failing_reopen_is_logged_first_and_then_once_a_minute(self, monkeypatch, caplog):
+        # A close takes 0.5 s, a failed open 3 s (a host that does not answer
+        # ARP) and the open that works 0.1 s, so a cycle is 8 s and the tries
+        # and the time do not move together.  The 26 failures fall at 3.5 +
+        # 8k s from the start: tries 1, 9, 17 and 25 (3.5, 67.5, 131.5 and
+        # 195.5 s) are each the first 60 s or more after the line before.
+        # Counting tries (every 12th), timing from the first failure (tries 1,
+        # 9, 16, 24) or logging the change of error at try 12 all fail here.
+        import time as time_module
+        clock = _Monotonic(monkeypatch)
+        # Each error names its try, so the test sees which tries were logged.
+        errors = [weewx.WeeWxIOError('%s #%d' % ('No route to host' if n < 12 else 'Connection refused', n))
+                  for n in range(1, 27)]
+        station = bare_station(port=_ReopenPort(open_errors=errors, clock=clock,
+                                                close_secs=0.5, fail_secs=3.0, open_secs=0.1))
+        # The wall clock keeps pace with the fake one, but is set an hour back
+        # from 60 s to 140 s into the reopen and forward again after: a rule
+        # that read it would miss the lines at tries 9 and 17.  Only the
+        # monotonic clock may count.
+        wall_start = time_module.time()
+
+        def wall():
+            into = clock.now - 1000.0
+            return wall_start + into - (3600 if 60 <= into < 140 else 0)
+        monkeypatch.setattr(vantagenext.time, 'time', wall)
+        _play_batches(station, [self.FAIL] * 5 + [['packet']])
+        with caplog.at_level(logging.INFO):
+            assert next(station.genLoopPackets()) == 'packet'
+        assert len(station.port.open_reopening) == 27
+        lines = [r.getMessage() for r in caplog.records]
+        failures = [line for line in lines if line.startswith('Could not open')]
+        assert failures == [
+            'Could not open the port again: %s.  Trying again in 5 seconds.' % error
+            for error in ('No route to host #1', 'No route to host #9',
+                          'Connection refused #17', 'Connection refused #25')]
+        # Measured from before the close: 208.6 s.  From after it, 208.1;
+        # from the first failure, 205.1.
+        assert lines[-1] == 'The port is open again.  It took 27 tries over 209 seconds.'
 
     @pytest.mark.parametrize('exc_class', [Terminate, KeyboardInterrupt, SystemExit])
     def test_shutdown_exceptions_pass_through(self, monkeypatch, exc_class):

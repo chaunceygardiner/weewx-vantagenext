@@ -17,6 +17,19 @@
   it none of it, and a console that loses time spent the fall back day low by
   a forty-eighth of its daily drift (0.07 seconds at 3.3 seconds a day), and
   the spring forward day as much high.
+- A port that will not open after five failed LOOP batches is tried again
+  every five seconds instead of every minute, so LOOP data resumes within
+  seconds of the console, the adapter or the WeatherLinkIP coming back.  In a
+  network outage on 13 November 2026 a WeatherLinkIP was reachable again for
+  53 seconds before the minute's wait let the driver try it.  The failure is
+  logged when it first happens and then once a minute, and the line that
+  says the port is open again says how many tries it took and how long.
+  During a reopen, a serial port that is not there is now reported by the
+  ERROR line `Could not open the port again` instead of the INFO line
+  `Could not open serial port ..., sleeping 5s and trying again`, which is
+  now logged at startup only; a log watcher that counts either line will see
+  the change.  The ERROR line `Socket error while opening port ...` is no
+  longer logged at each attempt of a reopen either.
 
 ## 3.3 2026-10-20
 - A forced set while steering a serial or USB console (WeeWX's max_drift

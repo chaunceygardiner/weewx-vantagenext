@@ -53,6 +53,10 @@ int2byte = struct.Struct(">B").pack
 # longer, raised (and said so at startup) when it is shorter.
 MIN_READ_TIMEOUT = 4.5
 
+# The clock that intervals are measured on: a clock set cannot stretch or skip
+# them.  A module name, so that tests can replace it.
+_monotonic = time.monotonic
+
 if sys.version_info[0] < 3 or (sys.version_info[0] == 3 and sys.version_info[1] < 9):
     raise weewx.UnsupportedFeature(
         "weewx-vantagenext requires Python 3.9 or later, found %s.%s" % (sys.version_info[0], sys.version_info[1]))
@@ -354,12 +358,15 @@ class SerialWrapper(BaseWrapper):
             raise weewx.WeeWxIOError("Expected to write %d chars; sent %d instead"
                                      % (len(data), N))
 
-    def openPort(self):
+    def openPort(self, reopening=False):
         import serial
         # Open up the port and store it
         try:
             self.serial_port = serial.Serial(self.port, self.baudrate, timeout=self.timeout)
         except OSError:
+            # The reopen loop (_reopen_port) does its own retrying and logging.
+            if reopening:
+                raise
             # On debian bullseye, the /dev/vantage link is sometimes not ready on a reboot
             # (NUC7i5).  Sleep 5s, then try again.
             log.info('Could not open serial port %s, sleeping 5s and trying again.' % self.port)
@@ -394,19 +401,23 @@ class EthernetWrapper(BaseWrapper):
         self.port = port
         self.tcp_send_delay = tcp_send_delay
 
-    def openPort(self):
+    def openPort(self, reopening=False):
         import socket
         # A socket whose connect fails is closed, not left for the garbage
-        # collector: the driver opens the port again, about once a minute, for as
-        # long as the logger cannot be reached (see _reopen_port).
+        # collector: the driver opens the port again, every few seconds, for as
+        # long as the logger cannot be reached (see _reopen_port).  That loop
+        # logs its own failures, so reopening=True leaves out the "Socket
+        # error" line here.  The line for any other exception (a shutdown
+        # during the connect) stays.
         sock = None
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(self.timeout)
             sock.connect((self.host, self.port))
         except (socket.error, socket.timeout, socket.herror) as ex:
-            log.error("Socket error while opening port %d to ethernet host %s.", self.port,
-                      self.host)
+            if not reopening:
+                log.error("Socket error while opening port %d to ethernet host %s.", self.port,
+                          self.host)
             if sock is not None:
                 sock.close()
             # Reraise as a weewx I/O error:
@@ -1350,10 +1361,15 @@ class VantageNext(weewx.drivers.AbstractDevice):
         self.port.closePort()
 
     # LOOP batches that may fail in a row before the port is closed and
-    # opened again, and the seconds between attempts to open a port that
-    # will not open.
+    # opened again; the seconds between attempts to open a port that will not
+    # open; and the seconds between the lines that say it is still failing.
+    # A failed attempt costs little (in a network outage on 2026-11-13, a
+    # millisecond while names would not resolve, 3 s while the WeatherLinkIP
+    # did not answer), and that outage left the WeatherLinkIP reachable 53 s
+    # before a 60 s wait let the driver try it again.
     LOOP_BATCH_TRIES = 5
-    REOPEN_WAIT = 60
+    REOPEN_WAIT = 5
+    REOPEN_LOG_EVERY = 60
 
     def genLoopPackets(self):
         """Generator function that returns loop packets"""
@@ -1379,25 +1395,41 @@ class VantageNext(weewx.drivers.AbstractDevice):
         serves one client, and drops the one it has for a new one), or a USB
         adapter that has come back as a new device behind the same name.  The
         driver does not give up on LOOP data, so a port that will not open is
-        tried again every REOPEN_WAIT seconds until it does.  Closing and
-        opening raise OSError as well as WeeWxIOError (a socket's shutdown
-        after the peer has reset it, pyserial's SerialException); weewxd's
-        Terminate is neither, and passes through."""
+        tried again every REOPEN_WAIT seconds until it does.  The first failure
+        is logged, then the first one REOPEN_LOG_EVERY seconds or more after
+        the last line; a new error waits for that line too, so errors that
+        alternate cannot fill the log.  Success says how many tries and how
+        long the port took to open, from before the close; the failed batches
+        before it are not counted.  Closing and opening raise OSError as well
+        as WeeWxIOError (a socket's shutdown after the peer has reset it,
+        pyserial's SerialException); weewxd's Terminate is neither, and passes
+        through."""
         log.error("%d LOOP batches in a row failed; closing the port and opening it again.",
                   self.LOOP_BATCH_TRIES)
+        start = _monotonic()
         try:
             self.port.closePort()
         except (weewx.WeeWxIOError, OSError):
             pass
+        tries = 0
+        last_logged = None
         while True:
+            tries += 1
             try:
-                self.port.openPort()
+                self.port.openPort(reopening=True)
             except (weewx.WeeWxIOError, OSError) as e:
-                log.error("Could not open the port again: %s.  Trying again in %d seconds.",
-                          e, self.REOPEN_WAIT)
+                now = _monotonic()
+                if last_logged is None or now - last_logged >= self.REOPEN_LOG_EVERY:
+                    log.error("Could not open the port again: %s.  Trying again in %d seconds.",
+                              e, self.REOPEN_WAIT)
+                    last_logged = now
                 time.sleep(self.REOPEN_WAIT)
             else:
-                log.info("The port is open again.")
+                if tries == 1:
+                    log.info("The port is open again.")
+                else:
+                    log.info("The port is open again.  It took %d tries over %.0f seconds.",
+                             tries, _monotonic() - start)
                 return
 
     def genDavisLoopPackets(self, N=1):
