@@ -115,7 +115,7 @@ The driver announces itself in the log at startup, with its version and the opti
 running with:
 
 ```
-INFO user.vantagenext: Driver version is 3.3
+INFO user.vantagenext: Driver version is 3.4
 INFO user.vantagenext: type               : serial (weewx.conf)
 INFO user.vantagenext: port               : /dev/vantage (weewx.conf)
 INFO user.vantagenext: baudrate           : 19200 (default)
@@ -127,7 +127,7 @@ INFO user.vantagenext: iss_id             : read from the console (default)
 INFO user.vantagenext: model_type         : 2 (default)
 INFO user.vantagenext: loop_request       : 1 (default)
 INFO user.vantagenext: time change windows derived from the OS timezone database
-INFO user.vantagenext: time_change_window : 2026: 2026-11-01 00:55:00-2026-11-01 02:05:00
+INFO user.vantagenext: time_change_window : 2027: 2027-03-14 01:55:00-2027-03-14 03:05:00
 ...
 INFO user.vantagenext: ISS ID is 1
 INFO user.vantagenext: Hardware name: Vantage Pro2

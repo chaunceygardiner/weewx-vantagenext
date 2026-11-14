@@ -33,7 +33,7 @@ from weewx.crc16 import crc16
 log = logging.getLogger(__name__)
 
 DRIVER_NAME = 'VantageNext'
-DRIVER_VERSION = '3.3'
+DRIVER_VERSION = '3.4'
 
 int2byte = struct.Struct(">B").pack
 

@@ -2,7 +2,7 @@
 title: Upgrading
 layout: default
 nav_order: 10
-description: What existing weewx-vantagenext users need to do when upgrading — nothing for 3.3, 3.2 and 3.1 beyond a clock_check warning, the clock options retired and max_drift in 3.0, the live iss_id line in 2.3, [[dst_periods]] in 2.0, and the WeeWX 5 requirement.
+description: What existing weewx-vantagenext users need to do when upgrading — nothing for 3.4 beyond a log watcher's patterns, nothing for 3.3, 3.2 and 3.1 beyond a clock_check warning, the clock options retired and max_drift in 3.0, the live iss_id line in 2.3, [[dst_periods]] in 2.0, and the WeeWX 5 requirement.
 ---
 
 # Upgrading
@@ -26,6 +26,22 @@ to change by hand, newest first.  Read down to the release you are coming from.
 
 The full history is in the
 [change history](https://github.com/chaunceygardiner/weewx-vantagenext/blob/master/changes.md).
+
+## To 3.4
+
+Nothing to change in `weewx.conf`.  The driver now logs every option it reads at startup,
+with the value in force and whether it came from `weewx.conf` or is the default
+([Confirming it took](installation.md#confirming-it-took)): an option you set that shows
+`(default)` is misspelled or in the wrong section.  A time change day, 23 or 25 hours, is now
+centered on its own length ([What the driver does](clock.md#what-the-driver-does)).  A port
+that will not open after five failed LOOP batches is tried every five seconds rather than
+every minute ([Any other error](recovery.md#any-other-error)).
+
+If something watches the log for this driver's lines, two have changed.  While the port is
+being opened again, a serial port that is not there is reported by the ERROR line `Could not
+open the port again` instead of the INFO line `Could not open serial port ..., sleeping 5s
+and trying again`, which is now logged at startup only; and `Socket error while opening port
+...` is no longer logged at each attempt.
 
 ## To 3.3
 

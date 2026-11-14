@@ -62,9 +62,9 @@ They are logged at startup:
 
 ```
 INFO user.vantagenext: time change windows derived from the OS timezone database
-INFO user.vantagenext: time_change_window : 2026: 2026-11-01 00:55:00-2026-11-01 02:05:00
 INFO user.vantagenext: time_change_window : 2027: 2027-03-14 01:55:00-2027-03-14 03:05:00
 INFO user.vantagenext: time_change_window : 2027: 2027-11-07 00:55:00-2027-11-07 02:05:00
+INFO user.vantagenext: time_change_window : 2028: 2028-03-12 01:55:00-2028-03-12 03:05:00
 ```
 
 {: .note }

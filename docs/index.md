@@ -46,7 +46,10 @@ keeps the clock without that cost, and solves the specific problems below.
   and starts a new one at once, and an error reading LOOP data is retried inside the
   driver rather than handed to WeeWX, where it costs a 60-second driver restart.  And the
   one place a healthy console is quiet for longer than the read timeout, the three seconds
-  after its own midnight, is waited out (3.1) rather than read as an error.  See [Read errors and recovery](recovery.md).
+  after its own midnight, is waited out (3.1) rather than read as an error.  A port that goes
+  dead — a USB adapter that drops off the bus, a WeatherLinkIP whose network goes down — is
+  closed and opened again by the driver (3.2), tried every five seconds until it is back
+  (3.4), with no WeeWX restart.  See [Read errors and recovery](recovery.md).
 - **A console clock kept centered without setting it** (3.0).  A Vantage console loses
   time all day and corrects itself just after midnight by a jump it keeps in its own memory:
   a daily sawtooth.  The driver learns the console's drift and keeps that sawtooth centered

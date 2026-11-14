@@ -16,7 +16,7 @@ description: Diagnosing weewx-vantagenext — confirming the driver is the one r
 Start here: **is this driver the one running?**  At startup it logs
 
 ```
-INFO user.vantagenext: Driver version is 3.3
+INFO user.vantagenext: Driver version is 3.4
 ```
 
 If that line is missing, `station_type` in `[Station]` is not `VantageNext`, and everything

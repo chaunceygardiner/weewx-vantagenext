@@ -53,7 +53,10 @@ problems below.
   starts a new one at once — a gap of a few seconds.  The same condition in the built-in
   driver can escalate until WeeWX restarts the driver, a 60-second outage.  And the one
   place a healthy console is quiet for longer than the read timeout, the three seconds
-  after its own midnight, is waited out (3.1) rather than read as an error.
+  after its own midnight, is waited out (3.1) rather than read as an error.  A port that goes
+  dead — a USB adapter that drops off the bus, a WeatherLinkIP whose network goes down — is
+  closed and opened again by the driver (3.2), tried every five seconds until it is back
+  (3.4), with no WeeWX restart.
   → [Read errors and recovery](https://chaunceygardiner.github.io/weewx-vantagenext/recovery.html)
 
 - **A console clock kept centered without setting it** (3.0).  A Vantage console loses
@@ -141,7 +144,7 @@ problems below.
 1. Restart WeeWX, then check the log for the driver announcing itself:
 
    ```
-   INFO user.vantagenext: Driver version is 3.3
+   INFO user.vantagenext: Driver version is 3.4
    ```
 
 The manual has the full steps, including
@@ -155,8 +158,8 @@ restart WeeWX.  An upgrade never rewrites weewx.conf, so a few things need doing
 deleting the obsolete clock options and checking `max_drift` (3.0), a live `iss_id` line that
 suppresses ISS detection (2.3), the `[[dst_periods]]` section (2.0) — and all of them are on
 the [Upgrading page](https://chaunceygardiner.github.io/weewx-vantagenext/upgrading.html).
-Nothing needs doing for 3.3: a WeatherLinkIP's clock is learned afresh and steered two days
-after the restart.  The full history is in the
+Nothing needs doing for 3.4 or 3.3 (upgrading from 3.2, a WeatherLinkIP's clock is learned
+afresh and steered two days after the restart).  The full history is in the
 [change history](https://github.com/chaunceygardiner/weewx-vantagenext/blob/master/changes.md).
 
 ## Testing
