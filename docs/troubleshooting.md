@@ -150,7 +150,7 @@ data logger's seating, or a second program holding the port.
 | `_determine_hardware; retry #...: '...'` then `Unable to read hardware type. Check for 2nd instance of weewx. Also, try power cycling. ` | At startup the console would not say what it is.  The message's own advice is good. |
 | `Inconsistent EEPROM calibration values` | The console's calibration table failed its own consistency check; the offsets are not reported. |
 | `SerialException on read.` / `SerialException on write.`, then `   ****  ...` and, on a read, `   ****  Is there a competing process running??` | The operating system reported an error on the serial port — usually that the device went away, or that something else has it open. |
-| `Socket error while opening port ... to ethernet host ....` / `Unable to connect to ethernet host ... on port ....` | `type = ethernet`: the WeatherLinkIP could not be reached. |
+| `Socket error while opening port ... to ethernet host ....` / `Unable to connect to ethernet host ... on port ....` | `type = ethernet`: the WeatherLinkIP could not be reached at startup. |
 | `ip-read error: ...` / `ip-write error: ...` | `type = ethernet`: the connection failed in use. |
 
 ## Printing live LOOP packets

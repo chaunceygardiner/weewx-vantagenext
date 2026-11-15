@@ -1,6 +1,6 @@
 # weewx-vantagenext change history
 
-## 3.4 UNRELEASED
+## 3.4 2026-11-15
 - The driver logs every option it reads at startup, with the value it uses and
   whether that came from weewx.conf or is the default: the connection's (type,
   port and baudrate, or host, tcp_port and tcp_send_delay, then timeout,
@@ -9,7 +9,8 @@
   the timeout only when it was raised to 4.5 seconds; that is now said on the
   timeout's own line.  The console's hardware name is logged too.  An option
   set in the wrong section, or misspelled, now shows as the default.
-- A 23- or 25-hour time change day is now centered on its own length.  Each
+- The console clock is now correctly centered on the 23- and 25-hour days of
+  a time change.  Each
   of the two jumps beside the day, the one that begins it (chosen the evening
   before) and the one that ends it, now makes up half of its extra or missing
   hour, so the day's drift is shared evenly either side of center.  Before,
@@ -21,7 +22,8 @@
   every five seconds instead of every minute, so LOOP data resumes within
   seconds of the console, the adapter or the WeatherLinkIP coming back.  In a
   network outage on 13 November 2026 a WeatherLinkIP was reachable again for
-  53 seconds before the minute's wait let the driver try it.  The failure is
+  53 seconds before the minute's wait let the driver try it.  With this
+  change the driver would have had it back within five seconds.  The failure is
   logged when it first happens and then once a minute, and the line that
   says the port is open again says how many tries it took and how long.
   During a reopen, a serial port that is not there is now reported by the

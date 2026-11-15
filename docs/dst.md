@@ -114,6 +114,36 @@ INFO user.vantagenext: setTime ignored during time change transition period.
 All of these are routine on the night of a time change.  None of them is expected on any
 other night.
 
+## One fall back: 1 November 2026
+
+Nine stations at one site went through the night the clocks went back: seven Envoys, a
+Vantage Pro2 console on USB and a Vantage Pro2 console behind a WeatherLinkIP, all in
+America/Los_Angeles.  Each had logged the window at startup, 00:55 to 02:05.
+
+- **Every archive record was written, once.**  From midnight daylight time to 03:00
+  standard time is four hours, 48 five-minute records, and each station's database holds
+  all 48, at their true times, with no gap and no duplicate.
+- **The second pass through the hour is where the corrections were.**  A console time of
+  01:30 is read as the first 01:30.  In the first pass that is right, and those twelve
+  records needed nothing.  In the second pass it is an hour early, and each station logged
+  the correction twelve times, once a record from 01:00 to 01:55 standard time, after the
+  one line that says the window has been entered, at 00:55:
+
+  ```
+  INFO user.vantagenext: In time change transition period.
+  INFO user.vantagenext: DST adjustment: added 3600 seconds; caller: _unpackArchivePacket
+  ```
+
+  One station's clock check also fell where the console's time read an hour off, and was
+  corrected the same way (`caller: _read_console_time`).
+- **No clock was set**, that night or the next day, on any of the nine.
+- **Reception was untouched.**  Through both passes of the repeated hour the stations heard
+  the transmitter as well as in any other hour: a median of 98 to 99.8 percent of its
+  packets a station in each pass.
+
+What the 25-hour day did to the clock keeping is in
+[Keeping the console clock](clock.md#what-the-driver-does).
+
 ## The console's own setting
 
 The console should be left to handle daylight-saving time itself (`weectl device --set-dst=auto`,

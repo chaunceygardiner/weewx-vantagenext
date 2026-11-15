@@ -32,8 +32,9 @@ The full history is in the
 Nothing to change in `weewx.conf`.  The driver now logs every option it reads at startup,
 with the value in force and whether it came from `weewx.conf` or is the default
 ([Confirming it took](installation.md#confirming-it-took)): an option you set that shows
-`(default)` is misspelled or in the wrong section.  A time change day, 23 or 25 hours, is now
-centered on its own length ([What the driver does](clock.md#what-the-driver-does)).  A port
+`(default)` is misspelled or in the wrong section.  The console clock is now
+correctly centered on the 23- and 25-hour days of a time change
+([What the driver does](clock.md#what-the-driver-does)).  A port
 that will not open after five failed LOOP batches is tried every five seconds rather than
 every minute ([Any other error](recovery.md#any-other-error)).
 

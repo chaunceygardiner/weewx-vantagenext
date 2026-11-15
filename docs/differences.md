@@ -61,7 +61,7 @@ below, the hardware catch-up, the loop-gust bookkeeping, the units, the observat
 |---|---|---|
 | **Section of `weewx.conf`** | `[Vantage]` | `[VantageNext]` |
 | **`loop_batch`, `max_batch_errors`** | How large a LOOP batch is, and how many errors one may have. | Not read: the batch is 200 at most, cut at each archive boundary, and errors are [handled differently](recovery.md). |
-| **`timeout`** | Default 4 seconds; any value is used. | Default 4.5 seconds, and a smaller value is raised to 4.5 and logged at startup: the console is silent for about four seconds at its own midnight (3.1).  See [The console's midnight](recovery.md#the-consoles-midnight). |
+| **`timeout`** | Default 4 seconds; any value is used. | Default 4.5 seconds, and a smaller value is raised to 4.5 and logged at startup: the console is silent for about three seconds at its own midnight, a gap of about four between packets (3.1).  See [The console's midnight](recovery.md#the-consoles-midnight). |
 
 ## A utility
 

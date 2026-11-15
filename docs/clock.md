@@ -99,8 +99,8 @@ it is still finishing, and the archives show the loss every month at a steady ra
 the four consoles with an archive of its own since February lost 5 to 8 percent of nights,
 about one night in fifteen.  The record for the first five minutes of the day reads anywhere from about 60
 percent down to almost nothing, with the records either side at 100.  It did not depend on the
-weather, on the size of that night's jump, on whether WeeWX was restarted, or on what the other
-consoles did that night, and clock sets are not the cause: the loss was the same on a console
+weather, on the size of that night's jump or on whether WeeWX was restarted, and clock sets
+are not the cause: the loss was the same on a console
 whose clock was never set, and it went on after the driver stopped setting the clock.  On some
 of those nights the console also stopped sending LOOP packets two to three minutes into the
 day.  Moving the download to 6 seconds did not stop it, nor did WeeWX's default of 15 seconds,
@@ -131,8 +131,10 @@ than the reception.  Four things say the packets really are lost:
   in five.  After a rewrite of the midnight jump it took about 6 seconds, never once a minute,
   and where nothing was done, the same 2 seconds as always.  The console's own count told the
   same story: 60 to 90 seconds lost per set, 2 or 3 seconds per record otherwise.
-- **At midnight, each console loses its own nights.**  On a night one console loses its
-  transmitter, the others at the same site, hearing the same ISS, almost always do not.
+- **At midnight, some consoles lose the transmitter and others do not.**  Seven consoles at
+  one site hear the same ISS.  On a night of loss, one console or several stop hearing it,
+  the several at the same moment, and the rest lose nothing.  The transmitter was sending
+  all the while.
 
 ## What the driver does
 
@@ -160,6 +162,14 @@ tonight's jump — a few hours off — would leave the clock:
   begins the day centers it, and the evening of the day itself, so that the next day is
   centered too.  The hour more or less is shared evenly either side of center: for a console
   that loses 3.3 seconds a day, an hour's drift is a seventh of a second.
+  On the 25-hour day of 1 November 2026, under 3.3, where the jump that ends the day made up
+  the whole hour, the evening decisions of eight serial and USB consoles allowed for it, and
+  each console's first reading after the next midnight was within 0.02 seconds of where its
+  decision had put it and within 0.16 of center.  For one of them the hour decided the jump:
+  3.25 seconds would have left it 0.20 behind, outside the band, and it wrote 3.50 and landed
+  0.06 ahead.  No console relearned its drift, and on the seven of them still running two
+  weeks later, and on a console behind a WeatherLinkIP, no fitted drift had moved by more
+  than 0.04 seconds a day.
 
 A jump moves in quarter-seconds, so no choice can land the clock closer to center than an
 eighth of a second, and few consoles drift by an exact quarter-second.  So the jump settles on
