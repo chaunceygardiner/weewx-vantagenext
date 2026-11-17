@@ -66,7 +66,8 @@ and changes nothing.  It has no other dependencies.
        port = /dev/ttyUSB0
    ```
 
-   For a WeatherLinkIP, `type = ethernet` and `host =` its address.
+   For a WeatherLinkIP, `type = ethernet` and `host =` its address.  For an advantage
+   console, see [An advantage console](#an-advantage-console).
 
    See [Switching from the built-in driver](#switching-from-the-built-in-driver) if
    `weewx.conf` already has a working `[Vantage]` section — nearly everyone's does.
@@ -115,7 +116,7 @@ The driver announces itself in the log at startup, with its version and the opti
 running with:
 
 ```
-INFO user.vantagenext: Driver version is 3.4.1
+INFO user.vantagenext: Driver version is 3.5
 INFO user.vantagenext: type               : serial (weewx.conf)
 INFO user.vantagenext: port               : /dev/vantage (weewx.conf)
 INFO user.vantagenext: baudrate           : 19200 (default)
@@ -137,7 +138,8 @@ INFO user.vantagenext: Clock: the console's midnight jump is 4.00 s; learning it
 Every option the driver reads is listed with the value it is using, and after it whether
 that value came from `weewx.conf` or is the default.  An option you set that shows
 `(default)` is misspelled, or is in some section other than `[VantageNext]`.  A WeatherLinkIP
-lists `host`, `tcp_port` and `tcp_send_delay` in place of `port` and `baudrate`.
+lists `host`, `tcp_port` and `tcp_send_delay` in place of `port` and `baudrate`, and an
+advantage console `host` and `tcp_port`.
 
 `iss_id : read from the console` is not a fault: it means the option is not set, and the
 `ISS ID is ...` line a moment later says what the driver read.  The `time_change_window`
@@ -145,6 +147,58 @@ lines are explained in [Daylight-saving time changes](dst.md), and the `Clock:` 
 first clock check, in [Keeping the console clock](clock.md#the-clock-lines-in-the-log).
 
 If those lines are missing, WeeWX is still running another driver: check `station_type`.
+
+## An advantage console
+
+An advantage console (3.5) is a computer that runs the advantage-console program: it listens
+to the Davis transmitters itself and answers on the network as a Davis console does.  The
+driver can talk to one in two ways.
+
+With `type = ethernet` it is a Davis console like any other, and everything in this manual
+applies to it as it does to a WeatherLinkIP.
+
+With `type = advantage` the driver asks for its LOOP packets, its archive records and its
+time with the console's own commands, in which the console stamps everything with its own
+time:
+
+```
+[VantageNext]
+    type = advantage
+    host = console1.example.com
+```
+
+What that changes:
+
+- **Every LOOP packet carries the console's time,** and the driver uses it as it arrives.
+  WeeWX therefore counts each packet in the archive period the console counted its readings
+  in.  With a Davis console a packet is stamped by the computer when it is read, and one
+  read just after an archive interval ends can hold a gust the console put in the interval
+  before.
+- **LOOP packets missed are sent again.**  After each archive download, and after a
+  connection that was lost, the console sends the packets the driver missed, for up to ten
+  minutes back.  See [An advantage console](recovery.md#an-advantage-console).
+- **Every archive record carries its own time too,** so the repeated hour when the clocks go
+  back is not ambiguous and the time change windows are not used.  See
+  [An advantage console](dst.md#an-advantage-console).
+- **The console keeps its own clock.**  The driver steers and sets nothing, and warns when
+  the clock is wrong.  See [An advantage console](clock.md#an-advantage-console).
+
+The startup lines differ accordingly:
+
+```
+INFO user.vantagenext: type               : advantage (weewx.conf)
+INFO user.vantagenext: host               : console1.example.com (weewx.conf)
+INFO user.vantagenext: tcp_port           : 22222 (default)
+...
+INFO user.vantagenext: time change windows: not used with type = advantage
+INFO user.vantagenext: Advantage console console1: version 0.2, protocol 1.
+```
+
+The last line is the console's answer when the driver asks who it is, which it does every
+time it opens the connection.  A `type = advantage` pointed at a Davis console or a
+WeatherLinkIP stops there, about five seconds after it began, with an ERROR line that says
+so (a console that was asleep is reported as one that did not answer, with the same
+advice); nothing has been written to the console.  Use `type = ethernet` for those.
 
 ## What the installer writes
 
@@ -156,7 +210,7 @@ options hardly anyone changes are not written at all.  [Configuration](configura
 covers every option, written or not.
 
 `host` is written even on a serial station, with a placeholder address.  It is ignored
-unless `type = ethernet`.
+unless `type = ethernet` or `type = advantage`.
 
 ## Upgrading
 

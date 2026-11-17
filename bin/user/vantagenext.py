@@ -17,6 +17,7 @@ import logging
 import math
 import os
 import random
+import re
 import stat
 import struct
 import sys
@@ -33,7 +34,7 @@ from weewx.crc16 import crc16
 log = logging.getLogger(__name__)
 
 DRIVER_NAME = 'VantageNext'
-DRIVER_VERSION = '3.4.1'
+DRIVER_VERSION = '3.5'
 
 int2byte = struct.Struct(">B").pack
 
@@ -98,6 +99,9 @@ class BaseWrapper:
     # from it.  SerialWrapper replaces it with the configured baudrate; a
     # WeatherLinkIP's serial side runs at this rate.
     baudrate = 19200
+    # Whether the console at the other end stamps its LOOP packets and archive
+    # records with its own time (AdvantageWrapper; see "An advantage console").
+    stamped = False
 
 
     def __init__(self, wait_before_retry, command_delay, timeout=MIN_READ_TIMEOUT):
@@ -515,6 +519,544 @@ class EthernetWrapper(BaseWrapper):
             log.error("ip-write error: %s", ex)
             # Reraise as a weewx I/O error:
             raise weewx.WeeWxIOError(ex)
+
+
+# ===============================================================================
+#                           class AdvantageWrapper
+# ===============================================================================
+
+# An advantage console
+#
+# An advantage console is a computer that listens to the transmitters itself
+# and answers on a TCP port as a Davis console does.  With type = ethernet the
+# driver talks to it as it talks to a WeatherLinkIP.  With type = advantage it
+# uses four commands of the console's own in place of the Davis ones:
+#
+#   ADVID                          the console's name, version and protocol
+#                                  number; sent after every open.
+#   ADVLOOP <mask> <n> [<after>]   n LOOP packets, each in a frame with the
+#                                  even second it is the console's state as
+#                                  of, an epoch (loop_batch).
+#   ADVDMP <after> <max>           the archive records after an epoch, each
+#                                  with the epoch that ends its interval
+#                                  (archive_records).
+#   ADVTIME                        the console's clock, as an epoch
+#                                  (_ask_time).  Nothing sets it.
+#
+# Every other command is the Davis one, on the same connection.  The driver
+# uses each stamp as it arrives: nothing is added to it and nothing rounded,
+# so a LOOP packet is counted by WeeWX in the archive period the console
+# counted its readings in; the repeated hour at fall back is two different
+# epochs, so no time change window is used; and there is no console clock
+# to steer.
+#
+# What the driver does differently for this type is in one class,
+# AdvantageProtocol (the names in parentheses above are its methods), beside
+# DavisProtocol, which names how the same things are done for a Davis
+# console.  The port says which it is (stamped), and one place asks it:
+# VantageNext.protocol.  Everything else calls the protocol and tests
+# nothing, but for one guard: the driver's own clock keeping is entered from
+# several places, and refuses a console that keeps its own clock
+# (_not_for_a_stamped_console), so that new code which reaches it by another
+# way fails loudly.  No code added for this type reads the type in weewx.conf
+# but the branch that builds the port.  (__init__ reads it once more, as it
+# always has, for _ethernet, which only the clock keeping consults and this
+# type never runs.)
+#
+# A frame is ADVANTAGE_FRAME bytes: the 99-byte Davis packet, the epoch (4
+# bytes, unsigned, low byte first) and a CRC of both, so the CRC of the whole
+# is zero.  A stamped record is ADVANTAGE_RECORD bytes: the 52-byte rev B
+# record, then the epoch.
+#
+# ADVID, after every open (_identify).  It is the guard against type =
+# advantage pointed at a Davis console or a WeatherLinkIP, which answer a line
+# they do not know with the two bytes an advantage console's own reply begins
+# with: so what tells them apart is the rest of the reply, and the driver
+# waits for it, up to the read timeout, however command_delay is set.  The
+# exchange is made on the socket itself, once, and logs nothing: a console
+# whose program has hung still accepts connections, and the reopen loop
+# (_reopen_port), which tries every few seconds for as long as it takes, says
+# why it failed once and then once a minute.  The wrapper's read and write
+# would each log a line at every attempt.
+#
+# The wake-up (wakeup_console).  A newline stops a LOOP batch, and the frames
+# the console had already written come before the two bytes that answer it:
+# one in flight or, when WeeWX leaves the LOOP in the middle of a replay, as
+# many as were asked for less one, 20,895 bytes.  The base wake-up empties
+# the input once a try, 4096 bytes, and whether that takes the answer with it
+# is a race, so against many frames it fails or succeeds seconds late.  This
+# one reads past whole frames: every frame begins LOO, as every Davis packet
+# does, the console writes every frame before the answer, and one newline
+# draws one answer.  Frames read past are not received: the last stamp does
+# not move, and the console sends them again.
+#
+# The driver always knows its place in the stream.  Four rules keep it so.
+#
+#   1. Nothing received is dropped (read).  A read that times out part way
+#      through a frame keeps what it had, the retry completes the same frame,
+#      and the wake-up takes a waiting frame whole or puts its first bytes
+#      back.  A frame is never given up on.
+#   2. One newline at a time (_awaiting).  The console answers every newline,
+#      and TCP loses none: its answer comes, behind any frames, or the
+#      connection is dead.  So a wake-up that tries again reads again and
+#      does not ask again; a second newline would leave a second answer for
+#      the next command to read as its ACK.
+#   3. A place that is not known is not guessed at (resync).  Bytes waiting
+#      that were never asked for, bytes that are neither a frame nor the
+#      answer, a reply given up on part way (ADVTIME, ADVDMP, and a Davis
+#      command's reply with a CRC: get_data_with_crc16 here asks once,
+#      where the base asks again with RESEND): the connection is closed and
+#      a new one opened, which holds nothing of the old one's.
+#      A flush removes only what has already arrived, and what comes after
+#      it would be read as something else.  The last stamp is the driver's
+#      and is not touched, so the next ADVLOOP has the console send again
+#      whatever was missed.
+#   4. The port knows whether it has a connection, and a wake-up that finds
+#      it has none opens one (_connect).  The console closes every
+#      connection, and refuses new ones, while its receiver restarts: a read
+#      that returns nothing, or a read or write that fails with anything but
+#      the read's own timeout, has found the connection gone, and drops it
+#      (_lost).  A read that times out has not: a stall is not a close.
+#      LOOP, the download and the clock check each begin with the wake-up,
+#      so each rides out a restart the same way.  No connect sooner than
+#      ADVANTAGE_RESYNC_WAIT after the last one began, whether for a resync
+#      or a wake-up, so a console that garbles or refuses every connection
+#      is not tried as fast as it answers; and a connect that fails says why
+#      at the first failure and then once in REOPEN_LOG_EVERY seconds, as
+#      the reopen loop does.
+#
+# The port's conditions, all of them:
+#
+#   no connection           no socket, or a closed one (connected() asks the
+#                           socket; there is no flag to disagree with it).
+#                           Nothing awaited and nothing kept: both are
+#                           cleared where the socket is closed (_drop).
+#                           Read and write fail at once; closePort says no
+#                           farewell; a resync does nothing.
+#   idle                    an open socket, _awaiting False.
+#   a newline outstanding   an open socket, _awaiting True.
+#
+#   the port is made                               no connection
+#   openPort succeeds                              idle
+#   openPort fails (the connect, or ADVID);        no connection
+#   closePort; a resync; a read of nothing; a
+#   read or write that fails but for a timeout
+#   a read times out                               unchanged
+#   the wake-up writes its newline                 a newline outstanding
+#   the wake-up reads its answer                   idle
+#   a wake-up runs out of tries on timeouts        unchanged: the next one
+#                                                  writes no newline
+#
+#   _awaiting            as above.
+#   _partial             what a read that timed out had received; empty when
+#                        a read completes and with no connection.
+#   _last_connect_at     when _connect last began; None, never.
+#   _connect_logged_at   when _connect last said why it failed; None after a
+#                        connect that succeeded.
+#
+# The base wake-up's flush and its second, "rude" read are not here: they are
+# for a console that may be asleep, on a stream with no way to tell a packet
+# from an answer.
+#
+# The last stamp received (AdvantageProtocol._last_stamp) is the one piece of
+# state:
+#
+#   the protocol is made (with the         None: the first batch asks for no
+#   driver object)                         replay.
+#   a frame passes its CRC                 that frame's epoch, before it is
+#                                          decoded: one that cannot be decoded
+#                                          is not asked for again.
+#   a frame fails its CRC                  unchanged, and the batch ends: the
+#                                          next batch's request has the
+#                                          console send that frame again.
+#   a read fails; frames are read past     unchanged.
+#   by the wake-up; a download, a clock
+#   check, any other command; the port
+#   is closed and opened again
+#
+# It is read in one place, the ADVLOOP line, where it is <after>: the console
+# first sends the frames it holds with a later stamp (it keeps ten minutes of
+# them), so no LOOP packet is lost across a download or a reopen.
+
+# The size of a stamped LOOP frame and of a stamped archive record, the most
+# records one ADVDMP brings, and the protocol number this driver knows.
+ADVANTAGE_FRAME = 105
+ADVANTAGE_RECORD = 56
+ADVANTAGE_DMP_MAX = 512
+# One number is known, so a console that speaks another can only be newer,
+# and _ask_identity refuses it with the advice to upgrade this driver.  When
+# a second number is added here, revisit that refusal: whether a console on
+# the older number is still spoken to, and if not, which side its message
+# tells the reader to upgrade.
+ADVANTAGE_PROTOCOL = 1
+# The wake-up reads past no more frames than this before it takes the bytes
+# for something else: more than the 199 that can be waiting (a request's 200
+# less the one that broke the LOOP).  A bound, not a retry count.
+ADVANTAGE_DRAIN_FRAMES = 250
+# No connection is opened by a resync or a wake-up (_connect) sooner than this
+# many seconds after the last such attempt began.
+ADVANTAGE_RESYNC_WAIT = 5
+# ADVID's reply is read no further than this.  The longest a console sends is
+# 217 bytes: the fixed word, and three fields of at most 63 characters.
+ADVANTAGE_ID_MAX = 256
+
+
+class AdvantageWrapper(EthernetWrapper):
+    """The connection to an advantage console: see "An advantage console"."""
+
+    stamped = True
+    # See "An advantage console": the socket (None until the first open);
+    # what an interrupted read had received; whether a wake-up newline is
+    # unanswered; when _connect last began; when it last logged a failure.
+    socket = None
+    _partial = b''
+    _awaiting = False
+    _last_connect_at = None
+    _connect_logged_at = None
+
+    NO_CONNECTION = "no connection to the console"
+
+    def __init__(self, host, port, timeout, wait_before_retry, command_delay):
+        # No pause after a write: that is for a WeatherLinkIP.
+        super().__init__(host, port, timeout, 0.0, wait_before_retry, command_delay)
+
+    def connected(self):
+        """Whether the port has a connection.  Asked of the socket, which
+        cannot disagree with itself as a flag kept beside it could."""
+        return self.socket is not None and self.socket.fileno() != -1
+
+    def _drop(self):
+        """To no connection: the socket closed, nothing awaited, nothing
+        kept.  No farewell newline: nothing more is to be read from it."""
+        self._partial = b''
+        self._awaiting = False
+        if self.socket is not None:
+            try:
+                self.socket.close()
+            except OSError:
+                pass
+
+    def _lost(self, seen):
+        log.error("Lost the connection to the console (%s).", seen)
+        self._drop()
+
+    def read(self, chars=1):
+        """Read bytes from the console.  This port never drops a byte it has
+        received while it has the connection they came on: a read that times
+        out part way keeps what it had, and the next read starts with it.
+        The base read drops it, which in the middle of a stamped frame
+        leaves the stream at an unknown place inside one, where neither a
+        retry nor the wake-up (which knows a frame by its first bytes) can
+        find a frame again.  Kept, the retry completes the same frame.
+
+        A read that returns nothing, or fails with anything but its own
+        timeout, has found the connection gone: it is dropped, and the next
+        wake-up opens another."""
+        import socket
+        if not self.connected():
+            raise weewx.WeeWxIOError(AdvantageWrapper.NO_CONNECTION)
+        _buffer, self._partial = self._partial, b''
+        while len(_buffer) < chars:
+            try:
+                _recv = self.socket.recv(min(4096, chars - len(_buffer)))
+            except socket.timeout as ex:
+                # A stall is not a close.
+                self._partial = _buffer
+                log.error("ip-read error: %s", ex)
+                # Reraise as a weewx I/O error:
+                raise weewx.WeeWxIOError(ex)
+            except socket.error as ex:
+                self._lost(ex)
+                raise weewx.WeeWxIOError(ex)
+            if not _recv:
+                self._lost("the console closed it")
+                raise weewx.WeeWxIOError("Expected %d characters; got zero instead"
+                                         % (chars - len(_buffer),))
+            _buffer += _recv
+        # More than was asked for is only ever what was kept from before.
+        self._partial = _buffer[chars:]
+        return _buffer[:chars]
+
+    def write(self, data):
+        """Write to the console.  No pause after it (that is for a
+        WeatherLinkIP).  A write that fails has found the connection gone,
+        or has sent an unknown part of the data: either way it is dropped."""
+        import socket
+        if not self.connected():
+            raise weewx.WeeWxIOError(AdvantageWrapper.NO_CONNECTION)
+        try:
+            self.socket.sendall(data)
+        except (socket.timeout, socket.error) as ex:
+            self._lost(ex)
+            # Reraise as a weewx I/O error:
+            raise weewx.WeeWxIOError(ex)
+
+    def queued_bytes(self):
+        if not self.connected():
+            return 0
+        return len(self._partial) + super().queued_bytes()
+
+    def flush_input(self):
+        # The only sound meaning of "discard what is waiting" on this port:
+        # what has not yet arrived goes too.  Nothing calls it for this type.
+        self.resync("a flush was asked for")
+
+    def closePort(self):
+        if not self.connected():
+            # Nothing to say goodbye to, and nothing to log.
+            self._drop()
+            return
+        self._partial = b''
+        self._awaiting = False
+        super().closePort()
+
+    def resync(self, why):
+        """The driver does not know its place in the stream: close the
+        connection and open a new one, which holds nothing of the old one's.
+        With no connection there is no place to have lost, and the next
+        wake-up opens one.  Raises what openPort raises if the console
+        cannot be reached; the port then has no connection."""
+        if not self.connected():
+            return
+        log.error("Lost its place in what the console sends (%s); opening a new connection.",
+                  why)
+        self._drop()
+        self._connect()
+
+    def _replace(self, why):
+        """A new connection (resync), for whatever gave up on a reply and
+        then raises its own error or tries again (get_data_with_crc16 here,
+        the ADVDMP and ADVTIME readers): a connect that fails is not raised
+        over that, and the next wake-up opens the connection."""
+        try:
+            self.resync(why)
+        except weewx.WeeWxIOError:
+            pass
+
+    def get_data_with_crc16(self, nbytes, prompt=None, max_tries=3):
+        """Get a packet of data and check its CRC: see the base.  Here the
+        reply is read once, whatever max_tries is, and RESEND is never
+        written.  TCP loses nothing, so a reply that has not come is late:
+        asked for again, a second copy follows the first, and this port's
+        read, which keeps what a read that timed out had received, would
+        return the first and leave the second to be read as the next reply.
+        A reply not read whole and good gets a new connection (rule 3 of
+        "An advantage console"), and the caller asks again on that."""
+        if prompt:
+            self.write(prompt)
+        try:
+            _buffer = self.read(nbytes)
+        except weewx.WeeWxIOError:
+            self._replace("a reply was not read to its end")
+            raise
+        if crc16(_buffer) == 0:
+            return _buffer
+        self._replace("a reply failed its CRC")
+        log.error("Unable to pass CRC16 check while getting data")
+        raise weewx.CRCError("Unable to pass CRC16 check while getting data")
+
+    def _connect(self):
+        """Open a connection where there is none, for a resync or a wake-up.
+        No sooner than ADVANTAGE_RESYNC_WAIT after the last such attempt
+        began, a resync's or a wake-up's.  A failure is logged by the reopen
+        loop's rule (the first, then the first one REOPEN_LOG_EVERY seconds
+        or more after the last line) and raised.  Only WeeWxIOError is caught, so a shutdown
+        passes through the wait and the open."""
+        if self._last_connect_at is not None:
+            wait = ADVANTAGE_RESYNC_WAIT - (_monotonic() - self._last_connect_at)
+            if wait > 0:
+                time.sleep(wait)
+        self._last_connect_at = _monotonic()
+        try:
+            self.openPort(reopening=True)
+        except weewx.WeeWxIOError as e:
+            now = _monotonic()
+            if (self._connect_logged_at is None
+                    or now - self._connect_logged_at >= VantageNext.REOPEN_LOG_EVERY):
+                log.error("Could not open a new connection: %s.", e)
+                self._connect_logged_at = now
+            raise
+
+    def openPort(self, reopening=False):
+        # A new connection has nothing of the old one's, and the old one, if
+        # it is somehow still open, is not left behind holding a session.
+        self._drop()
+        super().openPort(reopening)
+        try:
+            name, version = self._identify()
+        except weewx.WeeWxIOError as e:
+            # The reopen loop and _connect do their own logging.
+            if not reopening:
+                log.error("%s.", e)
+            raise
+        self._connect_logged_at = None
+        log.info("Advantage console %s: version %s, protocol %d.", name, version,
+                 ADVANTAGE_PROTOCOL)
+
+    def _identify(self):
+        """Ask the console who it is: (name, version).  Anything but an
+        advantage console speaking this driver's protocol closes the socket
+        and raises WeeWxIOError with the reason, which carries no closing
+        period: both callers add their own.  Nothing is logged here."""
+        try:
+            return self._ask_identity()
+        except weewx.WeeWxIOError:
+            self.socket.close()
+            raise
+
+    def _exchange(self, data, done):
+        """Send data on the socket, then receive until done(buffer) or
+        ADVANTAGE_ID_MAX bytes.  Returns the buffer and how receiving ended:
+        None (done), 'timeout', 'closed', or the socket's error.  Each
+        receive takes whatever part of the reply has come, so a reply split
+        across segments is put together; the whole exchange is given the
+        read timeout, however many pieces the reply comes in."""
+        import socket
+        buffer = b''
+        deadline = _monotonic() + self.timeout
+        try:
+            self.socket.sendall(data)
+            while not done(buffer) and len(buffer) < ADVANTAGE_ID_MAX:
+                remaining = deadline - _monotonic()
+                if remaining <= 0:
+                    return buffer, 'timeout'
+                self.socket.settimeout(remaining)
+                received = self.socket.recv(ADVANTAGE_ID_MAX - len(buffer))
+                if not received:
+                    return buffer, 'closed'
+                buffer += received
+        except socket.timeout:
+            return buffer, 'timeout'
+        except ConnectionError:
+            return buffer, 'closed'
+        except OSError as e:
+            return buffer, e
+        finally:
+            # The timeout every later read is made with.
+            try:
+                self.socket.settimeout(self.timeout)
+            except OSError:
+                pass
+        return buffer, None
+
+    def _ask_identity(self):
+        where = (self.host, self.port)
+
+        def refuse(ended, answered):
+            """What a closed connection or a socket error is refused with.
+            Each reason says what was seen: a connection closed before any
+            answer is what a console with all its connections taken does;
+            one closed after an answer is not."""
+            if ended == 'closed' and not answered:
+                return weewx.WeeWxIOError(
+                    "%s port %d closed the connection as soon as it was opened; an advantage "
+                    "console does this when it has as many connections as it allows" % where)
+            if ended == 'closed':
+                return weewx.WeeWxIOError("%s port %d closed the connection before it had "
+                                          "said what it is" % where)
+            if answered:
+                return weewx.WeeWxIOError("%s port %d began to answer, and the connection "
+                                          "failed before it had said what it is (%s)"
+                                          % (where + (ended,)))
+            # A hung advantage console; or a Davis console that is asleep,
+            # which can need a second newline (the guard asks only once, to
+            # stay quiet in the reopen loop), so the reason names that too.
+            return weewx.WeeWxIOError("%s port %d accepted the connection and did not answer "
+                                      "(%s).  If it is a Davis console, it wants type = ethernet"
+                                      % (where + (ended,)))
+
+        answer, ended = self._exchange(b'\n', lambda buffer: len(buffer) >= 2)
+        if ended == 'timeout':
+            raise refuse('timed out', bool(answer))
+        if ended is not None:
+            raise refuse(ended, bool(answer))
+        if answer != b'\n\r':
+            raise weewx.WeeWxIOError("%s port %d answered a newline with %r, which is not a "
+                                     "console's answer" % (where + (answer,)))
+        # A whole reply is \n\r OK \n\r the line \n\r: three line endings.
+        reply, ended = self._exchange(b'ADVID\n', lambda buffer: buffer.count(b'\n\r') >= 3)
+        if ended is not None and ended != 'timeout':
+            raise refuse(ended, True)
+        if ended == 'timeout' and b'OK' not in reply:
+            # A Davis console answers a line it does not know with \n\r and
+            # nothing more.  What is known is only that: the reason says so,
+            # and what to do if that is what this is.
+            raise weewx.WeeWxIOError(
+                "%s port %d answered a newline and did not answer ADVID, as a Davis console "
+                "or a WeatherLinkIP does not.  If it is one, it wants type = ethernet" % where)
+        if ended == 'timeout':
+            # Begun, and not finished in time: said as that, not as an
+            # answer that is not an advantage console's.
+            raise refuse('timed out', True)
+        fields = None
+        if reply.startswith(b'\n\rOK\n\r') and reply.endswith(b'\n\r') \
+                and reply.count(b'\n\r') == 3:
+            fields = reply[6:-2].split(b' ')
+        if (fields is None or len(fields) != 4 or fields[0] != b'advantage-console'
+                or not fields[1].isdigit()):
+            raise weewx.WeeWxIOError("%s port %d answered ADVID with %r, which is not an "
+                                     "advantage console's answer" % (where + (reply,)))
+        if int(fields[1]) != ADVANTAGE_PROTOCOL:
+            raise weewx.WeeWxIOError(
+                "%s port %d speaks advantage protocol %s; this driver knows %d.  Upgrade "
+                "weewx-vantagenext" % (where + (fields[1].decode('ascii'), ADVANTAGE_PROTOCOL)))
+        return fields[3].decode('ascii', 'replace'), fields[2].decode('ascii', 'replace')
+
+    def wakeup_console(self, max_tries=3):
+        """Get the console's attention: one newline, the frames it had
+        written before it read it, and its one answer.  See "An advantage
+        console" for the rules this keeps."""
+
+        for count in range(max_tries):
+            try:
+                if not self.connected():
+                    # A connect that fails is this try's failure.
+                    self._connect()
+                if not self._awaiting:
+                    # Nothing has been asked, so nothing but LOOP frames can
+                    # be waiting.  A look at what is, with no wait: it is put
+                    # back.
+                    waiting = self.queued_bytes()
+                    if waiting:
+                        head = self.read(min(2, waiting))
+                        self._partial = head + self._partial
+                        if not b'LO'.startswith(head):
+                            self.resync("bytes were waiting that it had not asked for")
+                    self.write(b'\n')
+                    self._awaiting = True
+                _resp = self.read(2)
+                frames = 0
+                while _resp == b'LO' and frames < ADVANTAGE_DRAIN_FRAMES:
+                    try:
+                        self.read(ADVANTAGE_FRAME - 2)
+                    except weewx.WeeWxIOError:
+                        # A frame is read past whole or not at all: its
+                        # first two bytes go back in front of what the
+                        # failed read kept.  Not when the read found the
+                        # connection gone: nothing of it is kept.
+                        if self.connected():
+                            self._partial = _resp + self._partial
+                        raise
+                    frames += 1
+                    _resp = self.read(2)
+                if _resp == b'\n\r':
+                    self._awaiting = False
+                    log.debug("Wake up of console successful, past %d frames", frames)
+                    return
+                # The new connection is clean: the next try asks on it.
+                if _resp == b'LO':
+                    self.resync("more frames were waiting than a LOOP batch can leave")
+                else:
+                    self.resync("bytes came that are neither a frame nor the answer to a "
+                                "newline")
+            except weewx.WeeWxIOError:
+                pass
+
+            log.debug("Retry #%d unable to wake up console... sleeping", count)
+            time.sleep(self.wait_before_retry)
+
+        log.error("Unable to wake up Vantage console")
+        raise weewx.WakeupError("Unable to wake up Vantage console")
 
 
 # ===============================================================================
@@ -1148,19 +1690,21 @@ class VantageNext(weewx.drivers.AbstractDevice):
 
         Args:
 
-            connection_type: The type of connection (serial|ethernet) [Required]
+            connection_type: The type of connection (serial|ethernet|advantage)
+            [Required]
 
             port: The serial port of the VP. [Required if serial/USB
             communication]
 
-            host: The Vantage network host [Required if Ethernet communication]
+            host: The Vantage network host [Required if ethernet or advantage]
 
             baudrate: Baudrate of the port. [Optional. Default 19200]
 
             tcp_port: TCP port to connect to [Optional. Default 22222]
 
             tcp_send_delay: Block after sending data to WeatherLinkIP to allow it
-            to process the command [Optional. Default is 0.5]
+            to process the command [Optional. Default is 0.5.  Not used with
+            an advantage console]
 
             timeout: How long to wait before giving up on a response from the
             serial port. [Optional. Default is 4.5, and a smaller value is
@@ -1244,13 +1788,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
         self.clock_drift_secs = 0.0
         self.day_start_jump = 0.0
         self.clock_recenter_threshold = VantageNext.CLOCK_FALLBACK_THRESHOLD
-        now = time.time()
-        self.time_change_windows = VantageNext.derive_time_change_windows(
-            now - 86400, now + 10 * 366 * 86400)
-        log.info('time change windows derived from the OS timezone database')
-        for key in self.time_change_windows:
-            for window in self.time_change_windows[key]:
-                log.info('time_change_window : %s: %s-%s' % (key, window[0], window[1]))
+        self.time_change_windows = self.protocol.time_change_windows()
         self.save_day_rain = None
         self.max_dst_jump = 7200
 
@@ -1352,6 +1890,24 @@ class VantageNext(weewx.drivers.AbstractDevice):
             t = t_next
         return windows
 
+    # The port the protocol was chosen for, and the protocol: see protocol.
+    _protocol = None
+
+    @property
+    def protocol(self):
+        """How this console's kind does each thing the two kinds do
+        differently: a DavisProtocol or an AdvantageProtocol (see "An
+        advantage console").  It is chosen here, from the port, and nowhere
+        else: the rest of the driver asks it and tests nothing.  Made the
+        first time it is asked for, and kept for as long as the port is the
+        same object (a reopen keeps the port, so in weewxd that is the life
+        of the driver)."""
+        port = self.port
+        if self._protocol is None or self._protocol[0] is not port:
+            kind = AdvantageProtocol if port.stamped else DavisProtocol
+            self._protocol = (port, kind(self))
+        return self._protocol[1]
+
     def openPort(self):
         """Open up the connection to the console"""
         self.port.openPort()
@@ -1382,7 +1938,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
             # on the VP (somewhere around 220).
             for i in range(self.LOOP_BATCH_TRIES):
                 try:
-                    for _loop_packet in self.genDavisLoopPackets(200):
+                    for _loop_packet in self.protocol.loop_batch(200):
                         yield _loop_packet
                     break
                 except weewx.WeeWxIOError as e:
@@ -1410,10 +1966,10 @@ class VantageNext(weewx.drivers.AbstractDevice):
         No reopen begins sooner than REOPEN_WAIT after the last one
         succeeded.  That is the one pause the cycle is sure of: when each
         batch fails at once (a console that answers the wake-up and does not
-        acknowledge the LOOP request) and the port opens at its first try,
-        nothing else in it waits, and it would turn, and log, as fast as the
-        link answers.  The first reopen after healthy running is never
-        delayed."""
+        acknowledge the LOOP request, a frame that fails its CRC every time)
+        and the port opens at its first try, nothing else in it waits, and
+        it would turn, and log, as fast as the link answers.  The first
+        reopen after healthy running is never delayed."""
         if self._last_reopen_at is not None:
             wait = self.REOPEN_WAIT - (_monotonic() - self._last_reopen_at)
             if wait > 0:
@@ -1562,21 +2118,24 @@ class VantageNext(weewx.drivers.AbstractDevice):
             return now + until_end
         return None
 
-    def genArchiveRecords(self, since_ts):
+    def genArchiveRecords(self, since_ts, progress_fn=None):
         """A generator function to return archive packets from a Davis Vantage station.
 
         Args:
             since_ts(float|None): A timestamp. All data since (but not including) this time
                 will be returned. Pass in None for all data
+            progress_fn: An advantage console only (its dump): called, with
+                no argument, before each request, a retry's among them.
 
         Yields:
             dict: a sequence of dictionaries containing the data
         """
 
+        protocol = self.protocol
         count = 0
         while count < self.max_tries:
             try:
-                for _record in self.genDavisArchiveRecords(since_ts):
+                for _record in protocol.archive_records(since_ts, progress_fn):
                     # Successfully retrieved record. Set count back to zero.
                     count = 0
                     since_ts = _record['dateTime']
@@ -1586,9 +2145,10 @@ class VantageNext(weewx.drivers.AbstractDevice):
             except weewx.WeeWxIOError as e:
                 # Problem. Increment retry count
                 count += 1
-                log.error("DMPAFT try #%d; error: %s", count, e)
+                # The line names the command, which is the protocol's.
+                protocol.log_download_try(count, e)
 
-        log.error("DMPAFT max tries (%d) exceeded.", self.max_tries)
+        protocol.log_download_gave_up()
         raise weewx.RetriesExceeded("Max tries exceeded while getting archive data.")
 
     def genDavisArchiveRecords(self, since_ts):
@@ -1664,7 +2224,30 @@ class VantageNext(weewx.drivers.AbstractDevice):
             # The starting index for pages other than the first is always zero
             _start_index = 0
 
+    @staticmethod
+    def _add_derived(_record):
+        """Because the dump command does not go through the normal weewx
+        engine pipeline, we have to add these important software derived
+        variables here."""
+        import weewx.wxformulas
+        try:
+            T = _record['outTemp']
+            R = _record['outHumidity']
+            W = _record['windSpeed']
+
+            _record['dewpoint'] = weewx.wxformulas.dewpointF(T, R)
+            _record['heatindex'] = weewx.wxformulas.heatindexF(T, R)
+            _record['windchill'] = weewx.wxformulas.windchillF(T, W)
+        except KeyError:
+            pass
+
     def genArchiveDump(self, progress_fn=None):
+        """Every archive record the console holds, as this console's kind
+        dumps them (see protocol).  The arguments and what is yielded are
+        genDavisArchiveDump's."""
+        return self.protocol.archive_dump(progress_fn)
+
+    def genDavisArchiveDump(self, progress_fn=None):
         """
         A generator function to return all archive packets in the memory of a Davis Vantage station.
 
@@ -1675,8 +2258,6 @@ class VantageNext(weewx.drivers.AbstractDevice):
         Yields: a sequence of dictionaries containing the data
 
         """
-        import weewx.wxformulas
-
         # Wake up the console...
         self.port.wakeup_console(self.max_tries)
         # ... request a dump...
@@ -1705,19 +2286,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
                 # Unpack the raw archive packet:
                 _record = self._unpackArchivePacket(_record_string)
 
-                # Because the dump command does not go through the normal weewx
-                # engine pipeline, we have to add these important software derived
-                # variables here.
-                try:
-                    T = _record['outTemp']
-                    R = _record['outHumidity']
-                    W = _record['windSpeed']
-
-                    _record['dewpoint'] = weewx.wxformulas.dewpointF(T, R)
-                    _record['heatindex'] = weewx.wxformulas.heatindexF(T, R)
-                    _record['windchill'] = weewx.wxformulas.windchillF(T, W)
-                except KeyError:
-                    pass
+                VantageNext._add_derived(_record)
 
                 yield _record
 
@@ -2162,6 +2731,31 @@ class VantageNext(weewx.drivers.AbstractDevice):
     #     test_a_state_file_that_cannot_be_written_costs_only_what_was_learned
     #     test_a_state_holding_nan_is_never_saved
     #
+    # TYPE = ADVANTAGE -- no state, no file; none of the rows above apply (see
+    # "An advantage console": it keeps its own clock, and stamps what it sends).
+    #   a clock check               ADVTIME; the time returned is the console's,
+    #                               its difference taken at the send.
+    #     TestClock.test_the_difference_is_taken_at_the_send
+    #     TestClock.test_a_reply_that_is_not_the_time_is_tried_again_and_then_raises
+    #     TestAdvantage.test_startup
+    #   a check, not synchronized   the same, and a warning.
+    #     TestClock.test_an_unsynchronized_clock_is_warned_and_the_time_still_returned
+    #   a forced set                nothing is set; a warning says by how much
+    #                               the two disagree, or that the console did
+    #                               not answer.
+    #     TestClock.test_set_time_sets_nothing_and_says_by_how_much_the_two_disagree
+    #     TestClock.test_set_time_when_the_console_does_not_answer_says_so_and_raises_nothing
+    #     TestAdvantage.test_a_clock_check_past_max_drift_sets_nothing_and_warns
+    #   weectl device --info        the time from ADVTIME; says the console
+    #                               keeps its own clock.
+    #     TestWeectlDevice.test_info_reads_the_time_with_advtime_and_says_the_console_keeps_its_own_clock
+    #   weectl device --set-time    says nothing was set, and why.
+    #     TestWeectlDevice.test_set_time_prints_the_sentence_and_nothing_more
+    #   a clock.json from before    neither read nor written, at a check or
+    #                               at a forced set.
+    #     TestClock.test_a_clock_json_from_before_is_neither_read_nor_changed
+    #   no time change windows      TestClock.test_no_time_change_window_is_derived_and_none_is_logged
+    #
     # Readings: every check reads precisely (3.2; half a second of GETTIMEs
     # on average, and no LOOP packet is lost to it: in 52 trials on a spare
     # console, 2026-10-07, a LOOP request sent 0-3.3 s after the console's
@@ -2475,8 +3069,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
         # batch, does not, and weewxd restarts a minute later,
         # which is right -- the console stamps its archive records with its
         # own clock, and one whose clock was not checked may be a day off.
-        error, unused_outcome = self._keep_clock(forced=False)
-        return self._now() + error
+        return self.protocol.get_time()
 
     def setTime(self):
         """Set the clock on the Davis Vantage console: step it, by a whole
@@ -2484,8 +3077,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
         sentence saying what was done, which may be nothing (weewx.engine
         ignores it; weectl device --set-time prints it)."""
 
-        unused_error, outcome = self._keep_clock(forced=True)
-        return outcome
+        return self.protocol.set_time()
 
     def getDayJump(self):
         """The console's midnight jump in seconds, from EEPROM 0x2E/0x2F, or
@@ -2499,6 +3091,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
         """Write the console's midnight jump (both bytes in one EEBWR), up to
         max_tries times: writing the same two bytes again is harmless.
         Raises RetriesExceeded if it could not be written."""
+        self._not_for_a_stamped_console("Writing the midnight jump")
         pair = jump_encode(jump)
         for unused_count in range(self.max_tries):
             try:
@@ -2727,11 +3320,22 @@ class VantageNext(weewx.drivers.AbstractDevice):
         return ("Not set: in the last %d seconds before midnight the console's daily jump may be "
                 "in progress." % VantageNext.CLOCK_PRE_MIDNIGHT)
 
+    def _not_for_a_stamped_console(self, what):
+        """The Davis clock keeping must never reach an advantage console: it
+        keeps its own clock, and several hosts may be reading it.  getTime and
+        setTime go to the console's protocol, and an advantage console's
+        never comes here; this is for whatever calls the clock code some
+        other way."""
+        if not self.protocol.keeps_console_clock:
+            raise weewx.ViolatedPrecondition(
+                "%s is not done to an advantage console, which keeps its own clock" % what)
+
     def _keep_clock(self, forced):
         """Decide whether the console clock needs anything and, if so, do it.
         Returns the clock error (console minus host, in seconds) afterwards,
         and a sentence saying what was done."""
 
+        self._not_for_a_stamped_console("Keeping the console clock")
         console_ts, now = self._poll_console()
         error = console_ts + 0.5 - now
 
@@ -3406,6 +4010,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
         that did not take reads back 0) -- or step, when it cannot be read
         back, or (a coarse error) is not.  Raises RetriesExceeded if the set
         could not be made."""
+        self._not_for_a_stamped_console("Setting the console clock")
 
         for unused_count in range(self.max_tries):
             try:
@@ -4295,7 +4900,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
 
     @staticmethod
     def _port_factory(vp_dict):
-        """Produce a serial or ethernet port object, logging its options"""
+        """Produce a serial, ethernet or advantage port object, logging its options"""
 
         configured = float(vp_dict.get('timeout', MIN_READ_TIMEOUT))
         timeout = max(configured, MIN_READ_TIMEOUT)
@@ -4323,12 +4928,32 @@ class VantageNext(weewx.drivers.AbstractDevice):
             VantageNext._log_option(vp_dict, 'tcp_send_delay', '%s s' % tcp_send_delay)
             wrapper = EthernetWrapper(hostname, tcp_port, timeout, tcp_send_delay,
                                       wait_before_retry, command_delay)
+        elif connection_type == "advantage":
+            hostname = vp_dict['host']
+            tcp_port = int(vp_dict.get('tcp_port', 22222))
+            VantageNext._log_option(vp_dict, 'host', hostname)
+            VantageNext._log_option(vp_dict, 'tcp_port', tcp_port)
+            if 'tcp_send_delay' in vp_dict:
+                # Not obsolete: it belongs to the other type (a station moved
+                # from type = ethernet has it).  One ordinary line, no warning.
+                log.info('%-19s: not used with type = advantage', 'tcp_send_delay')
+            wrapper = AdvantageWrapper(hostname, tcp_port, timeout,
+                                       wait_before_retry, command_delay)
         else:
             raise weewx.UnsupportedFeature(connection_type)
-        VantageNext._log_option(vp_dict, 'timeout', '%s s' % timeout,
-                                "weewx.conf says %s s; raised to %s s, the least a read can wait "
-                                "for the console's first packet after its midnight"
-                                % (configured, MIN_READ_TIMEOUT) if timeout != configured else None)
+        if timeout == configured:
+            VantageNext._log_option(vp_dict, 'timeout', '%s s' % timeout)
+        elif connection_type == "advantage":
+            # The same floor, which the driver's waits are worked out with;
+            # an advantage console has no silence at its midnight.
+            VantageNext._log_option(vp_dict, 'timeout', '%s s' % timeout,
+                                    "weewx.conf says %s s; raised to %s s, the least a read "
+                                    "waits with this driver" % (configured, MIN_READ_TIMEOUT))
+        else:
+            VantageNext._log_option(vp_dict, 'timeout', '%s s' % timeout,
+                                    "weewx.conf says %s s; raised to %s s, the least a read can "
+                                    "wait for the console's first packet after its midnight"
+                                    % (configured, MIN_READ_TIMEOUT))
         VantageNext._log_option(vp_dict, 'wait_before_retry', '%s s' % wait_before_retry)
         VantageNext._log_option(vp_dict, 'command_delay', '%s s' % command_delay)
         return wrapper
@@ -4341,11 +4966,14 @@ class VantageNext(weewx.drivers.AbstractDevice):
             source = 'weewx.conf' if name in vp_dict else 'default'
         log.info('%-19s: %s (%s)', name, value, source)
 
-    def _unpackLoopPacket(self, raw_loop_buffer):
+    def _unpackLoopPacket(self, raw_loop_buffer, stamp=None):
         """Decode a raw Davis LOOP packet, returning the results as a dictionary in physical units.
 
         Args:
             raw_loop_buffer(bytearray): The loop packet data buffer, passed in as a byte array
+            stamp(int|None): The console's own time for the packet, an epoch
+                (an advantage console): used as it is, nothing added and
+                nothing rounded.  None: the host's time now.
 
         Returns:
             dict: The key will be an observation type, the value will be the observation
@@ -4377,7 +5005,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
         raw_loop_packet['bucket_type'] = self.rain_bucket_type
 
         loop_packet = {
-            'dateTime': int(time.time() + 0.5),
+            'dateTime': int(time.time() + 0.5) if stamp is None else stamp,
             'usUnits': weewx.US
         }
         # Now we need to map the raw values to physical units.
@@ -4394,8 +5022,16 @@ class VantageNext(weewx.drivers.AbstractDevice):
             if val is not None:
                 loop_packet[_type] = val
 
-        # Adjust sunrise and sunset:
-        start_of_day = weeutil.weeutil.startOfDay(loop_packet['dateTime'])
+        # Adjust sunrise and sunset.  A stamp is the console's own time, and
+        # a frame stamped exactly at local midnight is the last of the day
+        # before, as an archive record stamped midnight is: its sunrise and
+        # sunset are that day's (the console works out the new day's after
+        # it).  The host's time for a Davis packet is when it was read, and
+        # says nothing so exact.
+        if stamp is None:
+            start_of_day = weeutil.weeutil.startOfDay(loop_packet['dateTime'])
+        else:
+            start_of_day = weeutil.weeutil.startOfArchiveDay(stamp)
         if 'sunrise' in loop_packet:
             loop_packet['sunrise'] += start_of_day
         if 'sunset' in loop_packet:
@@ -4437,11 +5073,15 @@ class VantageNext(weewx.drivers.AbstractDevice):
                 return dateTime + shift
         return dateTime
 
-    def _unpackArchivePacket(self, raw_archive_buffer):
+    def _unpackArchivePacket(self, raw_archive_buffer, stamp=None):
         """Decode a Davis archive packet, returning the results as a dictionary.
 
         raw_archive_buffer: The archive record data buffer, passed in as
         a string (Python 2), or a byte array (Python 3).
+
+        stamp: The console's own time for the record, an epoch (an advantage
+        console).  It is the record's time: the date and time fields and the
+        time change windows are not consulted.  None: from those fields.
 
         returns:
 
@@ -4468,17 +5108,19 @@ class VantageNext(weewx.drivers.AbstractDevice):
         raw_archive_record['bucket_type'] = self.rain_bucket_type
 
         archive_record = {
-            'dateTime': _archive_datetime(raw_archive_record['date_stamp'],
-                                          raw_archive_record['time_stamp']),
+            'dateTime': stamp,
             'usUnits': weewx.US,
             # Divide archive interval by 60 to keep consistent with wview
             'interval': int(self.archive_interval // 60),
         }
-        # If inside the time change window, we could misinterpret the console
-        # time by 1 hour.  Check for that and adjust as necessary.
-        now = datetime.datetime.now()
-        archive_record['dateTime'] = VantageNext.adjust_for_dst(
-                now, archive_record['dateTime'], VantageNext.inTimeChangeWindow(self.time_change_windows, now))
+        if stamp is None:
+            archive_record['dateTime'] = _archive_datetime(raw_archive_record['date_stamp'],
+                                                           raw_archive_record['time_stamp'])
+            # If inside the time change window, we could misinterpret the console
+            # time by 1 hour.  Check for that and adjust as necessary.
+            now = datetime.datetime.now()
+            archive_record['dateTime'] = VantageNext.adjust_for_dst(
+                    now, archive_record['dateTime'], VantageNext.inTimeChangeWindow(self.time_change_windows, now))
 
         archive_record['rxCheckPercent'] = _rxcheck(self.model_type,
                                                     archive_record['interval'],
@@ -4860,6 +5502,388 @@ _archive_map = {
 
 
 # ===============================================================================
+#                 class DavisProtocol, class AdvantageProtocol
+# ===============================================================================
+
+# What the driver does differently for the two kinds of console, one method
+# for each thing, the same names in both classes: see "An advantage console"
+# and VantageNext.protocol, the one place that chooses between them.  Each is
+# made with the driver object, and reads the driver's port, options and clock
+# when it is called, never when it is made.
+
+class DavisProtocol:
+    """A Davis console, or a WeatherLinkIP.  The code is VantageNext's own,
+    as it always was; this names it."""
+
+    keeps_console_clock = True
+
+    def __init__(self, station):
+        self.station = station
+
+    def time_change_windows(self):
+        """The time change windows, derived and logged."""
+        now = time.time()
+        windows = VantageNext.derive_time_change_windows(now - 86400, now + 10 * 366 * 86400)
+        log.info('time change windows derived from the OS timezone database')
+        for key in windows:
+            for window in windows[key]:
+                log.info('time_change_window : %s: %s-%s' % (key, window[0], window[1]))
+        return windows
+
+    def loop_batch(self, N=1):
+        return self.station.genDavisLoopPackets(N)
+
+    def archive_records(self, since_ts, progress_fn=None):
+        """The download.  progress_fn is an advantage console's only."""
+        return self.station.genDavisArchiveRecords(since_ts)
+
+    def log_download_try(self, count, e):
+        log.error("DMPAFT try #%d; error: %s", count, e)
+
+    def log_download_gave_up(self):
+        log.error("DMPAFT max tries (%d) exceeded.", self.station.max_tries)
+
+    def archive_dump(self, progress_fn=None):
+        return self.station.genDavisArchiveDump(progress_fn)
+
+    def get_time(self):
+        # The error first, then the time: see getTime.
+        error, unused_outcome = self.station._keep_clock(forced=False)
+        return self.station._now() + error
+
+    def set_time(self):
+        unused_error, outcome = self.station._keep_clock(forced=True)
+        return outcome
+
+    def warn_if_clock_check_too_long(self):
+        return self.station._warn_if_clock_check_too_long()
+
+    def onboard_time(self):
+        """The console's time, for weectl device --info."""
+        return self.station.getConsoleTime()
+
+    def show_clock(self, dest, clock_path):
+        VantageNextConfigurator._show_clock(self.station, dest, clock_path)
+
+    def weectl_set_time(self):
+        print("Setting time on console...")
+        print(self.station.setTime())
+        # The console's time, read and nothing more.  Not getTime: that runs
+        # the driver's clock keeping, which with the saved state loaded could
+        # make the day's decision and write the midnight jump from weectl.
+        newtime_ts = self.station.getConsoleTime().timestamp()
+        print("Current console time is %s" % weeutil.weeutil.timestamp_to_string(newtime_ts))
+
+    def dump_progress(self, ipage):
+        print_page(ipage)
+
+
+class AdvantageProtocol:
+    """An advantage console: see "An advantage console"."""
+
+    # Its clock is its own: the driver's clock keeping refuses to run.
+    keeps_console_clock = False
+
+    def __init__(self, station):
+        self.station = station
+
+    # The driver's, read when used: tests replace them on the driver object.
+    port = property(lambda self: self.station.port)
+    max_tries = property(lambda self: self.station.max_tries)
+    loop_request = property(lambda self: self.station.loop_request)
+
+    def _now(self):
+        return self.station._now()
+
+    def time_change_windows(self):
+        # Every record comes with its epoch, so the repeated hour is not
+        # ambiguous, and with no window nothing is corrected by an hour.
+        log.info('time change windows: not used with type = advantage')
+        return {}
+
+    # The epoch of the last stamped frame received: see "An advantage console".
+    _last_stamp = None
+
+    def loop_batch(self, N=1):
+        """Generator function to return N stamped loop packets from an
+        advantage console: see "An advantage console".
+
+        Args:
+            N(int): The number of packets to generate. Default is 1.
+
+        Yields:
+             dict: up to N loop packets, each with the console's own time
+        """
+
+        log.debug("Requesting %d stamped LOOP packets.", N)
+
+        self.port.wakeup_console(self.max_tries)
+
+        # With the last stamp received, the console first sends the frames it
+        # holds with a later one: those missed across a download or a reopen.
+        if self._last_stamp is None:
+            self.port.send_data(b"ADVLOOP %d %d\n" % (self.loop_request, N))
+        else:
+            self.port.send_data(b"ADVLOOP %d %d %d\n" % (self.loop_request, N, self._last_stamp))
+        # N frames are read, the number the console sends: a frame that
+        # cannot be decoded is one of them, and yields nothing.
+        for unused_frame in range(N):
+            for count in range(self.max_tries):
+                try:
+                    _buffer, epoch = self._get_stamped_frame()
+                except weewx.CRCError as e:
+                    # The batch ends here.  The stream is still on a frame
+                    # boundary (the port drops nothing it has received), and
+                    # the next batch's request, from the stamp before this
+                    # frame's, has the console send the frame again.  Reading
+                    # on would lose it for good: the
+                    # next good frame would move the last stamp past it.
+                    # No wait here: nothing is tried again on this batch,
+                    # and a console that sends the same bad frame every time
+                    # is paced by the reopen (_reopen_port).
+                    log.error("LOOP try #%d; error: %s", count + 1, e)
+                    raise
+                except weewx.WeeWxIOError as e:
+                    log.error("LOOP try #%d; error: %s", count + 1, e)
+                    if not self.port.connected():
+                        # The read found the connection gone, and only a
+                        # wake-up opens another: the batch ends here, and
+                        # the next batch's wake-up connects.  Trying the
+                        # read again would fail at once, every time.
+                        raise
+                    time.sleep(self.port.wait_before_retry)
+                else:
+                    break
+            else:
+                log.error("LOOP max tries (%d) exceeded.", self.max_tries)
+                raise weewx.RetriesExceeded("Max tries exceeded while getting LOOP data.")
+            try:
+                loop_packet = self.station._unpackLoopPacket(_buffer[:95], stamp=epoch)
+            except weewx.WeeWxIOError as e:
+                # Received (the last stamp has moved past it), and not asked
+                # for again: on to the next frame.
+                log.error("LOOP frame stamped %d could not be decoded: %s", epoch, e)
+                continue
+            self.station.on_bad_read = False
+            self.station.pkt_count += 1
+            yield loop_packet
+
+    def _get_stamped_frame(self):
+        """Read a single stamped LOOP frame: its bytes and its stamp, the
+        console's time for it."""
+        _buffer = self.port.read(ADVANTAGE_FRAME)
+        if crc16(_buffer):
+            raise weewx.CRCError("LOOP frame failed CRC check")
+        (epoch,) = struct.unpack_from("<I", _buffer, 99)
+        # Received, whatever decoding makes of it.
+        self._last_stamp = epoch
+        return _buffer, epoch
+
+    def archive_records(self, since_ts, progress_fn=None):
+        """A generator function to return archive records from an advantage
+        console, each under the epoch the console gives it: the end of its
+        interval.  No pages and nothing kept on the console between requests:
+        each request brings the oldest records after an epoch, and says
+        whether there are more.
+
+        This version does not catch any exceptions.
+
+        Args:
+            since_ts(float|None): All records after this time are returned;
+                None or 0 for all the console has.
+            progress_fn: If given, called before each request.
+        """
+        after = int(since_ts) if since_ts else 0
+        while True:
+            if progress_fn:
+                progress_fn()
+            self.port.wakeup_console(self.max_tries)
+            try:
+                self.port.send_data(b"ADVDMP %d %d\n" % (after, ADVANTAGE_DMP_MAX))
+                header = self.port.read(3)
+                count, more = struct.unpack("<HB", header)
+                # Checked before it sizes a read: no more than were asked for.
+                if count > ADVANTAGE_DMP_MAX:
+                    raise weewx.WeeWxIOError("ADVDMP: %d records, more than the %d asked for"
+                                             % (count, ADVANTAGE_DMP_MAX))
+                body = self.port.read(count * ADVANTAGE_RECORD + 2)
+                if crc16(header + body):
+                    raise weewx.CRCError("ADVDMP reply failed CRC check")
+            except weewx.WeeWxIOError:
+                # From the request to the end of its reply: the reply is
+                # given up on, and the rest of it may still be on its way.  A
+                # new connection, before it is asked for again (see
+                # _ask_time).  A wake-up that fails is not in here:
+                # nothing was asked.
+                self.port._replace("a reply to ADVDMP was given up on")
+                raise
+            # Every request either yields a record with a later epoch or is
+            # the last: the two checks that make this loop certain to end.
+            # A reply that fails one was read whole and passed its CRC, so
+            # asking again would bring the same reply: the download ends
+            # here, with what it has yielded, and says so.  Raised, it would
+            # be retried, fail the same way, and be handed to WeeWX, which
+            # would restart the driver into the same reply, for ever.
+            if count == 0 and more:
+                log.error("ADVDMP: the console sent no records and said there are more.  "
+                          "The download ends here.")
+                return
+            for index in range(count):
+                _record_string = body[index * ADVANTAGE_RECORD:(index + 1) * ADVANTAGE_RECORD]
+                (epoch,) = struct.unpack_from("<I", _record_string, 52)
+                if epoch <= after:
+                    log.error("ADVDMP: the console sent a record stamped %d, which is not "
+                              "after %d.  The download ends here.", epoch, after)
+                    return
+                # Past this record whatever decoding makes of it: asked
+                # for again, one that cannot be decoded would come again.
+                after = epoch
+                try:
+                    _record = self.station._unpackArchivePacket(_record_string[:52],
+                                                                stamp=epoch)
+                except weewx.UnknownArchiveType as e:
+                    # Not a WeeWxIOError: raised, it would stop WeeWX, and
+                    # at every start after it, on the same record.  Left
+                    # out, as a LOOP frame that cannot be decoded is.
+                    log.error("ADVDMP: the record stamped %d could not be decoded: %s.  "
+                              "It is left out.", epoch, e)
+                    continue
+                yield _record
+            if not more:
+                return
+
+    def log_download_try(self, count, e):
+        log.error("ADVDMP try #%d; error: %s", count, e)
+
+    def log_download_gave_up(self):
+        log.error("ADVDMP max tries (%d) exceeded.", self.max_tries)
+
+    def archive_dump(self, progress_fn=None):
+        """Every record the console has, each under its epoch: a DMP's
+        records carry none, and the repeated hour at fall back would be
+        ambiguous in a dump when it is not in a download.  Through the
+        download that retries (a console can hold years of records,
+        hundreds of requests): a request that fails is asked again from the
+        last record received, as a Davis dump retries a page."""
+        log.debug("Dumping all records.")
+        requests = 0
+
+        def progress():
+            # Each request made, a retry's among them, numbered in turn.
+            nonlocal requests
+            if progress_fn:
+                progress_fn(requests)
+            requests += 1
+        for _record in self.station.genArchiveRecords(None, progress_fn=progress):
+            VantageNext._add_derived(_record)
+            yield _record
+
+    # ADVTIME's line: the seconds with three digits of milliseconds, and a 1
+    # or a 0.  It is 16 bytes until 2286; the read gives up on a line that
+    # has not ended by ADVTIME_LINE_MAX.
+    ADVTIME_REPLY = re.compile(rb'(\d+)\.(\d{3}) ([01])')
+    ADVTIME_LINE_MAX = 32
+
+    def _ask_time(self):
+        """Ask an advantage console the time.  Returns its clock's error
+        against this host, in seconds (positive is fast), and whether it
+        reports its clock synchronized.
+
+        The console gives its clock as of when it read the command, which on
+        a local network is the send to within a millisecond: so the error is
+        taken against the host's time at the send, and the wait for the reply
+        is no part of it.  The reply is read until it is whole, each read
+        waiting up to the read timeout, however command_delay is set.
+        (send_command reads whatever has come after command_delay, gives no
+        time of the send, and its retry would hide which try the time
+        belongs to.)"""
+        for unused_count in range(self.max_tries):
+            asked = False
+            try:
+                self.port.wakeup_console(max_tries=self.max_tries)
+                sent = self._now()
+                asked = True
+                self.port.write(b'ADVTIME\n')
+                # 'OK' between line endings, then the line and its ending.
+                line = b''
+                if self.port.read(6) == b'\n\rOK\n\r':
+                    while (not line.endswith(b'\n\r')
+                           and len(line) < self.ADVTIME_LINE_MAX):
+                        line += self.port.read(1)
+                reply = self.ADVTIME_REPLY.fullmatch(line[:-2])
+                if reply and line.endswith(b'\n\r'):
+                    console = int(reply.group(1)) + int(reply.group(2)) / 1000.0
+                    return console - sent, reply.group(3) == b'1'
+            except weewx.WeeWxIOError:
+                # Caught an error. Keep retrying...
+                pass
+            # Not the time, or a read of it that failed.  This try's reply is
+            # given up on, and what there is of it (waiting, kept by the port
+            # from a read that failed part way, or still on its way) must
+            # not be read as the next try's: a new connection.  Not when it
+            # was the wake-up that failed: nothing was asked, and the port
+            # still knows its place.
+            if asked:
+                self.port._replace("a reply to ADVTIME was given up on")
+        log.error("Max retries exceeded while getting time")
+        raise weewx.RetriesExceeded("Max retries exceeded while getting time")
+
+    def set_time(self):
+        """setTime for an advantage console: nothing is set (several clients
+        would fight over one clock, and the console keeps its own from the
+        network).  Says by how much the two disagree, and returns the
+        sentence.  Raises nothing."""
+        try:
+            error, synchronized = self._ask_time()
+        except weewx.WeeWxIOError:
+            log.warning(self.NOT_SET_NO_ANSWER)
+            return self.NOT_SET_NO_ANSWER
+        # The sentence returned is the line logged.
+        reports = 'synchronized' if synchronized else 'NOT synchronized'
+        log.warning(self.NOT_SET, error, reports)
+        return self.NOT_SET % (error, reports)
+
+    # What setTime says, and logs, for an advantage console.
+    NOT_SET = ("Clock: not set.  An advantage console keeps its own clock; it reads %+.2f s "
+               "against this host (the console reports its clock %s).  Check the time service "
+               "on whichever is wrong.")
+    NOT_SET_NO_ANSWER = ("Clock: not set.  An advantage console keeps its own clock, and it "
+                         "did not answer when asked the time.")
+
+    def get_time(self):
+        """The console's time.  Its clock is asked, never kept."""
+        error, synchronized = self._ask_time()
+        if not synchronized:
+            # Not that the time is wrong: the clock error weewx.engine
+            # logs next says whether it is.
+            log.warning("Clock: the advantage console reports that its clock is not "
+                        "synchronized.")
+        return self._now() + error
+
+    def warn_if_clock_check_too_long(self):
+        """Nothing is steered, whatever clock_check is: nothing to warn of."""
+        return False
+
+    def onboard_time(self):
+        """The console's time, for weectl device --info."""
+        error, unused_synchronized = self._ask_time()
+        return datetime.datetime.fromtimestamp(int(self._now() + error))
+
+    def show_clock(self, dest, clock_path):
+        # Nothing of the console's is steered, and no state is kept.
+        print("    CONSOLE CLOCK: kept by the console itself (an advantage console); "
+              "read with ADVTIME.", file=dest)
+
+    def weectl_set_time(self):
+        # Nothing is set on an advantage console, and no GETTIME is sent
+        # to one: the sentence says what the two clocks read.
+        print(self.station.setTime())
+
+    def dump_progress(self, request):
+        print_request(request)
+
+
+# ===============================================================================
 #                      class VantageNextService
 # ===============================================================================
 
@@ -4882,7 +5906,9 @@ class VantageNextService(VantageNext, weewx.engine.StdService):
         self.engine_archive_interval = to_int(archive_dict.get('archive_interval', 300))
         self.engine_archive_delay = to_int(archive_dict.get('archive_delay', 15))
         self.record_generation = archive_dict.get('record_generation', 'hardware').lower()
-        self._warn_if_clock_check_too_long()
+        # (Nothing is steered on an advantage console, whatever clock_check
+        # is, and nothing is warned.)
+        self.protocol.warn_if_clock_check_too_long()
 
         self.max_loop_gust = 0.0
         self.max_loop_gustdir = None
@@ -5191,7 +6217,7 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
             _firmware_version = '<Unavailable>'
 
         try:
-            console_time = station.getConsoleTime()
+            console_time = station.protocol.onboard_time()
         except weewx.WeeWxIOError:
             console_time = '<Unavailable>'
         altitude_converted = weewx.units.convert(station.altitude_vt, station.altitude_unit)[0]
@@ -5253,32 +6279,7 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
         except weewx.WeeWxIOError:
             pass
 
-        # The console's midnight jump, and what the driver has learned.
-        try:
-            jump = station.getDayJump()
-        except weewx.WeeWxIOError:
-            jump_str = '<Unavailable>'
-        else:
-            jump_str = ('%.2f s' % jump if jump is not None
-                        else 'unknown (0x2E/0x2F do not hold a valid jump: a value and its '
-                             'complement, -8 to +8 s)')
-        saved = ClockState.load(clock_path) if clock_path else None
-        if saved is None:
-            state_str, drift_str = 'none saved yet', 'not yet learned'
-        else:
-            state_str = saved.state + ('' if saved.fallback_reason is None
-                                       else ': ' + saved.fallback_reason)
-            if saved.coarse and saved.state != ClockState.FALLBACK:
-                state_str += ', from whole-second readings (ethernet)'
-            drift_str = ('not yet learned' if saved.drift is None
-                         else '%+.2f s a day' % saved.drift)
-        print("""    CONSOLE CLOCK:
-      Midnight jump (EEPROM 0x2E):  %s
-      Driver's clock state:         %s
-      Learned drift:                %s""" % (jump_str, state_str, drift_str), file=dest)
-        for when, what in (saved.log[-5:] if saved is not None else []):
-            print("        %s  %s" % (time.strftime('%Y-%m-%d %H:%M', time.localtime(when)), what),
-                  file=dest)
+        station.protocol.show_clock(dest, clock_path)
         print("", file=dest)
 
         # Add transmitter types for each channel, if we can:
@@ -5391,6 +6392,35 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
                         print("      Leaf Temperature %d:           %+.1f F"
                               % (leaf, calibration_dict["leafTemp%d" % leaf]), file=dest)
         print("", file=dest)
+
+    @staticmethod
+    def _show_clock(station, dest, clock_path):
+        """The console's midnight jump, and what the driver has learned."""
+        try:
+            jump = station.getDayJump()
+        except weewx.WeeWxIOError:
+            jump_str = '<Unavailable>'
+        else:
+            jump_str = ('%.2f s' % jump if jump is not None
+                        else 'unknown (0x2E/0x2F do not hold a valid jump: a value and its '
+                             'complement, -8 to +8 s)')
+        saved = ClockState.load(clock_path) if clock_path else None
+        if saved is None:
+            state_str, drift_str = 'none saved yet', 'not yet learned'
+        else:
+            state_str = saved.state + ('' if saved.fallback_reason is None
+                                       else ': ' + saved.fallback_reason)
+            if saved.coarse and saved.state != ClockState.FALLBACK:
+                state_str += ', from whole-second readings (ethernet)'
+            drift_str = ('not yet learned' if saved.drift is None
+                         else '%+.2f s a day' % saved.drift)
+        print("""    CONSOLE CLOCK:
+      Midnight jump (EEPROM 0x2E):  %s
+      Driver's clock state:         %s
+      Learned drift:                %s""" % (jump_str, state_str, drift_str), file=dest)
+        for when, what in (saved.log[-5:] if saved is not None else []):
+            print("        %s  %s" % (time.strftime('%Y-%m-%d %H:%M', time.localtime(when)), what),
+                  file=dest)
 
     @staticmethod
     def current(station):
@@ -5800,13 +6830,7 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
 
     @staticmethod
     def set_time(station):
-        print("Setting time on console...")
-        print(station.setTime())
-        # The console's time, read and nothing more.  Not getTime: that runs
-        # the driver's clock keeping, which with the saved state loaded could
-        # make the day's decision and write the midnight jump from weectl.
-        newtime_ts = station.getConsoleTime().timestamp()
-        print("Current console time is %s" % weeutil.weeutil.timestamp_to_string(newtime_ts))
+        station.protocol.weectl_set_time()
 
     @staticmethod
     def set_dst(station, dst):
@@ -5862,7 +6886,9 @@ class VantageNextConfigurator(weewx.drivers.AbstractConfigurator):
                                                         initialize=True) as archive:
                 nrecs = 0
                 # Determine whether to use something to show our progress:
-                progress_fn = print_page if batch_size == 0 else None
+                progress_fn = None
+                if batch_size == 0:
+                    progress_fn = station.protocol.dump_progress
 
                 # Wrap the Vantage generator function in a converter, which will convert the units
                 # to the same units used by the database:
@@ -5931,9 +6957,10 @@ class VantageNextConfEditor(weewx.drivers.AbstractConfEditor):
     # better one a later release might bring.  Uncomment it to pin this
     # station to the value written here.
 
-    # Connection type: serial or ethernet
+    # Connection type: serial, ethernet or advantage
     #  serial (the classic VantagePro)
     #  ethernet (the WeatherLinkIP or Serial-Ethernet bridge)
+    #  advantage (an advantage console)
     type = serial
 
     # If the connection type is serial, a port must be specified:
@@ -5944,7 +6971,8 @@ class VantageNextConfEditor(weewx.drivers.AbstractConfEditor):
     #     /dev/cuaU0   is a common serial port name
     port = /dev/vantage
 
-    # If the connection type is ethernet, an IP Address/hostname is required:
+    # If the connection type is ethernet or advantage, an IP Address/hostname
+    # is required:
     host = 1.2.3.4
 
     # The type of LOOP packet to request: 1 = LOOP1; 2 = LOOP2; 3 = both
@@ -5964,11 +6992,11 @@ class VantageNextConfEditor(weewx.drivers.AbstractConfEditor):
 
     def prompt_for_settings(self):
         settings = dict()
-        print("Specify the hardware interface, either 'serial' or 'ethernet'.")
+        print("Specify the hardware interface: 'serial', 'ethernet' or 'advantage'.")
         print("If the station is connected by serial, USB, or serial-to-USB")
         print("adapter, specify serial.  Specify ethernet for stations with")
-        print("WeatherLinkIP interface.")
-        settings['type'] = self._prompt('type', 'serial', ['serial', 'ethernet'])
+        print("WeatherLinkIP interface, and advantage for an advantage console.")
+        settings['type'] = self._prompt('type', 'serial', ['serial', 'ethernet', 'advantage'])
         if settings['type'] == 'serial':
             print("Specify a port for stations with a serial interface, for")
             print("example /dev/ttyUSB0 or /dev/ttyS0.")
@@ -5976,12 +7004,18 @@ class VantageNextConfEditor(weewx.drivers.AbstractConfEditor):
         else:
             print("Specify the IP address (e.g., 192.168.0.10) or hostname")
             print("(e.g., console or console.example.com) for stations with")
-            print("an ethernet interface.")
+            print("an ethernet interface, or for an advantage console.")
             settings['host'] = self._prompt('host')
         return settings
 
 def print_page(ipage):
     print("Requesting page %d/512\r" % ipage, end=' ', file=sys.stdout)
+    sys.stdout.flush()
+
+def print_request(request):
+    """An advantage console's dump has no pages, and no number of requests
+    known beforehand."""
+    print("Request %d\r" % (request + 1), end=' ', file=sys.stdout)
     sys.stdout.flush()
 
 # Define a main entry point for basic testing of the station without weewx

@@ -144,6 +144,22 @@ America/Los_Angeles.  Each had logged the window at startup, 00:55 to 02:05.
 What the 25-hour day did to the clock keeping is in
 [Keeping the console clock](clock.md#what-the-driver-does).
 
+## An advantage console
+
+None of this page applies to an advantage console read with `type = advantage` (3.5).  It
+sends every archive record with the record's own time as a count of seconds, which has no
+daylight-saving time in it: the two 01:55s of the night the clocks go back arrive as two
+different times, an hour apart, whenever they are downloaded.  So the driver derives no
+windows for it, corrects nothing by the shift, and says so at startup:
+
+```
+INFO user.vantagenext: time change windows: not used with type = advantage
+```
+
+Its clock is never set by the driver either
+([Keeping the console clock](clock.md#an-advantage-console)).  With `type = ethernet` the
+same console is read as a Davis console is, and the windows apply.
+
 ## The console's own setting
 
 The console should be left to handle daylight-saving time itself (`weectl device --set-dst=auto`,

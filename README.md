@@ -79,6 +79,14 @@ problems below.
   ([Which consoles](https://chaunceygardiner.github.io/weewx-vantagenext/clock.html#which-consoles)).
   → [Keeping the console clock](https://chaunceygardiner.github.io/weewx-vantagenext/clock.html)
 
+- **An advantage console, read in its own terms** (3.5).  An advantage console is a computer
+  that listens to the Davis transmitters itself and answers on the network as a console does.
+  With `type = advantage` the driver takes every LOOP packet and archive record with the
+  console's own time on it: a reading is counted in the same archive period by WeeWX and by
+  the console, LOOP packets missed during a download or a lost connection are sent again,
+  and there is no console clock to steer.
+  → [An advantage console](https://chaunceygardiner.github.io/weewx-vantagenext/installation.html#an-advantage-console)
+
 - **The Davis sonic anemometer.**  `weectl device --set-wind-cup=3` selects it; see the
   warning above.
 
@@ -139,12 +147,13 @@ problems below.
        port = /dev/ttyUSB0
    ```
 
-   For a WeatherLinkIP, `type = ethernet` and `host =` its address.
+   For a WeatherLinkIP, `type = ethernet` and `host =` its address; for an advantage
+   console, `type = advantage` and `host =` its address.
 
 1. Restart WeeWX, then check the log for the driver announcing itself:
 
    ```
-   INFO user.vantagenext: Driver version is 3.4.1
+   INFO user.vantagenext: Driver version is 3.5
    ```
 
 The manual has the full steps, including
@@ -158,7 +167,7 @@ restart WeeWX.  An upgrade never rewrites weewx.conf, so a few things need doing
 deleting the obsolete clock options and checking `max_drift` (3.0), a live `iss_id` line that
 suppresses ISS detection (2.3), the `[[dst_periods]]` section (2.0) — and all of them are on
 the [Upgrading page](https://chaunceygardiner.github.io/weewx-vantagenext/upgrading.html).
-Nothing needs doing for 3.4 or 3.3 (upgrading from 3.2, a WeatherLinkIP's clock is learned
+Nothing needs doing for 3.5, 3.4 or 3.3 (upgrading from 3.2, a WeatherLinkIP's clock is learned
 afresh and steered two days after the restart).  The full history is in the
 [change history](https://github.com/chaunceygardiner/weewx-vantagenext/blob/master/changes.md).
 
@@ -176,8 +185,9 @@ of restarts (some in the last second before midnight), power losses, sets by han
 errors, with WeeWX's clock checks timed as WeeWX times them, run apart on a serial line,
 through a WeatherLinkIP, and with
 the console's logger replaced partway — `VNEXT_SIM_SEEDS=50` runs fifty of each instead of
-two), daylight-saving handling, the installer's config stanza, and a full WeeWX engine
-round trip into a temporary database.  A further
+two), daylight-saving handling, an advantage console's stamped packets and records (a
+replay across two archive boundaries among them, through a real WeeWX engine), the
+installer's config stanza, and a full WeeWX engine round trip into a temporary database.  A further
 set keeps the manual and the code in lockstep: every documented option and default is one
 the code actually reads, every log message the manual quotes is one the driver can write,
 and every internal link and anchor resolves.  Run it with the Python that runs WeeWX:

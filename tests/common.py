@@ -168,6 +168,147 @@ class ScriptedWrapper(vantagenext.BaseWrapper):
         return len(self.reads[0]) if self.reads and isinstance(self.reads[0], bytes) else 0
 
 
+# ===============================================================================
+#                  An advantage console's frames and replies
+# ===============================================================================
+
+# Built from the wire specification (advantage-console, design/stage2.md,
+# section 15), which is the other copy of this contract: the bytes are worked
+# out here, not copied from the driver.  TestTheSpecificationsBytes in
+# test_advantage.py holds these builders to the specification's examples.
+
+# 2026-11-15 12:00:00 UTC, the specification's worked second: the end of an
+# archive interval.
+ADV_E = 1794744000
+
+
+def make_frame(packet, epoch):
+    """A stamped LOOP frame: the 99-byte Davis packet, the epoch (4 bytes,
+    unsigned, low byte first), and the CRC of both, high byte first."""
+    assert len(packet) == 99
+    return with_crc(packet + struct.pack('<I', epoch))
+
+
+def make_stamped_record(record, epoch):
+    """A stamped archive record: the 52-byte rev B record, then the epoch."""
+    assert len(record) == 52
+    return record + struct.pack('<I', epoch)
+
+
+def advdmp_reply(records, more):
+    """What follows ADVDMP's ACK: the count (2 bytes, low byte first), the
+    more flag, the stamped records, and the CRC of all of it.  Split as the
+    driver reads it: the three header bytes, then the rest."""
+    reply = with_crc(struct.pack('<HB', len(records), 1 if more else 0) + b''.join(records))
+    return [reply[:3], reply[3:]]
+
+
+def advdmp_reads(records, more=False):
+    """Script one ADVDMP exchange: the wakeup, the ACK, the reply."""
+    return [WAKE, ACK] + advdmp_reply(records, more)
+
+
+def advtime_reply(console_time, synchronized=True):
+    """ADVTIME's reply."""
+    return b'\n\rOK\n\r%.3f %d\n\r' % (console_time, 1 if synchronized else 0)
+
+
+class Waiting(bytes):
+    """Scripted bytes that are already in the connection when they are read:
+    they go with the connection when it is replaced (ScriptedAdvantage's
+    resync), and a flush removes them."""
+
+
+def reply_reads(raw):
+    """Script the bytes `raw` as the driver reads an ADVTIME reply: six
+    bytes, which must be OK between line endings, then one byte at a time
+    to the end of the line (or 32 bytes of it).  A reply that stops short
+    is followed by a read that times out; bytes the driver leaves unread
+    are Waiting: they are still in the connection when the driver gives the
+    reply up and replaces it."""
+    if len(raw) < 6:
+        return [weewx.WeeWxIOError('timed out')]
+    reads, rest = [raw[:6]], raw[6:]
+    if raw[:6] == b'\n\rOK\n\r':
+        line = b''
+        while rest and not line.endswith(b'\n\r') and len(line) < 32:
+            reads.append(rest[:1])
+            line, rest = line + rest[:1], rest[1:]
+        if not line.endswith(b'\n\r') and len(line) < 32:
+            return reads + [weewx.WeeWxIOError('timed out')]
+    if rest:
+        assert len(rest) > 2 and rest[:2] not in (b'LO', b'\n\r')
+        reads += [Waiting(rest[:2]), Waiting(rest[2:])]
+    return reads
+
+
+def advtime_reads(console_time, synchronized=True):
+    """Script one ADVTIME reply."""
+    return reply_reads(advtime_reply(console_time, synchronized))
+
+
+def waiting_frames(frames):
+    """Frames the console wrote before it read the newline, as the wake-up
+    reads past them: two bytes, then the frame's other 103."""
+    reads = []
+    for frame in frames:
+        reads += [Waiting(frame[:2]), Waiting(frame[2:])]
+    return reads
+
+
+class ScriptedAdvantage(ScriptedWrapper):
+    """The scripted console as an advantage console: stamped, and with the
+    REAL AdvantageWrapper.wakeup_console run against the scripted bytes
+    (ScriptedWrapper itself would run the base wake-up).  What that wake-up
+    uses of the port is modeled here: the bytes it looks at and puts back
+    (_partial), what is waiting before anything is asked (the Waiting
+    entries at the head of the script), and a resync, which is recorded and
+    takes those Waiting entries with the connection it closes.  The real
+    port's partial reads and its resync are tested over a scripted socket."""
+
+    stamped = True
+    wakeup_console = vantagenext.AdvantageWrapper.wakeup_console
+    _replace = vantagenext.AdvantageWrapper._replace
+    _partial = b''
+    _awaiting = False
+
+    def __init__(self, reads=()):
+        super().__init__(reads)
+        self.resyncs = []
+
+    def connected(self):
+        return True
+
+    def read(self, chars=1):
+        if self._partial:
+            assert len(self._partial) >= chars
+            taken, self._partial = self._partial[:chars], self._partial[chars:]
+            return taken
+        return super().read(chars)
+
+    def queued_bytes(self):
+        waiting = len(self._partial)
+        for item in self.reads:
+            if not isinstance(item, Waiting):
+                break
+            waiting += len(item)
+        return waiting
+
+    def _drop_waiting(self):
+        self._partial = b''
+        while self.reads and isinstance(self.reads[0], Waiting):
+            self.reads.pop(0)
+
+    def flush_input(self):
+        super().flush_input()
+        self._drop_waiting()
+
+    def resync(self, why):
+        self.resyncs.append(why)
+        self._awaiting = False
+        self._drop_waiting()
+
+
 class FakeClock:
     """A host clock that moves only when told to, so clock-keeping tests
     neither wait nor depend on how fast the machine is."""

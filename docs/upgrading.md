@@ -27,6 +27,12 @@ to change by hand, newest first.  Read down to the release you are coming from.
 The full history is in the
 [change history](https://github.com/chaunceygardiner/weewx-vantagenext/blob/master/changes.md).
 
+## To 3.5
+
+Nothing to change.  3.5 adds a third connection type, `type = advantage`, for an advantage
+console ([An advantage console](installation.md#an-advantage-console)).  Serial, USB and
+`type = ethernet` stations run as they did.
+
 ## To 3.4.1
 
 Nothing to change.  One correction to live data: the `windGust` the driver adds to each LOOP

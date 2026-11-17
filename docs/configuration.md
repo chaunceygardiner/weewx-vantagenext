@@ -46,12 +46,12 @@ commented, and they go on working as they did.
 
 | Option | Default | Meaning |
 |---|---|---|
-| `type` | `serial` | How the console is connected: `serial` (serial or USB) or `ethernet` (a WeatherLinkIP or a serial-to-ethernet bridge).  A console connected over ethernet is read only to the whole second, and steered from the line through its readings.  See [A WeatherLinkIP](clock.md#a-weatherlinkip). |
+| `type` | `serial` | How the console is connected: `serial` (serial or USB), `ethernet` (a WeatherLinkIP or a serial-to-ethernet bridge) or `advantage` (an advantage console, 3.5).  A console connected over ethernet is read only to the whole second, and steered from the line through its readings.  See [A WeatherLinkIP](clock.md#a-weatherlinkip).  An advantage console stamps its own data and keeps its own clock.  See [An advantage console](installation.md#an-advantage-console). |
 | `port` | none | The serial port, for example `/dev/ttyUSB0`.  Required when `type = serial`. |
-| `host` | none | The console's IP address or hostname.  Required when `type = ethernet`. |
+| `host` | none | The console's IP address or hostname.  Required when `type = ethernet` or `type = advantage`. |
 | `baudrate` | `19200` | Serial baud rate.  It must match the console's own setting. |
-| `tcp_port` | `22222` | TCP port, when `type = ethernet`. |
-| `tcp_send_delay` | `0.5` | Seconds to wait after each write to a WeatherLinkIP, to let it process the command. |
+| `tcp_port` | `22222` | TCP port, when `type = ethernet` or `type = advantage`. |
+| `tcp_send_delay` | `0.5` | Seconds to wait after each write to a WeatherLinkIP, to let it process the command.  For `type = ethernet` only: with `type = advantage` there is no wait, and a `tcp_send_delay` left in `weewx.conf` is not used, which the log says at startup. |
 | `loop_request` | `1` | The LOOP packets to ask for: `1` = LOOP1, `2` = LOOP2, `3` = both, alternating. |
 | `iss_id` | read from the console | The transmitter id of the ISS.  See [below](#iss_id). |
 | `model_type` | `2` | `1` = Vantage Pro, `2` = Vantage Pro2.  Only the owner of an original Vantage Pro sets it: a Vue is detected, whatever this says. |
@@ -101,7 +101,9 @@ an anemometer transmitter kit on its own id, say.
 
 The driver keeps the console clock with no options of its own: it reads the console's
 midnight jump from the console, learns how fast the clock drifts, and keeps it centered by
-rewriting the jump.  [Keeping the console clock](clock.md) explains how.
+rewriting the jump.  [Keeping the console clock](clock.md) explains how.  (An advantage
+console keeps its own clock, and the driver steers nothing: see
+[An advantage console](clock.md#an-advantage-console).)
 
 Two options in WeeWX's own `[StdTimeSynch]` section still matter — and the driver reads
 `archive_interval`, `archive_delay` and `record_generation` from `[StdArchive]` to size the

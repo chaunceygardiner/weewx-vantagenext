@@ -59,6 +59,13 @@ keeps the clock without that cost, and solves the specific problems below.
   for a precise reading, so the driver steers it from the line through days of whole-second
   readings.  A console the driver cannot steer and a clock lost to a power failure are set
   as before.  See [Keeping the console clock](clock.md).
+- **An advantage console, read in its own terms** (3.5).  An advantage console is a computer
+  that listens to the Davis transmitters itself and answers on the network as a console does.
+  With `type = advantage` the driver takes every LOOP packet and archive record with the
+  console's own time on it, so a reading is counted in the same archive period by WeeWX and
+  by the console, the LOOP packets missed during a download or a lost connection are sent
+  again, and there is no console clock to steer.
+  See [An advantage console](installation.md#an-advantage-console).
 - **The Davis sonic anemometer.**  Newer console firmware keeps the wind cup type in a
   place, and with a third value, that the built-in driver does not write.
   `weectl device --set-wind-cup=3` selects it here; on older firmware the driver uses the
@@ -97,7 +104,7 @@ keeps the clock without that cost, and solves the specific problems below.
 - Python 3.9 or later — newer than WeeWX itself requires (3.7)
 - WeeWX 5
 - A Davis VantagePro, VantagePro2 or VantageVue, connected by serial or USB, or by ethernet
-  (WeatherLinkIP)
+  (WeatherLinkIP); or an advantage console
 
 ## Quick start
 

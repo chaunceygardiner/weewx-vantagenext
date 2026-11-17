@@ -1,5 +1,32 @@
 # weewx-vantagenext change history
 
+## 3.5 UNRELEASED
+- A third connection type, `type = advantage`, for an advantage console: a
+  computer that listens to the Davis transmitters itself and answers on the
+  network as a console does.  With it the driver asks for LOOP packets, archive
+  records and the time by the console's own commands, in which the console
+  stamps everything with its own time.  The driver uses each stamp as it
+  arrives, so a LOOP packet is counted by WeeWX in the archive period the
+  console counted its readings in; with a Davis console a packet read just
+  after an interval ends can hold a gust the console put in the interval
+  before.  After an archive download, and after a connection that was lost and
+  opened again, the console sends the LOOP packets the driver missed, for up to
+  ten minutes back.  A connection the console closes (it closes them all
+  while its receiver restarts) is opened again by the driver's next command,
+  tried every five seconds, so a clock check or an archive download rides out
+  a restart of up to about a minute (a longer one is raised to WeeWX, as an
+  outage of any console is).  Archive records come with their own times, so the repeated
+  hour of a fall back is not ambiguous and no time change window is used.  The
+  console keeps its own clock: the driver steers and sets nothing, WeeWX's
+  `Clock error` line reports the difference at every clock check, and the
+  driver warns when the console says its clock is not synchronized and when
+  WeeWX asks for a set past `max_drift`.  The console is asked who it is every
+  time the connection is opened, so `type = advantage` pointed at a Davis
+  console or a WeatherLinkIP stops with a line that says so.  `weectl device
+  --set-time` sets nothing and says how the two clocks compare, `--info` shows
+  the console's own time, and `--dump` takes every record with its own time.
+  `type = ethernet` works with an advantage console as before, as with any
+  Davis console.
 ## 3.4.1 UNRELEASED
 - A reopen of the port does not begin sooner than five seconds after the
   last one succeeded.  When five LOOP batches fail at once and the port opens

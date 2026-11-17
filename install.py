@@ -51,9 +51,10 @@ vantagenext_config = """
     # better one a later release might bring.  Uncomment it to pin this
     # station to the value written here.
 
-    # Connection type: serial or ethernet
+    # Connection type: serial, ethernet or advantage
     #  serial (the classic VantagePro)
     #  ethernet (the WeatherLinkIP or Serial-Ethernet bridge)
+    #  advantage (an advantage console)
     type = serial
 
     # If the connection type is serial, a port must be specified:
@@ -64,7 +65,8 @@ vantagenext_config = """
     #     /dev/cuaU0   is a common serial port name
     port = /dev/vantage
 
-    # If the connection type is ethernet, an IP Address/hostname is required:
+    # If the connection type is ethernet or advantage, an IP Address/hostname
+    # is required:
     host = 1.2.3.4
 
     # The type of LOOP packet to request: 1 = LOOP1; 2 = LOOP2; 3 = both
@@ -90,7 +92,7 @@ def loader():
 class VantageNextInstaller(ExtensionInstaller):
     def __init__(self):
         super(VantageNextInstaller, self).__init__(
-            version="3.4.1",
+            version="3.5",
             name='VantageNext',
             description='Capture weather observations from Vantage weather stations',
             author="John A Kline",

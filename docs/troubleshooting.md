@@ -16,7 +16,7 @@ description: Diagnosing weewx-vantagenext — confirming the driver is the one r
 Start here: **is this driver the one running?**  At startup it logs
 
 ```
-INFO user.vantagenext: Driver version is 3.4.1
+INFO user.vantagenext: Driver version is 3.5
 ```
 
 If that line is missing, `station_type` in `[Station]` is not `VantageNext`, and everything
@@ -26,7 +26,7 @@ in this manual is describing a driver you are not running.
 
 | Symptom | Likely cause |
 |---|---|
-| WeeWX will not start: `KeyError: 'port'` (or `'host'`) | `[VantageNext]` has no `port`, or `type = ethernet` with no `host`.  Settings in `[Vantage]` are not read; see [Switching from the built-in driver](installation.md#switching-from-the-built-in-driver). |
+| WeeWX will not start: `KeyError: 'port'` (or `'host'`) | `[VantageNext]` has no `port`, or `type = ethernet` or `type = advantage` with no `host`.  Settings in `[Vantage]` are not read; see [Switching from the built-in driver](installation.md#switching-from-the-built-in-driver). |
 | `Could not open serial port ...` and then a failure to start | The port named does not exist, or your WeeWX user may not open it (on Debian, serial ports belong to the `dialout` group). |
 | `SerialException on read.` with `Is there a competing process running??` | Something else has the port: a second `weewxd`, a `weectl device` left running, a modem manager. |
 | `rxCheckPercent` low in one record just after midnight, or in the record a clock set fell in | Routine: the console let go of its transmitter, for about a minute after a set, or now and then for a few minutes at midnight.  See [What it costs in reception](recovery.md#what-it-costs-in-reception). |
@@ -37,6 +37,7 @@ in this manual is describing a driver you are not running.
 | WeeWX logs `Clock error` values of two or three seconds and the driver does nothing | That can be right.  The error is a daily sawtooth as tall as the console's drift; the driver centers it and cannot flatten it.  Judge by the driver's own `off center` line. |
 | `Clock stepped ... (forced)` lines on a console the driver is steering, with no power loss, clock set by hand or [far off-center start](clock.md#a-clock-that-starts-off-center) to explain them | `max_drift` is too small and WeeWX is forcing sets.  See [Configuration](configuration.md#the-clock-and-stdtimesynch). |
 | Two startup clock lines, a moment apart | WeeWX asks for the console's time twice as it starts: the clock service's check, then the archive service as it sets its first archive period.  On a serial or USB console both are precise readings and agree to a few hundredths; on a slow link they can differ by the link's round trip, and one can be an `about` line, half a second off.  Over ethernet both are `about` lines, whole-second readings, and can differ by up to a second.  A restart where a reading is due logs that reading's lines between them.  See [the clock lines in the log](clock.md#the-clock-lines-in-the-log). |
+| WeeWX will not start: `... answered a newline and did not answer ADVID, as a Davis console or a WeatherLinkIP does not`, or `... accepted the connection and did not answer` from an address that is a Davis console | `type = advantage` is pointed at a Davis console or a WeatherLinkIP.  Use `type = ethernet`.  See [An advantage console](installation.md#an-advantage-console). |
 | Short reads in the log | Usually routine.  See [Routine, or a fault?](recovery.md#routine-or-a-fault) |
 | A warning at startup that an option is obsolete and ignored | Delete the option.  See [Obsolete options](configuration.md#obsolete-options). |
 | A warning at startup that `clock_check` is more than the driver can steer the clock with | Lower it to the figure the warning gives, or delete it for WeeWX's default.  See [Configuration](configuration.md#the-clock-and-stdtimesynch). |
@@ -118,7 +119,7 @@ driver falling back:
 |---|---|
 | `get_packet: Expected 99 chars; got .... (...)` | A truncated LOOP packet; a new batch was started at once.  Routine. |
 | `LOOP gap ... s across the console's midnight (the read waited ... s of its ... s timeout).` | Once a night: how long the console's own midnight silence held the LOOP stream, and how much of it the read waited out.  See [the recovery page](recovery.md#the-consoles-midnight). |
-| `timeout            : 4.5 s (weewx.conf says ... s; raised to 4.5 s, the least a read can wait for the console's first packet after its midnight)` | At startup: `timeout` is set below 4.5 in weewx.conf and 4.5 is used.  Delete the line or raise it. |
+| `timeout            : 4.5 s (weewx.conf says ... s; raised to 4.5 s, the least a read can wait for the console's first packet after its midnight)` / with an advantage console, `... raised to 4.5 s, the least a read waits with this driver)` | At startup: `timeout` is set below 4.5 in weewx.conf and 4.5 is used.  Delete the line or raise it. |
 | `genDavisLoopPackets: repeated bad read.` | The packet after a truncated one was truncated too. |
 | `LOOP try #...; error: ...` | A LOOP packet failed for another reason and is being retried. |
 | `LOOP max tries (...) exceeded.` followed by `genLoopPackets: Error: .... (try ...)` | Every retry failed; a new batch is being started. |
@@ -150,8 +151,44 @@ data logger's seating, or a second program holding the port.
 | `_determine_hardware; retry #...: '...'` then `Unable to read hardware type. Check for 2nd instance of weewx. Also, try power cycling. ` | At startup the console would not say what it is.  The message's own advice is good. |
 | `Inconsistent EEPROM calibration values` | The console's calibration table failed its own consistency check; the offsets are not reported. |
 | `SerialException on read.` / `SerialException on write.`, then `   ****  ...` and, on a read, `   ****  Is there a competing process running??` | The operating system reported an error on the serial port — usually that the device went away, or that something else has it open. |
-| `Socket error while opening port ... to ethernet host ....` / `Unable to connect to ethernet host ... on port ....` | `type = ethernet`: the WeatherLinkIP could not be reached at startup. |
-| `ip-read error: ...` / `ip-write error: ...` | `type = ethernet`: the connection failed in use. |
+| `Socket error while opening port ... to ethernet host ....` / `Unable to connect to ethernet host ... on port ....` | `type = ethernet` or `type = advantage`: the WeatherLinkIP or the console could not be reached at startup. |
+| `ip-read error: ...` / `ip-write error: ...` | `type = ethernet`: the connection failed in use.  `type = advantage`: only `ip-read error: timed out`, a read the console did not answer in time; a connection that has gone is the `Lost the connection` line below. |
+
+### An advantage console
+
+With `type = advantage` (see [An advantage console](installation.md#an-advantage-console)):
+
+| Message | Meaning |
+|---|---|
+| `Advantage console ...: version ..., protocol ....` | Each time the connection is opened, at startup and at a reopen: the console's name, its program's version and the protocol it speaks. |
+| `time change windows: not used with type = advantage` | At startup.  See [Daylight-saving time changes](dst.md#an-advantage-console). |
+| `tcp_send_delay     : not used with type = advantage` | At startup: the option is in `weewx.conf`, and belongs to `type = ethernet`.  Harmless; delete it if the station is staying with this type. |
+| `Clock: the advantage console reports that its clock is not synchronized.` | A WARNING at a clock check.  The time is still used; WeeWX's `Clock error` line says whether it is wrong.  See [An advantage console](clock.md#an-advantage-console). |
+| `Clock: not set.  An advantage console keeps its own clock; it reads ... s against this host (the console reports its clock ...).  Check the time service on whichever is wrong.` | A WARNING: WeeWX asked for a clock set past `max_drift`, and the driver sets nothing on this console. |
+| `Clock: not set.  An advantage console keeps its own clock, and it did not answer when asked the time.` | The same, when the console did not answer. |
+| `LOOP try #...; error: LOOP frame failed CRC check` | A LOOP packet failed its checksum.  The batch is ended and the next one has the console send the packet again.  See [the recovery page](recovery.md#an-advantage-console). |
+| `LOOP frame stamped ... could not be decoded: ...` | A LOOP packet arrived whole and the driver could not decode it (a packet type it does not know).  It is skipped, and the batch goes on. |
+| `Lost its place in what the console sends (...); opening a new connection.` | An ERROR.  The driver could not be sure where it was in what the console was sending: a reply was given up on part way, or bytes came that it had not asked for.  It opens a new connection, which holds nothing of the old one's, and carries on; LOOP packets missed are sent again.  Once, after a stall in the network, is the recovery working.  Repeatedly, the console or the network between them is at fault.  See [the recovery page](recovery.md#an-advantage-console). |
+| `Lost the connection to the console (...).` | An ERROR, `type = advantage`.  The console closed the connection, or it failed in use; the parentheses say which.  An advantage console closes every connection when its receiver restarts, an upgrade included.  The driver opens a new connection at its next command, and LOOP packets missed are sent again.  Followed by `Advantage console ...`, it is the recovery working. |
+| `Could not open a new connection: ....` | An ERROR, `type = advantage`.  After one of the two lines above, the console could not be reached, for the reason given: `Connection refused` while its receiver restarts.  The driver tries again every five seconds, and says so again once a minute.  If it goes on, see `Could not open the port again` above. |
+| `ADVDMP: the console sent no records and said there are more.  The download ends here.` / `ADVDMP: the console sent a record stamped ..., which is not after ....  The download ends here.` | An ERROR, at each archive download while it lasts: the console answered the download with something that asking again would not change.  The records before it were stored, and LOOP data goes on.  It is a fault in the console's archive or its program; report it there. |
+| `ADVDMP: the record stamped ... could not be decoded: ....  It is left out.` | An ERROR: an archive record arrived whole and the driver could not decode it (a record type it does not know).  That record is not stored, and the download goes on with the next.  It is a fault in the console's archive or its program; report it there. |
+| `ADVDMP try #...; error: ...` / `ADVDMP max tries (...) exceeded.` | As the `DMPAFT` lines above, for this console's download command. |
+
+When the console's answer to who it is cannot be accepted, the reason is one of the lines
+below.  At startup it is an ERROR line by itself and WeeWX does not start, as for a console
+it cannot reach.  While the port is being opened again it is the reason inside `Could not
+open the port again: ....  Trying again in ... seconds.`
+
+| Reason | Meaning |
+|---|---|
+| `... port ... answered a newline and did not answer ADVID, as a Davis console or a WeatherLinkIP does not.  If it is one, it wants type = ethernet` | The address answers a newline as a console does and gave no answer to the advantage console's own command within the read timeout.  That is how a Davis console or a WeatherLinkIP behaves. |
+| `... port ... accepted the connection and did not answer (...).  If it is a Davis console, it wants type = ethernet` | Something accepted the connection and said nothing within the read timeout: an advantage console whose program has hung, another service on that port, or a Davis console that was asleep and needed a second prompt, which wants `type = ethernet`. |
+| `... port ... closed the connection as soon as it was opened; an advantage console does this when it has as many connections as it allows` | The connection was closed before anything was answered: the console is serving as many computers as it is configured for. |
+| `... port ... closed the connection before it had said what it is` | The connection was closed after it had begun to answer: a console whose program stopped or was restarted at that moment.  The driver tries again. |
+| `... port ... began to answer, and the connection failed before it had said what it is (...)` | The same, ended by a network error or by the read timeout: which is in the parentheses.  The driver tries again. |
+| `... port ... answered ADVID with ..., which is not an advantage console's answer` or `... answered a newline with ..., which is not a console's answer` | Whatever is at that address is not an advantage console. |
+| `... port ... speaks advantage protocol ...; this driver knows 1.  Upgrade weewx-vantagenext` | The console's program is newer than this driver understands. |
 
 ## Printing live LOOP packets
 

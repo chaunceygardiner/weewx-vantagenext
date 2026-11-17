@@ -996,6 +996,8 @@ class _ReopenPort:
     argument); each scripted error is raised by the call it is given to, in
     turn.  Given a _Monotonic, each call also takes the time it is given."""
 
+    stamped = False
+
     def __init__(self, open_errors=(), close_error=None, clock=None,
                  close_secs=0.0, fail_secs=0.0, open_secs=0.0):
         self.calls = []

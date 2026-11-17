@@ -166,6 +166,11 @@ class TestOptions:
             if (isinstance(node, ast.For) and isinstance(node.target, ast.Name)
                     and node.target.id == 'obsolete'):
                 warned.update(elt.value for elt in node.iter.elts)
+        # Asked for by name, and not obsolete: with type = advantage the
+        # driver says in one ordinary line that this option of type =
+        # ethernet is not used.
+        assert 'tcp_send_delay' in warned
+        warned.discard('tcp_send_delay')
         assert 'dst_periods' in warned and len(warned) == 6, warned
         text = pages()['configuration.md']
         table = text.split('\n## Obsolete options\n')[1]
@@ -185,10 +190,32 @@ class TestOptions:
 # Log messages
 # ---------------------------------------------------------------------------
 
+@functools.lru_cache(maxsize=None)
+def string_constants():
+    """{NAME: text} for every `NAME = "..."` at module level or in a class
+    body of the driver, where NAME is all capitals: a sentence defined once
+    and used both as a log line and as what a function returns."""
+    found = {}
+    bodies = [driver_tree().body] + [node.body for node in driver_tree().body
+                                     if isinstance(node, ast.ClassDef)]
+    for body in bodies:
+        for node in body:
+            if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                    and isinstance(node.targets[0], ast.Name) and node.targets[0].id.isupper()
+                    and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)):
+                assert node.targets[0].id not in found, node.targets[0].id
+                found[node.targets[0].id] = node.value.value
+    assert found.get('NOT_SET', '').startswith('Clock: not set.'), sorted(found)
+    return found
+
+
 def _format_of(node):
     """The format string of a log call's first argument, or None."""
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
+    # log.warning(VantageNext.NOT_SET, ...): the sentence is a named constant.
+    if isinstance(node, ast.Attribute) and node.attr in string_constants():
+        return string_constants()[node.attr]
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
         return _format_of(node.left)
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
@@ -268,8 +295,11 @@ UNDOCUMENTED_FORMATS = {
 CARRIED_TEXTS = {
     'get_packet: ': ('Expected %d chars; got %d',),
     'DMPAFT try #': ('Expected %d chars; got %d',),
-    'LOOP try #': ('LOOP buffer failed CRC check',),
-    'genLoopPackets: Error: ': ('Max tries exceeded while getting LOOP data.',),
+    'LOOP try #': ('LOOP buffer failed CRC check', 'LOOP frame failed CRC check',
+                   'Expected %d characters; got zero instead'),
+    'genLoopPackets: Error: ': ('Max tries exceeded while getting LOOP data.',
+                                'LOOP frame failed CRC check',
+                                'Expected %d characters; got zero instead'),
 }
 
 SPEC = re.compile(r'%[+\-0-9.]*[dfsrX]')
@@ -452,7 +482,7 @@ class TestConstants:
 
     def test_the_batch_size_is_the_drivers(self):
         source = read('bin', 'user', 'vantagenext.py')
-        assert 'self.genDavisLoopPackets(200)' in source
+        assert 'for _loop_packet in self.protocol.loop_batch(200):' in source
         assert 'batches of 200' in pages()['recovery.md']
         assert 'the batch is 200' in pages()['differences.md']
 

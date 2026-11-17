@@ -81,9 +81,9 @@ it started, which makes it easy to see how far apart these are.
 The one place a healthy console is quiet for longer than `timeout` is its own midnight, which
 has [a section of its own](#the-consoles-midnight) below.
 
-This is how a serial or USB connection behaves.  With `type = ethernet` a read that times
-out is reported by the network layer as an ordinary I/O error, and takes the retry path in
-the next section instead.
+This is how a serial or USB connection behaves.  With `type = ethernet` or `type = advantage`
+a read that times out is reported by the network layer as an ordinary I/O error, and takes
+the retry path in the next section instead.
 
 If the very next packet is short too, a second line says so:
 
@@ -250,6 +250,81 @@ and complete.  What was lost was the LOOP data in between.  WeeWX never restarte
 built-in driver its restart would have come while the network was still down, and stopped
 it.
 
+## An advantage console
+
+With `type = advantage` (3.5) the same rules run: a failed read is retried, a failed batch
+is started again, and five failed batches in a row close the connection and open it again,
+tried every five seconds until it opens.  Five things differ.
+
+**Missed LOOP packets are sent again.**  Each packet carries the console's own time, and
+when the driver asks for packets it names the time of the last one it received.  The console
+keeps the last ten minutes of them and first sends every one after that time.  So the
+packets that went by during an archive download, or while a lost connection was being
+opened again, arrive when LOOP data resumes, each under its own time, and WeeWX puts each
+in the archive period it belongs to.  An outage longer than ten minutes loses what is older
+than that.
+
+One limit.  WeeWX adds a period's LOOP highs and lows to its archive record when the record
+is stored.  After an outage that ran past more than one archive interval, the driver
+downloads every record the console closed meanwhile before the replay has reached their
+packets, so only the first of those records gets its LOOP highs and lows; the later ones
+are stored as the console made them, which is complete but for that.
+
+**A packet that fails its checksum is asked for again.**  The batch is ended there, and the
+next batch's request brings the packet back:
+
+```
+ERROR user.vantagenext: LOOP try #1; error: LOOP frame failed CRC check
+INFO user.vantagenext: genLoopPackets: Error: LOOP frame failed CRC check. (try 1)
+```
+
+**The console is asked who it is at every open.**  A connection that opens to something that
+is not an advantage console, or to one that accepts the connection and says nothing, counts
+as a port that did not open: the reason is logged as any failed reopen is, at once and then
+once a minute, and the driver tries again every five seconds.
+
+```
+ERROR user.vantagenext: Could not open the port again: console1 port 22222 accepted the connection and did not answer (timed out).  If it is a Davis console, it wants type = ethernet.  Trying again in 5 seconds.
+INFO user.vantagenext: Advantage console console1: version 0.2, protocol 1.
+INFO user.vantagenext: The port is open again.  It took 14 tries over 126 seconds.
+```
+
+**The driver always knows its place in what the console is sending.**  A read that stops part
+way through a LOOP packet keeps what it had, and the next read completes the same packet.
+Getting the console's attention sends one newline and waits for its one answer, however many
+tries the wait takes.  And where the driver cannot know its place — a reply it gave up on
+part way, bytes it had not asked for — it does not guess: it opens a new connection, which
+holds nothing of the old one's, no sooner than five seconds after the last time it did so.
+A reply that stopped part way is not asked for again on the same connection: a `weectl
+device` command that meets this, as `--logger-summary` can, reports the error and is run
+again.  LOOP data then resumes from the last packet received, as after any reopen:
+
+```
+ERROR user.vantagenext: Lost its place in what the console sends (a reply to ADVDMP was given up on); opening a new connection.
+INFO user.vantagenext: Advantage console console1: version 0.2, protocol 1.
+```
+
+**A console that closes the connection gets a new one.**  An advantage console closes every
+connection, and refuses new ones, while its receiver restarts, as it does for an upgrade.
+The driver's next read finds the connection closed, and its next command opens a new one,
+trying every five seconds until the console accepts it.  LOOP data resumes from the last
+packet received.  A clock check or an archive download waits the restart out too, for up to
+about a minute, and then asks again.  A longer outage during a download ends as it does with
+any console that is down: the error goes to WeeWX, which waits 60 seconds and starts the
+driver again.  If the console answers by then, the driver catches up from the console's
+archive; if it does not, WeeWX stops, unless `loop_on_init` is set in weewx.conf or something
+else restarts it.
+
+```
+ERROR user.vantagenext: Lost the connection to the console (the console closed it).
+ERROR user.vantagenext: LOOP try #1; error: Expected 105 characters; got zero instead
+INFO user.vantagenext: genLoopPackets: Error: Expected 105 characters; got zero instead. (try 1)
+ERROR user.vantagenext: Could not open a new connection: [Errno 111] Connection refused.
+INFO user.vantagenext: Advantage console console1: version 0.2, protocol 1.
+```
+
+The console has no silence at midnight, and the `LOOP gap` line is not logged for it.
+
 ## At boot
 
 If the serial port cannot be opened when WeeWX starts, the driver waits five seconds and
@@ -275,6 +350,9 @@ driver — is the right one:
 ERROR user.vantagenext: DMPAFT try #1; error: Expected 267 chars; got 0
 ERROR user.vantagenext: DMPAFT max tries (4) exceeded.
 ```
+
+With `type = advantage` the lines say `ADVDMP`, the console's own download command, and each
+new try asks from the last record received.
 
 ## Routine, or a fault?
 

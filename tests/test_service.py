@@ -24,9 +24,10 @@ import types
 import configobj
 import pytest
 
-from common import (ACK, BASE_DT, WAKE, FakeClock, ScriptedWrapper, SteeredConsole,
-                    archive_page, archive_record_at, dmpaft_reads, make_loop1,
-                    setup_reads)
+from common import (ACK, ADV_E, BASE_DT, WAKE, FakeClock, ScriptedAdvantage, ScriptedWrapper,
+                    SteeredConsole, advdmp_reads, advtime_reads, archive_page,
+                    archive_record_at, dmpaft_reads, make_frame, make_loop1, make_loop2,
+                    make_stamped_record, setup_reads, waiting_frames)
 
 import vantagenext
 from vantagenext import ShortReadIOError, VantageNext, VantageNextService
@@ -395,3 +396,226 @@ class TestEngineRun:
         # The short read left its mark, and a second batch was requested.
         assert engine.console.on_bad_read is True
         assert port.writes.count(b'LOOP 200\n') == 2
+
+# ===============================================================================
+#                 type = advantage, with a real WeeWX engine
+# ===============================================================================
+
+def adv_frame(epoch, **overrides):
+    make = make_loop1 if epoch % 4 == 0 else make_loop2
+    return make_frame(make(**overrides), epoch)
+
+
+def adv_record(epoch, **overrides):
+    return make_stamped_record(
+        archive_record_at(datetime.datetime.fromtimestamp(epoch), **overrides), epoch)
+
+
+class TestAdvantage:
+    """A real StdEngine, StdArchive and StdTimeSynch against a scripted
+    advantage console: what WeeWX does with packets and records that carry
+    the console's own time."""
+
+    E = ADV_E            # 2026-11-15 12:00:00 UTC, the end of an archive interval
+
+    def make_engine(self, monkeypatch, tmp_path, now, reads, timesynch=None, archive=True,
+                    last_stamp=None):
+        db_file = str(tmp_path / 'weewx.sdb')
+        port = ScriptedAdvantage(CONSTRUCTION_READS + list(reads))
+        monkeypatch.setattr(VantageNext, '_port_factory', staticmethod(lambda vp_dict: port))
+        config = make_config(db_file)
+        config['VantageNext'].update({'type': 'advantage', 'host': 'console1',
+                                      'loop_request': '3'})
+        if archive:
+            config['Engine']['Services']['archive_services'] = 'weewx.engine.StdArchive'
+        if timesynch:
+            config['StdTimeSynch'] = timesynch
+            config['Engine']['Services']['prep_services'] = 'weewx.engine.StdTimeSynch'
+        # The host's clock, the engine's and the driver's, is the test's.
+        clock = FakeClock(now)
+        monkeypatch.setattr(weewx.engine.time, 'time', clock.now)
+        engine = StdEngine(config)
+        engine.console._now = clock.now
+        engine.console.protocol._last_stamp = last_stamp
+        port.writes.clear()
+        return engine, port, clock, db_file
+
+    @staticmethod
+    def rows(db_file, sql='SELECT dateTime, outTemp FROM archive ORDER BY dateTime'):
+        with sqlite3.connect(db_file) as conn:
+            return conn.execute(sql).fetchall()
+
+    @staticmethod
+    def requests(port):
+        return [w for w in port.writes if w != b'\n']
+
+    def test_startup(self, monkeypatch, tmp_path, caplog):
+        # The time, the catch-up, the time again, then LOOP.
+        E = self.E
+        now = E + 1.3
+        engine, port, clock, db_file = self.make_engine(
+            monkeypatch, tmp_path, now,
+            [WAKE] + advtime_reads(now + 0.02)                                  # StdTimeSynch
+            + advdmp_reads([adv_record(E - 300, outTemp=700), adv_record(E, outTemp=710)])
+            + [WAKE] + advtime_reads(now + 0.02)                                # StdArchive
+            + [WAKE, ACK, adv_frame(E + 2), EndTest()],
+            timesynch={'clock_check': '14400', 'max_drift': '5'})
+        with caplog.at_level('INFO'), pytest.raises(EndTest):
+            engine.run()
+        monkeypatch.undo()
+        assert self.requests(port) == [b'ADVTIME\n', b'ADVDMP 0 512\n', b'ADVTIME\n',
+                                       b'ADVLOOP 3 200\n']
+        assert self.rows(db_file) == [(E - 300, pytest.approx(70.0)), (E, pytest.approx(71.0))]
+        assert 'Clock error is 0.02 seconds (positive is fast)' in caplog.text
+        assert engine.console._clock is None
+        assert not os.path.exists(str(tmp_path / 'archive' / 'vantagenext'))
+
+    def test_one_interval_end_to_end(self, monkeypatch, tmp_path):
+        # The frame stamped E is in the period ending E; the frame stamped
+        # E + 2 ends it; the frame stamped E + 16 breaks the LOOP for the
+        # download; LOOP resumes from that stamp.
+        E = self.E
+        now = E - 10.0
+        temps = {E: 800, E + 2: 900}            # the period's high, and the next period's
+        frames = [adv_frame(stamp, outTemp=temps.get(stamp, 700))
+                  for stamp in range(E - 8, E + 17, 2)]
+        engine, port, clock, db_file = self.make_engine(
+            monkeypatch, tmp_path, now,
+            advdmp_reads([adv_record(E - 300, outTemp=700)])                   # the catch-up
+            + [WAKE] + advtime_reads(now)
+            + [WAKE, ACK] + frames
+            + advdmp_reads([adv_record(E, outTemp=700)])
+            + [WAKE, ACK, EndTest()])
+        ended = []
+        engine.bind(weewx.END_ARCHIVE_PERIOD,
+                    lambda event: ended.append((event.packet['dateTime'], event.end)))
+        with pytest.raises(EndTest):
+            engine.run()
+        monkeypatch.undo()
+        assert ended == [(E + 2, E)]
+        assert self.requests(port) == [b'ADVDMP 0 512\n', b'ADVTIME\n', b'ADVLOOP 3 200\n',
+                                       b'ADVDMP %d 512\n' % (E - 300),
+                                       b'ADVLOOP 3 200 %d\n' % (E + 16)]
+        assert self.rows(db_file) == [(E - 300, pytest.approx(70.0)), (E, pytest.approx(70.0))]
+        # The record stamped E took its LOOP highs from the period ending E:
+        # the 80.0 of the frame stamped E, and not the 90.0 of E + 2.
+        assert self.rows(db_file, 'SELECT max FROM archive_day_outTemp') == [(pytest.approx(80.0),)]
+
+    def test_a_gust_is_counted_in_one_archive_period(self, monkeypatch, tmp_path):
+        # A 31 mph gust in the frame stamped E, the last of its period, and
+        # 5 mph after.  The running gust the driver adds to each packet starts
+        # afresh with the frame stamped E + 2, the first of the next period:
+        # that packet does not carry the 31, and the next period's high does
+        # not hold it.
+        E = self.E
+        now = E - 10.0
+        speeds = {E - 4: 12, E: 31, E + 2: 8, E + 300: 9}
+        stamps = list(range(E - 8, E + 17, 2))
+        after = [E + 298, E + 300, E + 302]                      # a second boundary, by a jump
+        engine, port, clock, db_file = self.make_engine(
+            monkeypatch, tmp_path, now,
+            advdmp_reads([adv_record(E - 300)])
+            + [WAKE] + advtime_reads(now)
+            + [WAKE, ACK] + [adv_frame(s, windSpeed=speeds.get(s, 5)) for s in stamps]
+            + advdmp_reads([adv_record(E, windSpeed=5)])
+            + [WAKE, ACK] + [adv_frame(s, windSpeed=speeds.get(s, 5)) for s in after]
+            + [EndTest()])
+        seen = {}
+
+        def note(event):
+            seen[event.packet['dateTime'] - E] = (event.packet['windSpeed'],
+                                                  event.packet['windGust'])
+        engine.bind(weewx.NEW_LOOP_PACKET, note)
+        archive = [s for s in engine.service_obj if isinstance(s, weewx.engine.StdArchive)][0]
+        with pytest.raises(EndTest):
+            engine.run()
+        monkeypatch.undo()
+        assert seen[-8] == (5.0, 5.0) and seen[-4] == (12.0, 12.0) and seen[-2] == (5.0, 12.0)
+        assert seen[0] == (31.0, 31.0)
+        assert seen[2] == (8.0, 8.0)                              # not 31
+        # ... and that frame's own 8 stays the period's highest, through
+        # WeeWX's announcement of the period's end, which follows it.
+        assert seen[4] == (5.0, 8.0) and seen[16] == (5.0, 8.0) and seen[298] == (5.0, 8.0)
+        assert seen[300] == (9.0, 9.0) and seen[302] == (5.0, 5.0)
+        # WeeWX's own accumulator for the period (E, E + 300]: its gust high
+        # is that period's 9, where the 31 of the period before would be.
+        assert archive.old_accumulator.timespan.stop == E + 300
+        assert archive.old_accumulator['windGust'].max == 9.0
+
+    def test_a_replay_across_two_archive_boundaries(self, monkeypatch, tmp_path, caplog):
+        # After an outage the driver asks from the last stamp it received,
+        # 12:03:06, and the console replays to 12:11:00: 237 frames, the
+        # first 200 at once.  WeeWX last stored the record stamped E; the
+        # console has since committed E + 300 and E + 600.
+        E = self.E
+        first = list(range(E + 188, E + 588, 2))                  # one request's 200
+        second = list(range(E + 318, E + 662, 2))                 # what the next brings
+        temps = {E + 200: 800, E + 400: 950}
+
+        def frames(stamps):
+            return [adv_frame(stamp, outTemp=temps.get(stamp, 700)) for stamp in stamps]
+        read_1 = [s for s in first if s <= E + 316]               # to the break
+        read_2 = [s for s in second if s <= E + 616]
+        engine, port, clock, db_file = self.make_engine(
+            monkeypatch, tmp_path, E + 186.4,
+            advdmp_reads([adv_record(E, outTemp=700)])                         # the catch-up
+            + [WAKE] + advtime_reads(E + 186.4)
+            + [WAKE, ACK] + frames(read_1)
+            # The download's wake-up reads past the 135 frames still unread.
+            + waiting_frames(frames(s for s in first if s > E + 316))
+            + advdmp_reads([adv_record(E + 300, outTemp=700), adv_record(E + 600, outTemp=700)])
+            + [WAKE, ACK] + frames(read_2)
+            + waiting_frames(frames(s for s in second if s > E + 616))
+            + advdmp_reads([])
+            + [WAKE, ACK, EndTest()],
+            last_stamp=E + 186)
+
+        def outage_over(event):
+            clock.t = max(clock.t, E + 661.0)
+        engine.bind(weewx.NEW_LOOP_PACKET, outage_over)
+        with caplog.at_level('INFO'), pytest.raises(EndTest):
+            engine.run()
+        monkeypatch.undo()
+        assert len(read_1) == 65 and len(first) - len(read_1) == 135
+        assert self.requests(port) == [
+            b'ADVDMP 0 512\n', b'ADVTIME\n',
+            b'ADVLOOP 3 200 %d\n' % (E + 186),
+            b'ADVDMP %d 512\n' % E,
+            b'ADVLOOP 3 200 %d\n' % (E + 316),
+            b'ADVDMP %d 512\n' % (E + 600),
+            b'ADVLOOP 3 200 %d\n' % (E + 616)]
+        # Each wake-up was one newline, and nothing was flushed or logged
+        # as an error.
+        assert port.writes.count(b'\n') == 7 and port.flushes == 0
+        assert [r.getMessage() for r in caplog.records if r.levelname in ('ERROR', 'WARNING')] == []
+        assert [row[0] for row in self.rows(db_file)] == [E, E + 300, E + 600]
+        # The record stamped E + 300 has its LOOP high, 80.0 at E + 200.  The
+        # record stamped E + 600 was stored before its packets were replayed,
+        # so the 95.0 at E + 400 is not in the day's high.
+        assert self.rows(db_file, 'SELECT max FROM archive_day_outTemp') == [(pytest.approx(80.0),)]
+
+    def test_a_clock_check_past_max_drift_sets_nothing_and_warns(self, monkeypatch, tmp_path,
+                                                                  caplog):
+        # The console's clock reads 7 s fast and it reports it is not
+        # synchronized.  clock_check is a day: nothing is steered, so no
+        # warning about steering either.
+        now = self.E + 19.0
+        with caplog.at_level('INFO'):
+            engine, port, clock, db_file = self.make_engine(
+                monkeypatch, tmp_path, now,
+                ([WAKE] + advtime_reads(now + 7.0, synchronized=False)) * 2,
+                timesynch={'clock_check': '86400', 'max_drift': '5'}, archive=False)
+            engine.dispatchEvent(weewx.Event(weewx.STARTUP))
+        monkeypatch.undo()
+        engine.shutDown()
+        assert self.requests(port) == [b'ADVTIME\n', b'ADVTIME\n']
+        clock_lines = [(r.levelname, r.getMessage()) for r in caplog.records
+                       if 'lock' in r.getMessage()]
+        assert clock_lines == [
+            ('WARNING', 'Clock: the advantage console reports that its clock is not '
+                        'synchronized.'),
+            ('INFO', 'Clock error is 7.00 seconds (positive is fast)'),
+            ('WARNING', 'Clock: not set.  An advantage console keeps its own clock; it reads '
+                        '+7.00 s against this host (the console reports its clock NOT '
+                        'synchronized).  Check the time service on whichever is wrong.')]
+        assert engine.console.clock_check == 86400

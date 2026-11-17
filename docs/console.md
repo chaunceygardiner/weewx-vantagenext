@@ -117,6 +117,44 @@ As well as the built-in driver's report, it shows the console's midnight jump an
 driver has learned about its clock.  See
 [What `weectl device --info` shows](clock.md#what-weectl-device---info-shows).
 
+## With an advantage console
+
+With `type = advantage` (3.5) three options behave differently, because the console stamps
+its own data and keeps its own clock:
+
+- **`--set-time`** sets nothing.  It prints how the console's clock reads against this
+  computer's, and whether the console reports its clock synchronized.  See
+  [An advantage console](clock.md#an-advantage-console).
+- **`--info`** shows the console's time as the console reports it, and one line in place of
+  the clock report: the console keeps its own clock.
+- **`--dump`** asks for every archive record the console has with each record's own time,
+  so the repeated hour of a fall back is stored as the two hours it was.  An advantage
+  console can hold years of records, far more than a Davis console's 2,560.
+
+Every other option sends the same Davis commands as to any console.  What differs is whose
+setting it changes.
+
+**A setting belongs to the console, and every host on that console gets the change.**  An
+advantage console serves several WeeWX hosts at once.  Only the LOOP stream and the place in
+an archive download are a connection's own.  Everything `weectl device` writes is the
+console's — the transmitter table, the archive interval, the calibration offsets, the
+barometer and altitude, the latitude and longitude, the start of the rain year, the rain
+bucket, temperature logging, the wind cup — and so is the console's archive.  So before
+changing one, think of the other hosts:
+
+- **`--set-interval` and `--clear-memory` clear the console's archive for every host.**  On
+  a Davis console that is a few days of records; here it can be years.  The records each
+  host has already stored in its own database are not touched.
+- **`--set-transmitter-type`** changes what the console listens to, and reception stops for
+  every host while its receiver restarts.
+- **`--set-dst`, `--set-tz-code` and `--set-tz-offset`** are stored, and `--info` shows them,
+  but the console does not use them: its time zone is its computer's.  The console's computer
+  and every host must be set to the same time zone.
+- **`--logger-summary`** covers the console's newest 2,560 records, the memory of a Davis
+  console, where `--dump` brings every record it has.
+
+The console's own manual says what it does with each option.
+
 ## Fixed here
 
 Several `weectl device` options work with this driver and misbehave with the built-in one —

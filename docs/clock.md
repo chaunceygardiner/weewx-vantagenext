@@ -18,7 +18,9 @@ record.  Since 3.0 the driver keeps that clock **without setting it**, because e
 costs the console about a minute of its transmitter's packets.  It learns how the console's
 clock behaves and steers the correction the console already makes to itself every midnight,
 which costs nothing.  There is nothing to configure.  Since 3.3 a WeatherLinkIP is steered
-too, from whole-second readings ([below](#a-weatherlinkip)).
+too, from whole-second readings ([below](#a-weatherlinkip)).  An advantage console read with
+`type = advantage` keeps its own clock, and none of this applies to it
+([below](#an-advantage-console)).
 
 ## How a console's clock works
 
@@ -517,6 +519,53 @@ Upgrading from 3.2, the first line reads `Clock: connected over ethernet; the co
 midnight jump is 2.25 s; learning its drift from whole-second readings.`  The others are on
 the [Troubleshooting](troubleshooting.md#clock) page.  `weectl device --info` shows the state
 as `STEERING, from whole-second readings (ethernet)`.
+
+## An advantage console
+
+An advantage console read with `type = advantage` (3.5) keeps its own clock from the network,
+as the computer running WeeWX does, and stamps every LOOP packet and archive record with it.
+There is no drift to learn and no midnight jump: the driver steers nothing, sets nothing and
+keeps no `clock.json`.  (With `type = ethernet` the same console is a Davis console to the
+driver, and its clock is kept as [a WeatherLinkIP's](#a-weatherlinkip) is.)
+
+What the driver does is check.  At every clock check it asks the console the time, and WeeWX
+logs the difference from the computer's clock as it always has:
+
+```
+INFO weewx.engine: Clock error is 0.02 seconds (positive is fast)
+```
+
+That line is the one to watch: every time the driver stores is that clock's.  Two warnings
+go with it.
+
+The console says with each answer whether its clock is synchronized to its time source.  When
+it is not, the driver says so and still returns the time:
+
+```
+WARNING user.vantagenext: Clock: the advantage console reports that its clock is not synchronized.
+```
+
+It does not mean the time is wrong: the `Clock error` line that follows says whether it is.
+A console restarting its time service can report this for a moment with a clock that is
+right; one that goes on reporting it has lost its time source.
+
+Past `max_drift` WeeWX tells the driver to set the clock, and for this console the driver
+sets nothing.  Several computers may be reading one advantage console, and none of them
+should be moving its clock.  It asks the time once more and warns:
+
+```
+WARNING user.vantagenext: Clock: not set.  An advantage console keeps its own clock; it reads +7.00 s against this host (the console reports its clock NOT synchronized).  Check the time service on whichever is wrong.
+```
+
+The same warning from every computer that reads the console points at the console; from one
+alone, at that computer.
+
+`weectl device --set-time` prints that sentence and sets nothing.  `weectl device --info`
+shows the console's time and, in place of the clock report [below](#what-weectl-device---info-shows),
+one line: `CONSOLE CLOCK: kept by the console itself (an advantage console); read with ADVTIME.`
+
+A `clock.json` left by the Davis console the station used before is neither read nor
+changed.
 
 ## When the driver falls back to setting the clock
 
