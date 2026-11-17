@@ -115,7 +115,7 @@ The driver announces itself in the log at startup, with its version and the opti
 running with:
 
 ```
-INFO user.vantagenext: Driver version is 3.4
+INFO user.vantagenext: Driver version is 3.4.1
 INFO user.vantagenext: type               : serial (weewx.conf)
 INFO user.vantagenext: port               : /dev/vantage (weewx.conf)
 INFO user.vantagenext: baudrate           : 19200 (default)

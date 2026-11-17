@@ -1,5 +1,24 @@
 # weewx-vantagenext change history
 
+## 3.4.1 UNRELEASED
+- A reopen of the port does not begin sooner than five seconds after the
+  last one succeeded.  When five LOOP batches fail at once and the port opens
+  again at its first try (a console that answers but does not acknowledge
+  the LOOP request), the driver used to go round that cycle as fast as the
+  console answered, logging each turn.  The first reopen after healthy
+  running is not delayed.
+- The running gust the driver adds to every LOOP packet (windGust, the highest
+  wind speed since the archive period began) now starts afresh with the first
+  packet of each archive period, on every connection type.  Before, that
+  first packet still carried the gust of the period before: the driver zeroed
+  its maximum only when WeeWX announced the period's end, which WeeWX does
+  after the new period's first packet has been through.  So one gust could be
+  in the LOOP highs of two periods, and at the day's first period in two
+  days' highs; and that first packet's own wind was left out of the new
+  period's running gust.  The built-in driver does the same.  Archive records
+  were not affected under hardware record generation: their gust is the
+  console's.
+
 ## 3.4 2026-11-15
 - The driver logs every option it reads at startup, with the value it uses and
   whether that came from weewx.conf or is the default: the connection's (type,

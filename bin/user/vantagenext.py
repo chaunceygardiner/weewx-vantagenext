@@ -33,7 +33,7 @@ from weewx.crc16 import crc16
 log = logging.getLogger(__name__)
 
 DRIVER_NAME = 'VantageNext'
-DRIVER_VERSION = '3.4'
+DRIVER_VERSION = '3.4.1'
 
 int2byte = struct.Struct(">B").pack
 
@@ -1370,6 +1370,8 @@ class VantageNext(weewx.drivers.AbstractDevice):
     LOOP_BATCH_TRIES = 5
     REOPEN_WAIT = 5
     REOPEN_LOG_EVERY = 60
+    # When the last reopen succeeded, on the monotonic clock; None, never.
+    _last_reopen_at = None
 
     def genLoopPackets(self):
         """Generator function that returns loop packets"""
@@ -1403,7 +1405,19 @@ class VantageNext(weewx.drivers.AbstractDevice):
         before it are not counted.  Closing and opening raise OSError as well
         as WeeWxIOError (a socket's shutdown after the peer has reset it,
         pyserial's SerialException); weewxd's Terminate is neither, and passes
-        through."""
+        through.
+
+        No reopen begins sooner than REOPEN_WAIT after the last one
+        succeeded.  That is the one pause the cycle is sure of: when each
+        batch fails at once (a console that answers the wake-up and does not
+        acknowledge the LOOP request) and the port opens at its first try,
+        nothing else in it waits, and it would turn, and log, as fast as the
+        link answers.  The first reopen after healthy running is never
+        delayed."""
+        if self._last_reopen_at is not None:
+            wait = self.REOPEN_WAIT - (_monotonic() - self._last_reopen_at)
+            if wait > 0:
+                time.sleep(wait)
         log.error("%d LOOP batches in a row failed; closing the port and opening it again.",
                   self.LOOP_BATCH_TRIES)
         start = _monotonic()
@@ -1430,6 +1444,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
                 else:
                     log.info("The port is open again.  It took %d tries over %.0f seconds.",
                              tries, _monotonic() - start)
+                self._last_reopen_at = _monotonic()
                 return
 
     def genDavisLoopPackets(self, N=1):
@@ -4874,11 +4889,15 @@ class VantageNextService(VantageNext, weewx.engine.StdService):
 
         self.bind(weewx.STARTUP, self.startup)
         self.bind(weewx.NEW_LOOP_PACKET, self.new_loop_packet)
-        self.bind(weewx.END_ARCHIVE_PERIOD, self.end_archive_period)
+
+    # The end of the latest archive period a LOOP packet has been seen in:
+    # see new_loop_packet.
+    _gust_period_end = None
 
     def startup(self, event):  # @UnusedVariable
         self.max_loop_gust = 0.0
         self.max_loop_gustdir = None
+        self._gust_period_end = None
 
     def closePort(self):
         # Now close my superclass's port:
@@ -4886,6 +4905,36 @@ class VantageNextService(VantageNext, weewx.engine.StdService):
 
     def new_loop_packet(self, event):
         """Calculate the max gust seen since the last archive record."""
+
+        # One rule: the maximum belongs to the latest archive period a
+        # packet has been seen in, and that only moves forward.  The packet's
+        # own time says which period it is in, the one StdArchive puts it in
+        # (by its time, with StdArchive's interval, _loop_batch_interval, a
+        # period's last second its own).  The first packet of a later period
+        # starts the maximum afresh, before it is counted.  A packet dated
+        # in the period before (the clock stepped back across a boundary)
+        # does not move the period: its wind is counted in the latest
+        # period's maximum, and it carries that maximum.  Counted in its own
+        # period instead, the period it steps back out of would be entered a
+        # second time and its maximum lost.  A packet dated more than one
+        # whole period back is a clock that was ahead and has been
+        # corrected: the maximum starts afresh at that packet's period.
+        # Held to the old one, it would stand, never zeroed, until the true
+        # time reached the time the clock had wrongly shown.
+        #
+        # Not at END_ARCHIVE_PERIOD, where the maximum used to be zeroed:
+        # StdArchive sends that on the first packet PAST a period's end,
+        # after the packet has been through here.  Zeroed there, that packet
+        # carried the maximum of the period before (one gust counted in two
+        # periods), and its own wind was then dropped from the new period's.
+        interval = self._loop_batch_interval()
+        period_end = weeutil.weeutil.startOfInterval(event.packet['dateTime'],
+                                                     interval) + interval
+        if (self._gust_period_end is None or period_end > self._gust_period_end
+                or period_end < self._gust_period_end - interval):
+            self.max_loop_gust = 0.0
+            self.max_loop_gustdir = None
+            self._gust_period_end = period_end
 
         # Calculate the max gust seen since the start of this archive record
         # and put it in the packet.
@@ -4896,11 +4945,6 @@ class VantageNextService(VantageNext, weewx.engine.StdService):
             self.max_loop_gustdir = windDir
         event.packet['windGust'] = self.max_loop_gust
         event.packet['windGustDir'] = self.max_loop_gustdir
-
-    def end_archive_period(self, event):
-        """Zero out the max gust seen since the start of the record"""
-        self.max_loop_gust = 0.0
-        self.max_loop_gustdir = None
 
 
 # ===============================================================================

@@ -27,6 +27,16 @@ to change by hand, newest first.  Read down to the release you are coming from.
 The full history is in the
 [change history](https://github.com/chaunceygardiner/weewx-vantagenext/blob/master/changes.md).
 
+## To 3.4.1
+
+Nothing to change.  One correction to live data: the `windGust` the driver adds to each LOOP
+packet now starts afresh with the first packet of each archive period, where that packet
+used to carry the gust of the period before.  Anything that reads `windGust` from LOOP
+packets sees the corrected value.  Archive records are as they were under hardware record
+generation, WeeWX's default for this driver, where a record's gust is the console's; under
+`record_generation = software` a record's gust comes from the LOOP packets, and is corrected
+with them.
+
 ## To 3.4
 
 Nothing to change in `weewx.conf`.  The driver now logs every option it reads at startup,

@@ -1145,6 +1145,58 @@ class TestReopenPort:
         # from the first failure, 205.1.
         assert lines[-1] == 'The port is open again.  It took 27 tries over 209 seconds.'
 
+    def test_batches_that_fail_at_once_are_reopened_once_in_five_seconds(self, monkeypatch, caplog):
+        # A console that answers the open and fails every batch at once (it
+        # does not acknowledge the LOOP request).  Nothing else in the cycle
+        # waits, so the reopen does: not sooner than REOPEN_WAIT after the
+        # last one SUCCEEDED.  A close takes 0.5 s and an open 0.1 s, so a
+        # wait timed from the reopen's start would be 4.4 s.
+        clock = _Monotonic(monkeypatch)
+        station = bare_station(port=_ReopenPort(clock=clock, close_secs=0.5, open_secs=0.1))
+        _play_batches(station, [self.FAIL] * 15 + [['packet']])
+        with caplog.at_level(logging.INFO):
+            assert next(station.genLoopPackets()) == 'packet'
+        assert station.port.calls == ['close', 'open'] * 3
+        # The first reopen is at once; each later one 5 s after the last.
+        assert clock.sleeps == pytest.approx([5.0, 5.0])
+        assert clock.now == pytest.approx(1000.0 + 3 * 0.6 + 2 * 5.0)
+        lines = [r.getMessage() for r in caplog.records]
+        assert lines.count('The port is open again.') == 3
+
+    @pytest.mark.parametrize('later, waited', [(100.0, []), (5.0, []), (3.0, [2.0]), (0.0, [5.0])])
+    def test_a_reopen_waits_only_what_is_left_of_the_five_seconds(self, monkeypatch, later, waited):
+        clock = _Monotonic(monkeypatch)
+        station = bare_station(port=_ReopenPort())
+        _play_batches(station, [self.FAIL] * 5 + [['one']] + [self.FAIL] * 5 + [['two']])
+        loop = station.genLoopPackets()
+        assert next(loop) == 'one' and clock.sleeps == []
+        clock.now += later                               # healthy running, for this long
+        assert next(loop) == 'two'
+        assert clock.sleeps == pytest.approx(waited)
+        assert station.port.calls == ['close', 'open'] * 2
+
+    def test_a_new_driver_object_reopens_at_once(self, monkeypatch):
+        clock = _Monotonic(monkeypatch)
+        for unused in range(2):
+            station = bare_station(port=_ReopenPort())
+            _play_batches(station, [self.FAIL] * 5 + [['packet']])
+            assert next(station.genLoopPackets()) == 'packet'
+        assert clock.sleeps == []
+
+    @pytest.mark.parametrize('exc_class', [Terminate, KeyboardInterrupt, SystemExit])
+    def test_a_shutdown_during_the_wait_passes_through(self, monkeypatch, exc_class):
+        clock = _Monotonic(monkeypatch)
+        station = bare_station(port=_ReopenPort())
+        _play_batches(station, [self.FAIL] * 10)
+        station._last_reopen_at = clock.now
+
+        def stopped(secs):
+            raise exc_class('stop')
+        monkeypatch.setattr(vantagenext.time, 'sleep', stopped)
+        with pytest.raises(exc_class):
+            next(station.genLoopPackets())
+        assert station.port.calls == []                  # stopped before the close
+
     @pytest.mark.parametrize('exc_class', [Terminate, KeyboardInterrupt, SystemExit])
     def test_shutdown_exceptions_pass_through(self, monkeypatch, exc_class):
         def swallowed(secs):

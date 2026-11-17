@@ -124,19 +124,100 @@ class TestEngineWiring:
         engine, port, _ = make_engine(monkeypatch, tmp_path, [])
         engine.dispatchEvent(weewx.Event(weewx.STARTUP))
 
-        packet = {'windSpeed': 5.0, 'windDir': 90.0}
+        T = 1794744100                              # 100 s into a five-minute period
+        packet = {'dateTime': T, 'windSpeed': 5.0, 'windDir': 90.0}
         engine.dispatchEvent(weewx.Event(weewx.NEW_LOOP_PACKET, packet=packet))
         assert packet['windGust'] == 5.0
         assert packet['windGustDir'] == 90.0
 
-        packet = {'windSpeed': 3.0, 'windDir': 180.0}
+        packet = {'dateTime': T + 2, 'windSpeed': 3.0, 'windDir': 180.0}
         engine.dispatchEvent(weewx.Event(weewx.NEW_LOOP_PACKET, packet=packet))
         assert packet['windGust'] == 5.0  # the archive period's max survives
 
-        engine.dispatchEvent(weewx.Event(weewx.END_ARCHIVE_PERIOD))
-        packet = {'windSpeed': 3.0, 'windDir': 180.0}
+        packet = {'dateTime': T + 300, 'windSpeed': 3.0, 'windDir': 180.0}
         engine.dispatchEvent(weewx.Event(weewx.NEW_LOOP_PACKET, packet=packet))
         assert packet['windGust'] == 3.0  # a new period starts fresh
+        # The driver takes no part in WeeWX's own end of the period.
+        assert not any(cb.__name__ == 'end_archive_period'
+                       for cb in engine.callbacks.get(weewx.END_ARCHIVE_PERIOD, []))
+        engine.shutDown()
+
+    def test_the_first_packet_of_a_period_does_not_carry_the_gust_of_the_one_before(
+            self, monkeypatch, tmp_path):
+        # A Davis console, whose packets carry the host's time.  WeeWX
+        # announces a period's end only after the next period's first packet
+        # has been through the driver's gust bookkeeping, so that packet's
+        # own time has to start the maximum afresh.  A period's last second
+        # is its own; the console's archive interval is five minutes.
+        engine, port, _ = make_engine(monkeypatch, tmp_path, [])
+        engine.dispatchEvent(weewx.Event(weewx.STARTUP))
+        E = 1794744000                                  # ends a five-minute period
+
+        def gust(ts, speed, direction):
+            packet = {'dateTime': ts, 'windSpeed': speed, 'windDir': direction}
+            engine.dispatchEvent(weewx.Event(weewx.NEW_LOOP_PACKET, packet=packet))
+            return packet['windGust'], packet['windGustDir']
+        assert gust(E - 4, 12.0, 90.0) == (12.0, 90.0)
+        assert gust(E - 2, 5.0, 100.0) == (12.0, 90.0)
+        assert gust(E, 31.0, 270.0) == (31.0, 270.0)       # the period's last second
+        assert gust(E + 2, 5.0, 180.0) == (5.0, 180.0)     # the next period: not 31
+        # WeeWX's announcement comes after that packet, and must not wipe it:
+        # its 5 is still the period's highest when a 3 follows.
+        engine.dispatchEvent(weewx.Event(weewx.END_ARCHIVE_PERIOD))
+        assert gust(E + 4, 3.0, 190.0) == (5.0, 180.0)
+        assert gust(E + 6, 7.0, 200.0) == (7.0, 200.0)
+        assert gust(E + 300, 3.0, 10.0) == (7.0, 200.0)
+        assert gust(E + 301, 3.0, 10.0) == (3.0, 10.0)
+        # A calm first packet has no gust and no direction left from before.
+        assert gust(E + 601, 0.0, None) == (0.0, None)
+        # A jump of several periods at once starts afresh too.
+        assert gust(E + 2000, 1.0, 20.0) == (1.0, 20.0)
+        engine.shutDown()
+
+    def test_a_clock_stepped_back_across_a_boundary_does_not_lose_the_periods_gust(
+            self, monkeypatch, tmp_path):
+        # The host's clock is stepped back two seconds just after a period
+        # began: a packet is dated in the period before, and the next in
+        # the new one again.  The new period's gust, already recorded, stays.
+        engine, port, _ = make_engine(monkeypatch, tmp_path, [])
+        engine.dispatchEvent(weewx.Event(weewx.STARTUP))
+        E = 1794744000
+
+        def gust(ts, speed, direction):
+            packet = {'dateTime': ts, 'windSpeed': speed, 'windDir': direction}
+            engine.dispatchEvent(weewx.Event(weewx.NEW_LOOP_PACKET, packet=packet))
+            return packet['windGust'], packet['windGustDir']
+        assert gust(E - 1, 20.0, 80.0) == (20.0, 80.0)
+        assert gust(E + 1, 30.0, 90.0) == (30.0, 90.0)        # the new period
+        assert gust(E - 1, 2.0, 100.0) == (30.0, 90.0)        # dated back: nothing changes
+        assert gust(E + 1, 3.0, 110.0) == (30.0, 90.0)        # and forward again: not afresh
+        assert gust(E + 301, 4.0, 120.0) == (4.0, 120.0)
+        engine.shutDown()
+
+    def test_a_clock_that_was_ahead_and_is_corrected_starts_the_gust_afresh(
+            self, monkeypatch, tmp_path):
+        # The clock that dates the packets is three hours ahead, and is then
+        # set right.  Every packet after that is dated in an earlier period:
+        # held to the period of the wrong time, the 40 would stand as the
+        # gust for three hours.  More than one whole period back, the gust
+        # starts afresh at the packet's own period, and goes on from there.
+        engine, port, _ = make_engine(monkeypatch, tmp_path, [])
+        engine.dispatchEvent(weewx.Event(weewx.STARTUP))
+        E = 1794744000
+
+        def gust(ts, speed, direction):
+            packet = {'dateTime': ts, 'windSpeed': speed, 'windDir': direction}
+            engine.dispatchEvent(weewx.Event(weewx.NEW_LOOP_PACKET, packet=packet))
+            return packet['windGust'], packet['windGustDir']
+        assert gust(E + 10801, 40.0, 80.0) == (40.0, 80.0)    # three hours ahead
+        assert gust(E + 1, 5.0, 90.0) == (5.0, 90.0)          # corrected: afresh
+        assert gust(E + 3, 3.0, 100.0) == (5.0, 90.0)
+        assert gust(E + 301, 2.0, 110.0) == (2.0, 110.0)      # and each period after
+        # Exactly one period back is the step across a boundary: not afresh.
+        assert gust(E + 300, 9.0, 120.0) == (9.0, 120.0)      # counted in the latest period
+        assert gust(E + 301, 1.0, 130.0) == (9.0, 120.0)
+        # Two periods back is a correction.
+        assert gust(E - 1, 1.0, 140.0) == (1.0, 140.0)
         engine.shutDown()
 
 

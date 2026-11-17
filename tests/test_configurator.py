@@ -205,36 +205,43 @@ class TestService:
         service.max_loop_gustdir = None
         return service
 
+    # A time 100 s into a five-minute archive period (the service's default
+    # interval, with no console's known).
+    T = 1794744100
+
     def test_gust_tracking(self):
         service = self.make_service()
-        packet = {'windSpeed': 5.0, 'windDir': 90.0}
+        packet = {'dateTime': self.T, 'windSpeed': 5.0, 'windDir': 90.0}
         service.new_loop_packet(types.SimpleNamespace(packet=packet))
         assert packet['windGust'] == 5.0
         assert packet['windGustDir'] == 90.0
         # A lower speed does not displace the gust.
-        packet = {'windSpeed': 3.0, 'windDir': 180.0}
+        packet = {'dateTime': self.T + 2, 'windSpeed': 3.0, 'windDir': 180.0}
         service.new_loop_packet(types.SimpleNamespace(packet=packet))
         assert packet['windGust'] == 5.0
         assert packet['windGustDir'] == 90.0
         # A higher one does.
-        packet = {'windSpeed': 7.0, 'windDir': 270.0}
+        packet = {'dateTime': self.T + 4, 'windSpeed': 7.0, 'windDir': 270.0}
         service.new_loop_packet(types.SimpleNamespace(packet=packet))
         assert packet['windGust'] == 7.0
         assert packet['windGustDir'] == 270.0
 
     def test_none_wind_speed_tolerated(self):
         service = self.make_service()
-        packet = {'windSpeed': None, 'windDir': None}
+        packet = {'dateTime': self.T, 'windSpeed': None, 'windDir': None}
         service.new_loop_packet(types.SimpleNamespace(packet=packet))
         assert packet['windGust'] == 0.0
         assert packet['windGustDir'] is None
 
-    def test_end_archive_period_resets(self):
+    def test_the_first_packet_of_the_next_archive_period_starts_afresh(self):
         service = self.make_service()
-        service.new_loop_packet(types.SimpleNamespace(packet={'windSpeed': 5.0, 'windDir': 90.0}))
-        service.end_archive_period(types.SimpleNamespace())
-        assert service.max_loop_gust == 0.0
-        assert service.max_loop_gustdir is None
+        service.new_loop_packet(types.SimpleNamespace(
+            packet={'dateTime': self.T, 'windSpeed': 5.0, 'windDir': 90.0}))
+        packet = {'dateTime': self.T + 300, 'windSpeed': 2.0, 'windDir': 180.0}
+        service.new_loop_packet(types.SimpleNamespace(packet=packet))
+        assert (packet['windGust'], packet['windGustDir']) == (2.0, 180.0)
+        # The driver no longer listens for WeeWX's end of the period.
+        assert not hasattr(service, 'end_archive_period')
 
 
 class TestConfEditor:

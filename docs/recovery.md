@@ -186,6 +186,10 @@ ERROR user.vantagenext: 5 LOOP batches in a row failed; closing the port and ope
 INFO user.vantagenext: The port is open again.
 ```
 
+A reopen does not begin sooner than five seconds after the last one succeeded (3.4.1), so a
+console that answers and then fails every batch at once is tried once in five seconds, not
+as fast as it answers.  The first reopen after healthy running is not delayed.
+
 A port that will not open is tried again every five seconds until it does.  The first
 failure is logged, and then one line once a minute while they go on:
 

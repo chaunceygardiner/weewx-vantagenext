@@ -144,7 +144,7 @@ problems below.
 1. Restart WeeWX, then check the log for the driver announcing itself:
 
    ```
-   INFO user.vantagenext: Driver version is 3.4
+   INFO user.vantagenext: Driver version is 3.4.1
    ```
 
 The manual has the full steps, including
