@@ -26,8 +26,9 @@ import pytest
 
 from common import (ACK, ADV_E, BASE_DT, WAKE, FakeClock, ScriptedAdvantage, ScriptedWrapper,
                     SteeredConsole, advdmp_reads, advtime_reads, archive_page,
-                    archive_record_at, dmpaft_reads, make_frame, make_loop1, make_loop2,
-                    make_stamped_record, setup_reads, waiting_frames)
+                    archive_record_at, dmpaft_reads, make_block, make_combined_frame,
+                    make_frame, make_loop1, make_loop2, make_record_2, make_stamped_record,
+                    setup_reads, waiting_frames)
 
 import vantagenext
 from vantagenext import ShortReadIOError, VantageNext, VantageNextService
@@ -419,9 +420,9 @@ class TestAdvantage:
     E = ADV_E            # 2026-11-15 12:00:00 UTC, the end of an archive interval
 
     def make_engine(self, monkeypatch, tmp_path, now, reads, timesynch=None, archive=True,
-                    last_stamp=None):
+                    last_stamp=None, console_protocol=1):
         db_file = str(tmp_path / 'weewx.sdb')
-        port = ScriptedAdvantage(CONSTRUCTION_READS + list(reads))
+        port = ScriptedAdvantage(CONSTRUCTION_READS + list(reads), console_protocol)
         monkeypatch.setattr(VantageNext, '_port_factory', staticmethod(lambda vp_dict: port))
         config = make_config(db_file)
         config['VantageNext'].update({'type': 'advantage', 'host': 'console1',
@@ -469,6 +470,44 @@ class TestAdvantage:
         assert 'Clock error is 0.02 seconds (positive is fast)' in caplog.text
         assert engine.console._clock is None
         assert not os.path.exists(str(tmp_path / 'archive' / 'vantagenext'))
+
+    def test_protocol_2_through_the_engine(self, monkeypatch, tmp_path):
+        # A console that says 2: the catch-up lands 80-byte records with the
+        # block's values, and every LOOP packet has both Davis packets' fields
+        # and the block's, one a beat, with the running gust from LOOP2's
+        # wind speed.
+        E = self.E
+        now = E - 10.0
+        recs = [make_record_2(archive_record_at(datetime.datetime.fromtimestamp(t), outTemp=700,
+                                                outHumidity=46),
+                              make_block(vantagenext.record_block, outHumidity=456 + n,
+                                         windSpeed=104), t)
+                for n, t in enumerate((E - 600, E - 300))]
+        frames = [make_combined_frame(make_loop1(outTemp=700, windSpeed=0, monthRain=123),
+                                      make_loop2(outTemp=700, windSpeed=s, windGust10=9),
+                                      make_block(vantagenext.loop_block, outHumidity=456,
+                                                 dewpoint=252), t)
+                  for t, s in ((E - 8, 6), (E - 6, 11), (E - 4, 7))]
+        engine, port, clock, db_file = self.make_engine(
+            monkeypatch, tmp_path, now,
+            advdmp_reads(recs) + [WAKE] + advtime_reads(now) + [WAKE, ACK] + frames
+            + [EndTest()], console_protocol=2)
+        seen = []
+        engine.bind(weewx.NEW_LOOP_PACKET, lambda event: seen.append(dict(event.packet)))
+        with pytest.raises(EndTest):
+            engine.run()
+        monkeypatch.undo()
+        assert self.requests(port) == [b'ADVDMP 0 512 4\n', b'ADVTIME\n', b'ADVLOOP 4 200\n']
+        assert self.rows(db_file, 'SELECT dateTime, outHumidity, windSpeed FROM archive '
+                                  'ORDER BY dateTime') == [
+            (E - 600, pytest.approx(45.6), pytest.approx(10.4)),
+            (E - 300, pytest.approx(45.7), pytest.approx(10.4))]
+        assert [p['dateTime'] for p in seen] == [E - 8, E - 6, E - 4]
+        assert [p['windSpeed'] for p in seen] == [6.0, 11.0, 7.0]
+        assert [p['windGust'] for p in seen] == [6.0, 11.0, 11.0]
+        for p in seen:
+            assert p['outHumidity'] == pytest.approx(45.6) and p['dewpoint'] == pytest.approx(25.2)
+            assert p['monthRain'] == pytest.approx(1.23) and p['windGust10'] == 9.0
 
     def test_one_interval_end_to_end(self, monkeypatch, tmp_path):
         # The frame stamped E is in the period ending E; the frame stamped

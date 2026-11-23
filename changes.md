@@ -29,6 +29,22 @@
   the console's own time, and `--dump` takes every record with its own time.
   `type = ethernet` works with an advantage console as before, as with any
   Davis console.
+- From an advantage console that speaks protocol 2 or later, every LOOP packet
+  has all the fields of both Davis packets, LOOP1 and LOOP2, every two
+  seconds, and the values the Davis packets round come finer: humidities,
+  extra temperatures, dew point, heat index, wind chill and THSW in tenths,
+  and the barometer, station pressure and altimeter in ten-thousandths of an
+  inch.  Each archive record has its humidities, extra temperatures and
+  average wind in tenths, its barometer in ten-thousandths and its wind
+  directions in whole degrees.  `loop_request` is not used with such a
+  console (a line says so when the connection is opened, if weewx.conf sets
+  it).  Every packet now carries the console's dew point, heat index, wind
+  chill, THSW, station pressure and altimeter, which WeeWX takes in place of
+  its own unless `[StdWXCalculate]` says `software`; the heat index is then
+  the console's formula.  A console that says protocol 1 is read as before.
+- A `loop_request` other than 1, 2 or 3 stops the driver at startup, with an
+  error that says so, before anything is sent to the console; before, it was
+  sent in every request for LOOP packets as it stood.
 - A console with no ISS set up sends LOOP2 wind values that are not
   readings: 0x7FFF for the two- and ten-minute wind averages, 0x00FF for the
   ten-minute gust and 0xFFFF for its direction.  These were reported as

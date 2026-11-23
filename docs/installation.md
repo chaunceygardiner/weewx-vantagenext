@@ -182,6 +182,18 @@ What that changes:
   [An advantage console](dst.md#an-advantage-console).
 - **The console keeps its own clock.**  The driver steers and sets nothing, and warns when
   the clock is wrong.  See [An advantage console](clock.md#an-advantage-console).
+- **Finer values, from a console that speaks protocol 2.**  Every LOOP packet then has all
+  the fields of both Davis packets, LOOP1 and LOOP2, every two seconds, and `loop_request`
+  is not used.  Humidities, extra temperatures, dew point, heat index, wind chill and THSW
+  come in tenths, and the barometer, station pressure and altimeter in ten-thousandths of
+  an inch, where the Davis packets round them.  Each archive record's humidities and extra
+  temperatures come in tenths too, its average wind in tenths of a mile an hour, and its
+  wind directions in whole degrees in place of compass points.  The driver asks for these
+  from any console that says protocol 2 or later, and from one that says 1 it reads the
+  Davis values as before.  Since every packet carries the console's dew point, heat index,
+  wind chill, THSW, station pressure and altimeter, WeeWX takes those (it prefers the
+  console's values unless `[StdWXCalculate]` says `software`) where, with LOOP1 packets,
+  it worked them out itself.
 
 The startup lines differ accordingly:
 
@@ -198,7 +210,9 @@ The last line is the console's answer when the driver asks who it is, which it d
 time it opens the connection.  A `type = advantage` pointed at a Davis console or a
 WeatherLinkIP stops there, about five seconds after it began, with an ERROR line that says
 so (a console that was asleep is reported as one that did not answer, with the same
-advice); nothing has been written to the console.  Use `type = ethernet` for those.
+advice); nothing has been written to the console.  Use `type = ethernet` for those.  A
+console that says protocol 2 or later is followed by one more line when `weewx.conf` sets
+`loop_request`, which says it is not used for the LOOP packets weewxd reads from it.
 
 ## What the installer writes
 

@@ -536,10 +536,11 @@ class EthernetWrapper(BaseWrapper):
 #                                  number; sent after every open.
 #   ADVLOOP <mask> <n> [<after>]   n LOOP packets, each in a frame with the
 #                                  even second it is the console's state as
-#                                  of, an epoch (loop_batch).
-#   ADVDMP <after> <max>           the archive records after an epoch, each
+#                                  of, an epoch (loop_batch).  Protocol 2:
+#                                  mask 4, both packets in every frame.
+#   ADVDMP <after> <max> [4]       the archive records after an epoch, each
 #                                  with the epoch that ends its interval
-#                                  (archive_records).
+#                                  (archive_records); 4, protocol 2's.
 #   ADVTIME                        the console's clock, as an epoch
 #                                  (_ask_time).  Nothing sets it.
 #
@@ -568,6 +569,17 @@ class EthernetWrapper(BaseWrapper):
 # is zero.  A stamped record is ADVANTAGE_RECORD bytes: the 52-byte rev B
 # record, then the epoch.
 #
+# Protocol 2, asked of a connection whose console said 2 or more
+# (AdvantageWrapper.wants_protocol_2): a frame is ADVANTAGE_FRAME_2 bytes,
+# LOOP1's 99 at 0, LOOP2's 99 at 99, a 52-byte block of finer values at 198,
+# the epoch at 250 and the CRC at 254, decoded into one packet
+# (AdvantageProtocol._unpack_combined); a record is ADVANTAGE_RECORD_2 bytes,
+# the rev B record, a 24-byte block at 52 and the epoch at 76.  Each block's
+# values replace the Davis ones (_apply_block).  loop_request is not used:
+# every frame has both packets.  The form is the connection's: a console
+# upgraded or rolled back closes every connection, and the next one asks
+# ADVID again.
+#
 # ADVID, after every open (_identify).  It is the guard against type =
 # advantage pointed at a Davis console or a WeatherLinkIP, which answer a line
 # they do not know with the two bytes an advantage console's own reply begins
@@ -582,9 +594,10 @@ class EthernetWrapper(BaseWrapper):
 # The wake-up (wakeup_console).  A newline stops a LOOP batch, and the frames
 # the console had already written come before the two bytes that answer it:
 # one in flight or, when WeeWX leaves the LOOP in the middle of a replay, as
-# many as were asked for less one, 20,895 bytes.  The base wake-up empties
-# the input once a try, 4096 bytes, and whether that takes the answer with it
-# is a race, so against many frames it fails or succeeds seconds late.  This
+# many as were asked for less one, 20,895 bytes (50,944 in protocol 2).  The
+# base wake-up empties the input once a try, 4096 bytes, and whether that
+# takes the answer with it is a race, so against many frames it fails or
+# succeeds seconds late.  This
 # one reads past whole frames: every frame begins LOO, as every Davis packet
 # does, the console writes every frame before the answer, and one newline
 # draws one answer.  Frames read past are not received: the last stamp does
@@ -653,6 +666,11 @@ class EthernetWrapper(BaseWrapper):
 #   _last_connect_at     when _connect last began; None, never.
 #   _connect_logged_at   when _connect last said why it failed; None after a
 #                        connect that succeeded.
+#   console_protocol     the number the console said when this connection was
+#                        opened (set by openPort after ADVID); None with no
+#                        connection (_drop, closePort).  It decides the
+#                        requests' form and the frames' size (wants_protocol_2,
+#                        frame_size), the wake-up's drain included.
 #
 # The base wake-up's flush and its second, "rude" read are not here: they are
 # for a console that may be asleep, on a stream with no way to tell a packet
@@ -678,19 +696,23 @@ class EthernetWrapper(BaseWrapper):
 # first sends the frames it holds with a later stamp (it keeps ten minutes of
 # them), so no LOOP packet is lost across a download or a reopen.
 
-# The size of a stamped LOOP frame and of a stamped archive record, the most
-# records one ADVDMP brings, and the protocol numbers.
+# The size of a stamped LOOP frame and of a stamped archive record, in
+# protocol 1 and in protocol 2; the most records one ADVDMP brings; and the
+# protocol numbers.
 ADVANTAGE_FRAME = 105
+ADVANTAGE_FRAME_2 = 256
 ADVANTAGE_RECORD = 56
+ADVANTAGE_RECORD_2 = 80
 ADVANTAGE_DMP_MAX = 512
 # The number rises with each addition to the protocol, and a console serves
 # every request of a lower number byte for byte as that number defined it.
-# ADVANTAGE_PROTOCOL is the newest this driver speaks; ADVANTAGE_PROTOCOL_MIN
-# is the lowest it accepts, and only a console that says less is refused
-# (_ask_identity), with the advice to upgrade the console.  They are two:
-# raising the first must not refuse the consoles that still say the second.
-ADVANTAGE_PROTOCOL = 1
+# ADVANTAGE_PROTOCOL_MIN is the lowest this driver accepts: only a console
+# that says less is refused (_ask_identity), with the advice to upgrade the
+# console.  ADVANTAGE_PROTOCOL_2 is the number from which protocol 2's forms
+# are asked for (AdvantageWrapper.wants_protocol_2): a console that says 1 is
+# still spoken to, in protocol 1's.
 ADVANTAGE_PROTOCOL_MIN = 1
+ADVANTAGE_PROTOCOL_2 = 2
 # The wake-up reads past no more frames than this before it takes the bytes
 # for something else: more than the 199 that can be waiting (a request's 200
 # less the one that broke the LOOP).  A bound, not a retry count.
@@ -715,12 +737,27 @@ class AdvantageWrapper(EthernetWrapper):
     _awaiting = False
     _last_connect_at = None
     _connect_logged_at = None
+    # The protocol number the console said when this connection was opened;
+    # None with no connection.
+    console_protocol = None
 
     NO_CONNECTION = "no connection to the console"
 
-    def __init__(self, host, port, timeout, wait_before_retry, command_delay):
+    def __init__(self, host, port, timeout, wait_before_retry, command_delay,
+                 loop_request_set=False):
         # No pause after a write: that is for a WeatherLinkIP.
         super().__init__(host, port, timeout, 0.0, wait_before_retry, command_delay)
+        # Whether weewx.conf sets loop_request, which protocol 2 does not use.
+        self.loop_request_set = loop_request_set
+
+    def wants_protocol_2(self):
+        """Whether this connection is asked in protocol 2's forms: its
+        console said ADVANTAGE_PROTOCOL_2 or more.  False with no connection."""
+        return self.console_protocol is not None and self.console_protocol >= ADVANTAGE_PROTOCOL_2
+
+    def frame_size(self):
+        """The size of the LOOP frames this connection is sent."""
+        return ADVANTAGE_FRAME_2 if self.wants_protocol_2() else ADVANTAGE_FRAME
 
     def connected(self):
         """Whether the port has a connection.  Asked of the socket, which
@@ -732,6 +769,7 @@ class AdvantageWrapper(EthernetWrapper):
         kept.  No farewell newline: nothing more is to be read from it."""
         self._partial = b''
         self._awaiting = False
+        self.console_protocol = None
         if self.socket is not None:
             try:
                 self.socket.close()
@@ -810,6 +848,7 @@ class AdvantageWrapper(EthernetWrapper):
             return
         self._partial = b''
         self._awaiting = False
+        self.console_protocol = None
         super().closePort()
 
     def resync(self, why):
@@ -892,7 +931,11 @@ class AdvantageWrapper(EthernetWrapper):
                 log.error("%s.", e)
             raise
         self._connect_logged_at = None
+        self.console_protocol = protocol
         log.info("Advantage console %s: version %s, protocol %d.", name, version, protocol)
+        if self.wants_protocol_2() and self.loop_request_set:
+            log.info('%-19s: not used for the LOOP packets weewxd reads from this console '
+                     '(protocol 2 sends LOOP1 and LOOP2 in every frame)', 'loop_request')
 
     def _identify(self):
         """Ask the console who it is: (name, version, protocol number).
@@ -1032,7 +1075,7 @@ class AdvantageWrapper(EthernetWrapper):
                 frames = 0
                 while _resp == b'LO' and frames < ADVANTAGE_DRAIN_FRAMES:
                     try:
-                        self.read(ADVANTAGE_FRAME - 2)
+                        self.read(self.frame_size() - 2)
                     except weewx.WeeWxIOError:
                         # A frame is read past whole or not at all: its
                         # first two bytes go back in front of what the
@@ -1785,9 +1828,14 @@ class VantageNext(weewx.drivers.AbstractDevice):
         VantageNext._log_option(vp_dict, 'model_type', self.model_type)
 
         if self.model_type not in (1, 2):
-            raise weewx.UnsupportedFeature("Unknown model_type (%d)" % self.model_type)
+            raise weewx.UnsupportedFeature("Unknown model_type (%s)" % self.model_type)
         self.loop_request = to_int(vp_dict.get('loop_request', 1))
         VantageNext._log_option(vp_dict, 'loop_request', self.loop_request)
+        if self.loop_request not in (1, 2, 3):
+            # Refused here rather than asked of the console, which would
+            # refuse every batch for as long as WeeWX runs.
+            raise weewx.UnsupportedFeature("loop_request must be 1, 2 or 3 (weewx.conf says %s)"
+                                           % self.loop_request)
         # FALLBACK's parameters until the first clock check reads the console.
         self.clock_drift_secs = 0.0
         self.day_start_jump = 0.0
@@ -4942,7 +4990,8 @@ class VantageNext(weewx.drivers.AbstractDevice):
                 # from type = ethernet has it).  One ordinary line, no warning.
                 log.info('%-19s: not used with type = advantage', 'tcp_send_delay')
             wrapper = AdvantageWrapper(hostname, tcp_port, timeout,
-                                       wait_before_retry, command_delay)
+                                       wait_before_retry, command_delay,
+                                       loop_request_set='loop_request' in vp_dict)
         else:
             raise weewx.UnsupportedFeature(connection_type)
         if timeout == configured:
@@ -4970,7 +5019,7 @@ class VantageNext(weewx.drivers.AbstractDevice):
             source = 'weewx.conf' if name in vp_dict else 'default'
         log.info('%-19s: %s (%s)', name, value, source)
 
-    def _unpackLoopPacket(self, raw_loop_buffer, stamp=None):
+    def _unpackLoopPacket(self, raw_loop_buffer, stamp=None, rain=True):
         """Decode a raw Davis LOOP packet, returning the results as a dictionary in physical units.
 
         Args:
@@ -4978,6 +5027,9 @@ class VantageNext(weewx.drivers.AbstractDevice):
             stamp(int|None): The console's own time for the packet, an epoch
                 (an advantage console): used as it is, nothing added and
                 nothing rounded.  None: the host's time now.
+            rain(bool): Work out the rain since the last packet (_add_rain).
+                False for one half of a combined frame, whose rain is
+                worked out once, after both halves are decoded.
 
         Returns:
             dict: The key will be an observation type, the value will be the observation
@@ -5041,6 +5093,12 @@ class VantageNext(weewx.drivers.AbstractDevice):
         if 'sunset' in loop_packet:
             loop_packet['sunset'] += start_of_day
 
+        if rain:
+            self._add_rain(loop_packet)
+        return loop_packet
+
+    def _add_rain(self, loop_packet):
+        """Put the rain since the last packet in a LOOP packet."""
         # Because the Davis stations do not offer bucket tips in LOOP data, we
         # must calculate it by looking for changes in rain totals. This won't
         # work for the very first rain packet.
@@ -5051,8 +5109,6 @@ class VantageNext(weewx.drivers.AbstractDevice):
         loop_packet['rain'] = weewx.wxformulas.calculate_delta(day_rain, self.save_day_rain)
         if day_rain is not None:
             self.save_day_rain = day_rain
-
-        return loop_packet
 
     @staticmethod
     def adjust_for_dst(now, dateTime, shift):
@@ -5209,6 +5265,9 @@ loop1_types, loop1_code = list(zip(*loop1_schema))
 loop1_struct = struct.Struct('<' + ''.join(loop1_code))
 loop2_types, loop2_code = list(zip(*loop2_schema))
 loop2_struct = struct.Struct('<' + ''.join(loop2_code))
+# The fields a LOOP2 packet carries: in a combined frame its reading of each
+# is the one taken (AdvantageProtocol._unpack_combined).
+loop2_fields = frozenset(loop2_types)
 
 # ===============================================================================
 #                              archive packet
@@ -5260,6 +5319,64 @@ extra_sensors = {
     'extraHumid1', 'extraHumid2', 'extraTemp1', 'extraTemp2', 'extraTemp3',
     'soilMoist1', 'soilMoist2', 'soilMoist3', 'soilMoist4'
 }
+
+
+# ===============================================================================
+#                 The finer values of an advantage console's protocol 2
+# ===============================================================================
+
+# A block of an advantage console's protocol 2 follows the Davis bytes in a
+# LOOP frame (52 bytes, at 198) and in an archive record (24 bytes, at 52):
+# signed, low byte first, each field's dash the largest value of its size.
+# Each value replaces the Davis one of the same name; a dash removes it.
+
+def _block_tenths(raw):
+    return raw / 10.0 if raw != 0x7fff else None
+
+
+def _block_ten_thousandths(raw):
+    return raw / 10000.0 if raw != 0x7fffffff else None
+
+
+def _block_degrees(raw):
+    # Whole degrees, 1 to 360 with north as 360, as a LOOP packet's.
+    return (float(raw) if raw != 360 else 0.0) if 1 <= raw <= 360 else None
+
+
+class _Block:
+    def __init__(self, fields):
+        self.names = [name for name, fmt, decode in fields]
+        self.decoders = [decode for name, fmt, decode in fields]
+        self.struct = struct.Struct('<' + ''.join(fmt for name, fmt, decode in fields))
+
+
+loop_block = _Block(
+    [('outHumidity', 'h', _block_tenths), ('inHumidity', 'h', _block_tenths)]
+    + [('extraTemp%d' % n, 'h', _block_tenths) for n in range(1, 8)]
+    + [('extraHumid%d' % n, 'h', _block_tenths) for n in range(1, 8)]
+    + [(name, 'h', _block_tenths) for name in ('dewpoint', 'heatindex', 'windchill', 'THSW')]
+    + [(name, 'i', _block_ten_thousandths) for name in ('barometer', 'pressure', 'altimeter')])
+
+record_block = _Block(
+    [('outHumidity', 'h', _block_tenths), ('inHumidity', 'h', _block_tenths)]
+    + [('extraTemp%d' % n, 'h', _block_tenths) for n in range(1, 4)]
+    + [('extraHumid%d' % n, 'h', _block_tenths) for n in range(1, 3)]
+    + [('windSpeed', 'h', _block_tenths), ('windGustDir', 'h', _block_degrees),
+       ('windDir', 'h', _block_degrees), ('barometer', 'i', _block_ten_thousandths)])
+
+
+def _apply_block(packet, data, block, hardware_type):
+    """Put a block's values in a decoded packet or record, in place of the
+    Davis ones; a dash removes the field.  On a Vue the extra sensors are
+    skipped, as the Davis decoding skips them."""
+    for name, decode, raw in zip(block.names, block.decoders, block.struct.unpack(data)):
+        if name in extra_sensors and hardware_type == 17:
+            continue
+        value = decode(raw)
+        if value is None:
+            packet.pop(name, None)
+        else:
+            packet[name] = value
 
 
 def _rxcheck(model_type, interval, iss_id, number_of_wind_samples):
@@ -5633,18 +5750,23 @@ class AdvantageProtocol:
 
         self.port.wakeup_console(self.max_tries)
 
+        # The form is the connection's, decided once for the batch: protocol
+        # 2's frame (both packets and the block) or loop_request's packets.
+        combined = self.port.wants_protocol_2()
+        size = ADVANTAGE_FRAME_2 if combined else ADVANTAGE_FRAME
+        mask = 4 if combined else self.loop_request
         # With the last stamp received, the console first sends the frames it
         # holds with a later one: those missed across a download or a reopen.
         if self._last_stamp is None:
-            self.port.send_data(b"ADVLOOP %d %d\n" % (self.loop_request, N))
+            self.port.send_data(b"ADVLOOP %d %d\n" % (mask, N))
         else:
-            self.port.send_data(b"ADVLOOP %d %d %d\n" % (self.loop_request, N, self._last_stamp))
+            self.port.send_data(b"ADVLOOP %d %d %d\n" % (mask, N, self._last_stamp))
         # N frames are read, the number the console sends: a frame that
         # cannot be decoded is one of them, and yields nothing.
         for unused_frame in range(N):
             for count in range(self.max_tries):
                 try:
-                    _buffer, epoch = self._get_stamped_frame()
+                    _buffer, epoch = self._get_stamped_frame(size)
                 except weewx.CRCError as e:
                     # The batch ends here.  The stream is still on a frame
                     # boundary (the port drops nothing it has received), and
@@ -5672,7 +5794,10 @@ class AdvantageProtocol:
                 log.error("LOOP max tries (%d) exceeded.", self.max_tries)
                 raise weewx.RetriesExceeded("Max tries exceeded while getting LOOP data.")
             try:
-                loop_packet = self.station._unpackLoopPacket(_buffer[:95], stamp=epoch)
+                if combined:
+                    loop_packet = self._unpack_combined(_buffer, epoch)
+                else:
+                    loop_packet = self.station._unpackLoopPacket(_buffer[:95], stamp=epoch)
             except weewx.WeeWxIOError as e:
                 # Received (the last stamp has moved past it), and not asked
                 # for again: on to the next frame.
@@ -5682,16 +5807,41 @@ class AdvantageProtocol:
             self.station.pkt_count += 1
             yield loop_packet
 
-    def _get_stamped_frame(self):
-        """Read a single stamped LOOP frame: its bytes and its stamp, the
-        console's time for it."""
-        _buffer = self.port.read(ADVANTAGE_FRAME)
+    def _get_stamped_frame(self, size):
+        """Read a single stamped LOOP frame of the batch's size: its bytes
+        and its stamp, the console's time for it, which is the 4 bytes
+        before the CRC."""
+        _buffer = self.port.read(size)
         if crc16(_buffer):
             raise weewx.CRCError("LOOP frame failed CRC check")
-        (epoch,) = struct.unpack_from("<I", _buffer, 99)
+        (epoch,) = struct.unpack_from("<I", _buffer, size - 6)
         # Received, whatever decoding makes of it.
         self._last_stamp = epoch
         return _buffer, epoch
+
+    def _unpack_combined(self, frame, epoch):
+        """One LOOP packet from a protocol 2 frame: LOOP1 at 0, LOOP2 at 99,
+        the block at 198 (the two Davis CRCs are not checked: the frame's
+        covers every byte).  Where LOOP2 carries a field its reading is taken,
+        a blank included: LOOP1's blank wind speed is 0, a calm, where
+        LOOP2's is a dash, and LOOP2's ten-minute average is in tenths.
+        LOOP1 gives the fields only it has.  The rain is worked out once,
+        from the merged packet, after both halves have decoded: a frame that
+        cannot be decoded leaves the rain's baseline where it was.  Then the
+        block's finer values replace the Davis ones."""
+        # Which half is which is what the merge rests on: a frame whose halves
+        # are not LOOP1 then LOOP2 cannot be decoded.
+        if frame[4] != 0 or frame[103] != 1:
+            raise weewx.WeeWxIOError("protocol 2 frame with packet types %d and %d, not 0 and 1"
+                                     % (frame[4], frame[103]))
+        station = self.station
+        loop1 = station._unpackLoopPacket(frame[0:95], stamp=epoch, rain=False)
+        loop2 = station._unpackLoopPacket(frame[99:194], stamp=epoch, rain=False)
+        loop_packet = {k: v for k, v in loop1.items() if k not in loop2_fields}
+        loop_packet.update(loop2)
+        station._add_rain(loop_packet)
+        _apply_block(loop_packet, frame[198:250], loop_block, station.hardware_type)
+        return loop_packet
 
     def archive_records(self, since_ts, progress_fn=None):
         """A generator function to return archive records from an advantage
@@ -5712,15 +5862,22 @@ class AdvantageProtocol:
             if progress_fn:
                 progress_fn()
             self.port.wakeup_console(self.max_tries)
+            # The connection's form, as for LOOP: protocol 2's records carry
+            # the block; to a protocol 1 console the third parameter is NAKed.
+            blocks = self.port.wants_protocol_2()
+            size = ADVANTAGE_RECORD_2 if blocks else ADVANTAGE_RECORD
             try:
-                self.port.send_data(b"ADVDMP %d %d\n" % (after, ADVANTAGE_DMP_MAX))
+                if blocks:
+                    self.port.send_data(b"ADVDMP %d %d 4\n" % (after, ADVANTAGE_DMP_MAX))
+                else:
+                    self.port.send_data(b"ADVDMP %d %d\n" % (after, ADVANTAGE_DMP_MAX))
                 header = self.port.read(3)
                 count, more = struct.unpack("<HB", header)
                 # Checked before it sizes a read: no more than were asked for.
                 if count > ADVANTAGE_DMP_MAX:
                     raise weewx.WeeWxIOError("ADVDMP: %d records, more than the %d asked for"
                                              % (count, ADVANTAGE_DMP_MAX))
-                body = self.port.read(count * ADVANTAGE_RECORD + 2)
+                body = self.port.read(count * size + 2)
                 if crc16(header + body):
                     raise weewx.CRCError("ADVDMP reply failed CRC check")
             except weewx.WeeWxIOError:
@@ -5743,8 +5900,8 @@ class AdvantageProtocol:
                           "The download ends here.")
                 return
             for index in range(count):
-                _record_string = body[index * ADVANTAGE_RECORD:(index + 1) * ADVANTAGE_RECORD]
-                (epoch,) = struct.unpack_from("<I", _record_string, 52)
+                _record_string = body[index * size:(index + 1) * size]
+                (epoch,) = struct.unpack_from("<I", _record_string, size - 4)
                 if epoch <= after:
                     log.error("ADVDMP: the console sent a record stamped %d, which is not "
                               "after %d.  The download ends here.", epoch, after)
@@ -5762,6 +5919,9 @@ class AdvantageProtocol:
                     log.error("ADVDMP: the record stamped %d could not be decoded: %s.  "
                               "It is left out.", epoch, e)
                     continue
+                if blocks:
+                    _apply_block(_record, _record_string[52:76], record_block,
+                                 self.station.hardware_type)
                 yield _record
             if not more:
                 return

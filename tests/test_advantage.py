@@ -31,7 +31,8 @@ import pytest
 from common import (ACK, ADV_E, WAKE, FakeClock, ScriptedAdvantage, ScriptedWrapper, Waiting,
                     advdmp_reads, advdmp_reply, advtime_reads, advtime_reply, archive_page,
                     archive_record_at,
-                    bare_station, make_frame, make_loop1, make_loop2, make_stamped_record,
+                    bare_station, make_block, make_combined_frame, make_frame, make_loop1,
+                    make_loop2, make_record_2, make_stamped_record,
                     reply_reads, setup_reads, waiting_frames, with_crc)
 
 import vantagenext
@@ -66,10 +67,10 @@ def record(epoch, **overrides):
         archive_record_at(datetime.datetime.fromtimestamp(epoch), **overrides), epoch)
 
 
-def station_on(reads, last_stamp=None, **attrs):
+def station_on(reads, last_stamp=None, console_protocol=1, **attrs):
     attrs.setdefault('loop_request', 3)
     attrs.setdefault('archive_interval_', 300)
-    station = bare_station(port=ScriptedAdvantage(reads), **attrs)
+    station = bare_station(port=ScriptedAdvantage(reads, console_protocol), **attrs)
     station.protocol._last_stamp = last_stamp
     return station
 
@@ -2233,3 +2234,331 @@ class TestProtocol:
                             and node.value.attr == 'protocol'), (path, node.lineno)
                     reached += 1
         assert reached > 5
+
+
+
+# ===============================================================================
+#                 Protocol 2: both packets and the finer values
+# ===============================================================================
+
+# S15.12's worked examples (advantage-console design/stage2.md at 739eb31).
+SPEC_LOOP_BLOCK = bytes.fromhex(
+    'C8018101AD02' + 'FF7F' * 6 + '9401' + 'FF7F' * 6 + 'FC00AD018E01A101'
+    + 'F4810400' + 'B17D0400' + '84810400')
+SPEC_RECORD_BLOCK = bytes.fromhex('C8018101AD02FF7FFF7F9401FF7F7D000E01F800F4810400')
+ID2 = b'\n\rOK\n\radvantage-console %d 0.9 console1\n\r'
+
+
+def combined(epoch, loop1=None, loop2=None, block=None):
+    """A protocol 2 frame from LOOP1's and LOOP2's raw overrides and the
+    block's raw values (a field not given is its dash)."""
+    return make_combined_frame(make_loop1(**(loop1 or {})), make_loop2(**(loop2 or {})),
+                               make_block(vantagenext.loop_block, **(block or {})), epoch)
+
+
+def record_2(epoch, block=None, **overrides):
+    return make_record_2(archive_record_at(datetime.datetime.fromtimestamp(epoch), **overrides),
+                         make_block(vantagenext.record_block, **(block or {})), epoch)
+
+
+def apply(block, data, hardware_type=16, packet=None):
+    packet = {} if packet is None else packet
+    vantagenext._apply_block(packet, data, block, hardware_type)
+    return packet
+
+
+class TestTheProtocol2Bytes:
+    """The specification's worked examples, both ways."""
+
+    LOOP = dict(outHumidity=45.6, inHumidity=38.5, extraTemp1=68.5, extraHumid1=40.4,
+                dewpoint=25.2, heatindex=42.9, windchill=39.8, THSW=41.7,
+                barometer=29.5412, pressure=29.4321, altimeter=29.5300)
+
+    def test_the_loop_block(self):
+        assert make_block(vantagenext.loop_block, outHumidity=456, inHumidity=385,
+                          extraTemp1=685, extraHumid1=404, dewpoint=252, heatindex=429,
+                          windchill=398, THSW=417, barometer=295412, pressure=294321,
+                          altimeter=295300) == SPEC_LOOP_BLOCK
+        assert apply(vantagenext.loop_block, SPEC_LOOP_BLOCK) == pytest.approx(self.LOOP)
+
+    def test_the_record_block_and_its_epoch(self):
+        assert make_block(vantagenext.record_block, outHumidity=456, inHumidity=385,
+                          extraTemp1=685, extraHumid1=404, windSpeed=125, windGustDir=270,
+                          windDir=248, barometer=295412) == SPEC_RECORD_BLOCK
+        assert apply(vantagenext.record_block, SPEC_RECORD_BLOCK) == pytest.approx(dict(
+            outHumidity=45.6, inHumidity=38.5, extraTemp1=68.5, extraHumid1=40.4,
+            windSpeed=12.5, windGustDir=270.0, windDir=248.0, barometer=29.5412))
+        built = make_record_2(b'\x00' * 52, SPEC_RECORD_BLOCK, ADV_E)
+        assert len(built) == 80 and built[76:] == bytes.fromhex('C09EF96A')
+
+    def test_a_frame(self):
+        built = combined(ADV_E)
+        assert len(built) == 256 and built[:3] == b'LOO' and crc16(built) == 0
+        assert built[250:254] == bytes.fromhex('C09EF96A')
+        assert crc16(built[:99]) == 0 and crc16(built[99:198]) == 0
+        assert (built[4], built[103]) == (0, 1)
+
+    def test_signed_fields_and_each_sizes_dash(self):
+        got = apply(vantagenext.loop_block, make_block(
+            vantagenext.loop_block, extraTemp1=-55, barometer=0x7fff, pressure=-1))
+        # -5.5 F; 0x7FFF in a 4-byte field is a value; every other field dashed.
+        assert got == pytest.approx(dict(extraTemp1=-5.5, barometer=3.2767, pressure=-0.0001))
+
+    def test_a_dash_removes_the_davis_value(self):
+        got = apply(vantagenext.loop_block, make_block(vantagenext.loop_block, outHumidity=456),
+                    packet=dict(outHumidity=46.0, inHumidity=39.0, THSW=42.0, altimeter=29.53,
+                                outTemp=45.0))
+        assert got == pytest.approx(dict(outHumidity=45.6, outTemp=45.0))
+
+    def test_a_vue_skips_the_extra_sensors_as_the_davis_decoding_does(self):
+        data = make_block(vantagenext.loop_block, extraTemp1=685, extraTemp4=705,
+                          extraHumid2=404, extraHumid5=505)
+        got = apply(vantagenext.loop_block, data, hardware_type=17,
+                    packet=dict(extraTemp4=70.0, extraHumid5=50.0))
+        assert got == pytest.approx(dict(extraTemp4=70.5, extraHumid5=50.5))
+        assert apply(vantagenext.loop_block, data) == pytest.approx(dict(
+            extraTemp1=68.5, extraTemp4=70.5, extraHumid2=40.4, extraHumid5=50.5))
+
+    @pytest.mark.parametrize('raw, value', [(1, 1.0), (248, 248.0), (360, 0.0), (0, None),
+                                            (361, None), (0x7fff, None), (-90, None)])
+    def test_a_records_directions_are_whole_degrees_1_to_360(self, raw, value):
+        got = apply(vantagenext.record_block,
+                    make_block(vantagenext.record_block, windDir=raw, windGustDir=raw),
+                    packet=dict(windDir=225.0, windGustDir=225.0))
+        assert got == ({} if value is None else dict(windDir=value, windGustDir=value))
+
+
+class TestTheConnectionsProtocol:
+    """The port knows its connection's protocol number, through the real
+    openPort and ADVID, and the requests and sizes follow it."""
+
+    @pytest.mark.parametrize('protocol', [1, 2, 3])
+    def test_the_loop_request_and_frame_follow_the_number(self, monkeypatch, protocol):
+        two = protocol >= 2
+        sent = (combined(ADV_E + 2, loop2=dict(outTemp=702)) if two
+                else make_frame(make_loop2(outTemp=702), ADV_E + 2))
+        wrapper, made = wrapper_on(monkeypatch, [b'\n\r', ID2 % protocol, b'\n\r', ACK, sent])
+        wrapper.openPort()
+        assert wrapper.console_protocol == protocol and wrapper.wants_protocol_2() == two
+        assert wrapper.frame_size() == (256 if two else 105)
+        station = bare_station(port=wrapper, loop_request=3)
+        got = list(station.protocol.loop_batch(1))
+        assert [(p['dateTime'], p['outTemp']) for p in got] == [(ADV_E + 2, pytest.approx(70.2))]
+        assert made[0].sent[2:] == [b'\n', b'ADVLOOP 4 1\n' if two else b'ADVLOOP 3 1\n']
+
+    @pytest.mark.parametrize('protocol', [1, 2, 3])
+    def test_the_download_request_and_records_follow_the_number(self, monkeypatch, protocol):
+        two = protocol >= 2
+        sent = (record_2(ADV_E, block=dict(outHumidity=456), outTemp=710) if two
+                else make_stamped_record(archive_record_at(
+                    datetime.datetime.fromtimestamp(ADV_E), outTemp=710), ADV_E))
+        wrapper, made = wrapper_on(monkeypatch, [b'\n\r', ID2 % protocol, b'\n\r', ACK]
+                                   + advdmp_reply([sent], False))
+        wrapper.openPort()
+        station = bare_station(port=wrapper, loop_request=3, archive_interval_=300)
+        got = list(station.protocol.archive_records(ADV_E - 300))
+        assert [(r['dateTime'], r['outTemp']) for r in got] == [(ADV_E, pytest.approx(71.0))]
+        # The Davis record's 0 %, or the block's 45.6.
+        assert got[0]['outHumidity'] == pytest.approx(45.6 if two else 0.0)
+        assert made[0].sent[2:] == [b'\n', b'ADVDMP %d 512%s\n' % (ADV_E - 300,
+                                                                    b' 4' if two else b'')]
+
+    @pytest.mark.parametrize('protocol, options, logged', [
+        (2, {'loop_request': '3'}, True), (3, {'loop_request': '1'}, True),
+        (2, {}, False), (1, {'loop_request': '3'}, False)])
+    def test_loop_request_is_said_to_be_unused_only_when_set_and_unused(
+            self, monkeypatch, caplog, protocol, options, logged):
+        wrapper, made = wrapper_on(monkeypatch, [b'\n\r', ID2 % protocol], **options)
+        caplog.clear()
+        with caplog.at_level(logging.INFO):
+            wrapper.openPort()
+        line = ('loop_request       : not used for the LOOP packets weewxd reads from this '
+                'console (protocol 2 sends LOOP1 and LOOP2 in every frame)')
+        assert lines(caplog) == ['Advantage console console1: version 0.9, protocol %d.'
+                                 % protocol] + ([line] if logged else [])
+
+    def test_no_connection_has_no_number(self, monkeypatch):
+        # Lost: a read finds the connection closed.
+        wrapper, made = wrapper_on(monkeypatch, [b'\n\r', ID2 % 2, b''])
+        wrapper.openPort()
+        assert wrapper.wants_protocol_2()
+        with pytest.raises(weewx.WeeWxIOError):
+            wrapper.read(2)
+        assert wrapper.console_protocol is None and not wrapper.wants_protocol_2()
+        assert wrapper.frame_size() == 105
+        # Closed.
+        wrapper, made = wrapper_on(monkeypatch, [b'\n\r', ID2 % 2])
+        wrapper.openPort()
+        wrapper.closePort()
+        assert wrapper.console_protocol is None and not wrapper.wants_protocol_2()
+        # An ADVID that fails, on a port whose last connection said 2.
+        wrapper, made = wrapper_on(monkeypatch, [b'\n\r', ID2 % 2],
+                                   [b'\n\r', b'\n\rOK\n\rother 1 2 3\n\r'])
+        wrapper.openPort()
+        with pytest.raises(weewx.WeeWxIOError):
+            wrapper.openPort(reopening=True)
+        assert wrapper.console_protocol is None and not wrapper.wants_protocol_2()
+
+    def test_the_wakeup_reads_past_waiting_frames_256_bytes_at_a_time(self, sleeps):
+        first, second = combined(ADV_E + 2), combined(ADV_E + 4)
+        wrapper = AdvantageWrapper('console1', 22222, 4.5, 1.2, 0.5)
+        wrapper.socket = _ScriptSocket([first[:2], first[2:], second[:2], second[2:], b'\n\r'])
+        wrapper.console_protocol = 2
+        wrapper.wakeup_console(1)
+        assert wrapper.socket.recvs == [] and wrapper._partial == b'' and not wrapper._awaiting
+
+    def test_a_stall_in_a_256_byte_frame_is_completed_by_the_retry(self, caplog, sleeps):
+        first = combined(ADV_E + 2, loop2=dict(outTemp=702))
+        second = combined(ADV_E + 4, loop2=dict(outTemp=704))
+        wrapper = AdvantageWrapper('console1', 22222, 4.5, 1.2, 0.5)
+        wrapper.socket = _ScriptSocket([b'\n\r', ACK, first, second[:150],
+                                        socket.timeout('timed out'), second[150:]])
+        wrapper.console_protocol = 2
+        station = bare_station(port=wrapper, loop_request=3)
+        with caplog.at_level(logging.INFO):
+            got = [(p['dateTime'], p['outTemp']) for p in station.protocol.loop_batch(2)]
+        assert got == [(ADV_E + 2, pytest.approx(70.2)), (ADV_E + 4, pytest.approx(70.4))]
+        assert lines(caplog) == ['ip-read error: timed out', 'LOOP try #1; error: timed out']
+
+    def test_a_rollback_and_an_upgrade_under_a_running_driver(self, monkeypatch, sleeps):
+        # Each connection is asked in its own console's form, from the last
+        # stamp received: 1, then 2, then 1 again.  (The clock only moves when
+        # the driver sleeps, so the five seconds between connects cost none.)
+        _Monotonic(monkeypatch)
+        p1 = make_frame(make_loop2(outTemp=702), ADV_E + 2)
+        p2 = combined(ADV_E + 4, loop2=dict(outTemp=704), block=dict(outHumidity=456))
+        p3 = make_frame(make_loop2(outTemp=706), ADV_E + 6)
+        wrapper, made = wrapper_on(monkeypatch,
+                                   [b'\n\r', ID2 % 1, b'\n\r', ACK, p1, b''],
+                                   [b'\n\r', ID2 % 2, b'\n\r', ACK, p2, b''],
+                                   [b'\n\r', ID2 % 1, b'\n\r', ACK, p3, b''])
+        wrapper.openPort()
+        station = bare_station(port=wrapper, loop_request=3)
+        got = []
+        for unused in range(3):
+            loop = station.protocol.loop_batch(2)
+            got.append(next(loop))
+            with pytest.raises(weewx.WeeWxIOError):
+                next(loop)
+        assert [(p['dateTime'], p['outTemp']) for p in got] == [
+            (ADV_E + 2, pytest.approx(70.2)), (ADV_E + 4, pytest.approx(70.4)),
+            (ADV_E + 6, pytest.approx(70.6))]
+        assert got[1]['outHumidity'] == 45.6
+        assert [m.sent[-1] for m in made] == [b'ADVLOOP 3 2\n', b'ADVLOOP 4 2 %d\n' % (ADV_E + 2),
+                                              b'ADVLOOP 3 2 %d\n' % (ADV_E + 4)]
+
+
+class TestTheCombinedFrame:
+    """One packet a frame: LOOP1 and LOOP2 merged, the rain once, the block
+    over both."""
+
+    E = ADV_E
+
+    def batch(self, frames, hardware_type=16):
+        station = station_on([WAKE, ACK] + frames, console_protocol=2,
+                             hardware_type=hardware_type)
+        return station, list(station.protocol.loop_batch(len(frames)))
+
+    def test_a_blank_wind_in_loop2_is_none_and_not_loop1s_calm(self):
+        station, got = self.batch([combined(
+            self.E + 2, loop1=dict(windSpeed=0, windDir=0, windSpeed10=0xFF),
+            loop2=dict(windSpeed=0xFF, windDir=0x7FFF, windSpeed10=0xFFFF, windSpeed2=0xFFFF))])
+        assert not {'windSpeed', 'windDir', 'windSpeed10', 'windSpeed2'} & set(got[0])
+
+    def test_where_loop2_carries_a_field_its_reading_is_taken(self):
+        station, got = self.batch([combined(
+            self.E + 2, loop1=dict(windSpeed=5, windDir=90, windSpeed10=6, outTemp=700),
+            loop2=dict(windSpeed=7, windDir=180, windSpeed10=62, outTemp=702))])
+        assert got[0]['windSpeed'] == 7.0 and got[0]['windDir'] == 180.0
+        assert got[0]['windSpeed10'] == pytest.approx(6.2)            # tenths, LOOP2's
+        assert got[0]['outTemp'] == pytest.approx(70.2)
+
+    def test_the_fields_only_loop1_has_come_from_loop1(self):
+        station, got = self.batch([combined(
+            self.E + 2, loop1=dict(monthRain=123, soilTemp1=150, forecastIcon=6, sunrise=641),
+            loop2=dict(windSpeed2=55, dewpoint=40, rain15=2))])
+        p = got[0]
+        assert p['monthRain'] == pytest.approx(1.23) and p['soilTemp1'] == 60.0
+        assert p['forecastIcon'] == 6
+        assert p['sunrise'] == startOfDay(self.E + 2) + 6 * 3600 + 41 * 60
+        assert p['windSpeed2'] == pytest.approx(5.5) and p['rain15'] == pytest.approx(0.02)
+
+    def test_the_rain_is_worked_out_once_a_frame(self):
+        station, got = self.batch([combined(self.E + 2, loop1=dict(dayRain=10),
+                                            loop2=dict(dayRain=10)),
+                                   combined(self.E + 4, loop1=dict(dayRain=12),
+                                            loop2=dict(dayRain=12))])
+        assert got[0]['rain'] is None and got[1]['rain'] == pytest.approx(0.02)
+        assert station.save_day_rain == pytest.approx(0.12)
+
+    def test_the_block_replaces_the_davis_values(self):
+        station, got = self.batch([combined(
+            self.E + 2, loop1=dict(outHumidity=46, extraTemp4=160),
+            loop2=dict(outHumidity=46, dewpoint=25, heatindex=43, THSW=42, barometer=29541),
+            block=dict(outHumidity=456, extraTemp4=705, dewpoint=252, heatindex=429,
+                       barometer=295412))])
+        p = got[0]
+        assert p['outHumidity'] == pytest.approx(45.6) and p['extraTemp4'] == pytest.approx(70.5)
+        assert p['dewpoint'] == pytest.approx(25.2) and p['heatindex'] == pytest.approx(42.9)
+        assert p['barometer'] == pytest.approx(29.5412)
+        # THSW dashed in the block: no THSW, though LOOP2 had 42.
+        assert 'THSW' not in p and 'windchill' not in p and 'altimeter' not in p
+
+    def test_a_vue_frame(self):
+        station, got = self.batch([combined(self.E + 2, loop1=dict(extraTemp1=160),
+                                            block=dict(extraTemp1=685, extraTemp4=705))],
+                                  hardware_type=17)
+        assert 'extraTemp1' not in got[0] and got[0]['extraTemp4'] == pytest.approx(70.5)
+
+    def test_a_frame_that_cannot_be_decoded_leaves_the_rain_where_it_was(self, caplog):
+        E = self.E
+        station, got = self.batch([
+            combined(E + 2, loop1=dict(dayRain=10), loop2=dict(dayRain=10)),
+            combined(E + 4, loop1=dict(dayRain=20), loop2=dict(dayRain=20, packet_type=7)),
+            combined(E + 6, loop1=dict(dayRain=30), loop2=dict(dayRain=30))])
+        assert [p['dateTime'] for p in got] == [E + 2, E + 6]
+        assert got[1]['rain'] == pytest.approx(0.20)
+        assert station.protocol._last_stamp == E + 6
+        assert 'LOOP frame stamped %d could not be decoded' % (E + 4) in caplog.text
+
+    @pytest.mark.parametrize('first, second', [(1, 0), (0, 0), (1, 1)])
+    def test_a_frame_whose_halves_are_not_loop1_then_loop2_is_not_decoded(self, caplog,
+                                                                           first, second):
+        # Swapped, or one type twice: the frame passes its CRC, and merged it
+        # would be wrong with nothing said.  It is logged and left out.
+        E = self.E
+        halves = {0: make_loop1(windSpeed=0), 1: make_loop2(windSpeed=0xFF)}
+        odd = make_combined_frame(halves[first], halves[second],
+                                  make_block(vantagenext.loop_block), E + 4)
+        station, got = self.batch([combined(E + 2), odd, combined(E + 6)])
+        assert [p['dateTime'] for p in got] == [E + 2, E + 6]
+        assert ('LOOP frame stamped %d could not be decoded: protocol 2 frame with packet types '
+                '%d and %d, not 0 and 1' % (E + 4, first, second)) in caplog.text
+
+    def test_a_frame_that_fails_its_crc_ends_the_batch_at_the_stamp_before(self, caplog):
+        E = self.E
+        bad = bytearray(combined(E + 4))
+        bad[220] ^= 0xFF
+        station = station_on([WAKE, ACK, combined(E + 2), bytes(bad)], console_protocol=2)
+        loop = station.protocol.loop_batch(2)
+        assert next(loop)['dateTime'] == E + 2
+        with pytest.raises(weewx.CRCError):
+            next(loop)
+        assert station.protocol._last_stamp == E + 2
+
+    def test_records_with_the_block_and_the_dumps_derived_values(self):
+        E = self.E
+        reads = advdmp_reads([record_2(E - 300, outTemp=450, outHumidity=46, windSpeed=10,
+                                       block=dict(outHumidity=456, windSpeed=104, windDir=360,
+                                                  windGustDir=0, barometer=295412))])
+        station = station_on(reads, console_protocol=2)
+        got = list(station.protocol.archive_dump())
+        assert station.port.writes[-1] == b'ADVDMP 0 512 4\n'
+        r = got[0]
+        assert r['dateTime'] == E - 300
+        assert r['outHumidity'] == pytest.approx(45.6) and r['windSpeed'] == pytest.approx(10.4)
+        assert r['windDir'] == 0.0 and 'windGustDir' not in r
+        assert r['barometer'] == pytest.approx(29.5412)
+        # The dump's derived values are worked from the finer humidity and wind.
+        assert r['dewpoint'] == pytest.approx(weewx.wxformulas.dewpointF(45.0, 45.6))
+        assert r['windchill'] == pytest.approx(weewx.wxformulas.windchillF(45.0, 10.4))

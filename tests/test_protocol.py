@@ -1636,6 +1636,26 @@ class TestInit:
                    for year in station.time_change_windows)
         assert 'obsolete and IGNORED' in caplog.text
 
-    def test_bad_model_type_raises(self):
-        with pytest.raises(weewx.UnsupportedFeature):
-            VantageNext(type='serial', port='/dev/vantage', model_type='3')
+    @pytest.mark.parametrize('model_type', ['3', 'None'])
+    def test_bad_model_type_raises(self, model_type):
+        with pytest.raises(weewx.UnsupportedFeature, match=r'Unknown model_type \(%s\)'
+                           % model_type):
+            VantageNext(type='serial', port='/dev/vantage', model_type=model_type)
+
+    @pytest.mark.parametrize('loop_request', ['0', '4', '7', 'None'])
+    def test_a_loop_request_outside_1_to_3_is_refused_at_startup(self, monkeypatch,
+                                                                  loop_request):
+        opened = []
+
+        class Port:
+            def openPort(self):
+                opened.append(self)
+        monkeypatch.setattr(VantageNext, '_port_factory', staticmethod(lambda vp_dict: Port()))
+        for station_type in ('serial', 'advantage'):
+            with pytest.raises(weewx.UnsupportedFeature,
+                               match=r'loop_request must be 1, 2 or 3 \(weewx.conf says %s\)'
+                               % loop_request):
+                VantageNext(type=station_type, port='/dev/vantage', host='console1',
+                            loop_request=loop_request)
+        # Refused before the port is opened: nothing is asked of a console.
+        assert opened == []

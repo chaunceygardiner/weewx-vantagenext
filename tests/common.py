@@ -195,6 +195,29 @@ def make_stamped_record(record, epoch):
     return record + struct.pack('<I', epoch)
 
 
+def make_block(block, **raw):
+    """A protocol 2 block (vantagenext.loop_block or record_block) from raw
+    field values; a field not given is the dash of its size."""
+    values = [raw.pop(name, 0x7fff if fmt == 'h' else 0x7fffffff)
+              for name, fmt in zip(block.names, block.struct.format.lstrip('<'))]
+    assert not raw, raw
+    return block.struct.pack(*values)
+
+
+def make_combined_frame(loop1, loop2, block, epoch):
+    """A protocol 2 LOOP frame: LOOP1's 99 bytes, LOOP2's 99, the 52-byte
+    block, the epoch, and the CRC of all of it, high byte first."""
+    assert len(loop1) == 99 and len(loop2) == 99 and len(block) == 52
+    return with_crc(loop1 + loop2 + block + struct.pack('<I', epoch))
+
+
+def make_record_2(record, block, epoch):
+    """A protocol 2 archive record: the rev B record, the 24-byte block, the
+    epoch."""
+    assert len(record) == 52 and len(block) == 24
+    return record + block + struct.pack('<I', epoch)
+
+
 def advdmp_reply(records, more):
     """What follows ADVDMP's ACK: the count (2 bytes, low byte first), the
     more flag, the stamped records, and the CRC of all of it.  Split as the
@@ -269,12 +292,17 @@ class ScriptedAdvantage(ScriptedWrapper):
     stamped = True
     wakeup_console = vantagenext.AdvantageWrapper.wakeup_console
     _replace = vantagenext.AdvantageWrapper._replace
+    wants_protocol_2 = vantagenext.AdvantageWrapper.wants_protocol_2
+    frame_size = vantagenext.AdvantageWrapper.frame_size
     _partial = b''
     _awaiting = False
 
-    def __init__(self, reads=()):
+    def __init__(self, reads=(), console_protocol=1):
         super().__init__(reads)
         self.resyncs = []
+        # What the console said when the connection was opened (the fake's
+        # connection is always open).
+        self.console_protocol = console_protocol
 
     def connected(self):
         return True

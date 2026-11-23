@@ -168,9 +168,10 @@ class TestOptions:
                 warned.update(elt.value for elt in node.iter.elts)
         # Asked for by name, and not obsolete: with type = advantage the
         # driver says in one ordinary line that this option of type =
-        # ethernet is not used.
-        assert 'tcp_send_delay' in warned
-        warned.discard('tcp_send_delay')
+        # ethernet is not used, and that loop_request is not used for a
+        # protocol 2 console's LOOP packets.
+        assert {'tcp_send_delay', 'loop_request'} <= warned
+        warned -= {'tcp_send_delay', 'loop_request'}
         assert 'dst_periods' in warned and len(warned) == 6, warned
         text = pages()['configuration.md']
         table = text.split('\n## Obsolete options\n')[1]
