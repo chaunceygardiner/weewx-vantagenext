@@ -679,16 +679,18 @@ class EthernetWrapper(BaseWrapper):
 # them), so no LOOP packet is lost across a download or a reopen.
 
 # The size of a stamped LOOP frame and of a stamped archive record, the most
-# records one ADVDMP brings, and the protocol number this driver knows.
+# records one ADVDMP brings, and the protocol numbers.
 ADVANTAGE_FRAME = 105
 ADVANTAGE_RECORD = 56
 ADVANTAGE_DMP_MAX = 512
-# One number is known, so a console that speaks another can only be newer,
-# and _ask_identity refuses it with the advice to upgrade this driver.  When
-# a second number is added here, revisit that refusal: whether a console on
-# the older number is still spoken to, and if not, which side its message
-# tells the reader to upgrade.
+# The number rises with each addition to the protocol, and a console serves
+# every request of a lower number byte for byte as that number defined it.
+# ADVANTAGE_PROTOCOL is the newest this driver speaks; ADVANTAGE_PROTOCOL_MIN
+# is the lowest it accepts, and only a console that says less is refused
+# (_ask_identity), with the advice to upgrade the console.  They are two:
+# raising the first must not refuse the consoles that still say the second.
 ADVANTAGE_PROTOCOL = 1
+ADVANTAGE_PROTOCOL_MIN = 1
 # The wake-up reads past no more frames than this before it takes the bytes
 # for something else: more than the 199 that can be waiting (a request's 200
 # less the one that broke the LOOP).  A bound, not a retry count.
@@ -883,21 +885,21 @@ class AdvantageWrapper(EthernetWrapper):
         self._drop()
         super().openPort(reopening)
         try:
-            name, version = self._identify()
+            name, version, protocol = self._identify()
         except weewx.WeeWxIOError as e:
             # The reopen loop and _connect do their own logging.
             if not reopening:
                 log.error("%s.", e)
             raise
         self._connect_logged_at = None
-        log.info("Advantage console %s: version %s, protocol %d.", name, version,
-                 ADVANTAGE_PROTOCOL)
+        log.info("Advantage console %s: version %s, protocol %d.", name, version, protocol)
 
     def _identify(self):
-        """Ask the console who it is: (name, version).  Anything but an
-        advantage console speaking this driver's protocol closes the socket
-        and raises WeeWxIOError with the reason, which carries no closing
-        period: both callers add their own.  Nothing is logged here."""
+        """Ask the console who it is: (name, version, protocol number).
+        Anything but an advantage console speaking this driver's protocol, or
+        a later one, closes the socket and raises WeeWxIOError with the
+        reason, which carries no closing period: both callers add their own.
+        Nothing is logged here."""
         try:
             return self._ask_identity()
         except weewx.WeeWxIOError:
@@ -996,11 +998,13 @@ class AdvantageWrapper(EthernetWrapper):
                 or not fields[1].isdigit()):
             raise weewx.WeeWxIOError("%s port %d answered ADVID with %r, which is not an "
                                      "advantage console's answer" % (where + (reply,)))
-        if int(fields[1]) != ADVANTAGE_PROTOCOL:
+        if int(fields[1]) < ADVANTAGE_PROTOCOL_MIN:
             raise weewx.WeeWxIOError(
-                "%s port %d speaks advantage protocol %s; this driver knows %d.  Upgrade "
-                "weewx-vantagenext" % (where + (fields[1].decode('ascii'), ADVANTAGE_PROTOCOL)))
-        return fields[3].decode('ascii', 'replace'), fields[2].decode('ascii', 'replace')
+                "%s port %d speaks advantage protocol %s; this driver needs %d or later.  "
+                "Upgrade the advantage console"
+                % (where + (fields[1].decode('ascii'), ADVANTAGE_PROTOCOL_MIN)))
+        return (fields[3].decode('ascii', 'replace'), fields[2].decode('ascii', 'replace'),
+                int(fields[1]))
 
     def wakeup_console(self, max_tries=3):
         """Get the console's attention: one newline, the frames it had
@@ -5502,9 +5506,11 @@ _archive_map = {
     'soilTemp4'      : lambda p, k: float(p[k] - 90) if p[k] != 0xff else None,
     'UV'             : lambda p, k: float(p[k]) / 10.0 if p[k] != 0xff else None,
     'wind_samples'   : lambda p, k: float(p[k]) if p[k] else None,
-    'windDir'        : lambda p, k: float(p[k]) * 22.5 if p[k] != 0xff else None,
+    # A compass point, 0-15 (0 is north); anything else, the 0xFF dash
+    # included, is no reading.
+    'windDir'        : lambda p, k: float(p[k]) * 22.5 if p[k] <= 15 else None,
     'windGust'       : lambda p, k: float(p[k]),
-    'windGustDir'    : lambda p, k: float(p[k]) * 22.5 if p[k] != 0xff else None,
+    'windGustDir'    : lambda p, k: float(p[k]) * 22.5 if p[k] <= 15 else None,
     'windSpeed'      : lambda p, k: float(p[k]) if p[k] != 0xff else None,
 }
 

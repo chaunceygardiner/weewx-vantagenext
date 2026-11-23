@@ -814,6 +814,13 @@ class TestArchiveMapDetails:
     def test_wind_dir_sectors(self):
         assert self.decode('windDir', 4) == 90.0  # sectors of 22.5 degrees
         assert self.decode('windDir', 0xFF) is None
+        # A compass point is 0-15: anything else is no reading, not 360 to
+        # 5,715 degrees.
+        for name in ('windDir', 'windGustDir'):
+            assert self.decode(name, 0) == 0.0
+            assert self.decode(name, 15) == 337.5
+            for raw in (16, 25, 0xFE, 0xFF):
+                assert self.decode(name, raw) is None
 
     def test_wind_samples_zero_is_none(self):
         assert self.decode('wind_samples', 0) is None

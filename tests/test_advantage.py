@@ -396,14 +396,26 @@ class TestIdentify:
         finally:
             socket.socket = real
 
-    @pytest.mark.parametrize('line, protocol', [(b'advantage-console 2 0.9 console1', '2'),
-                                                (b'advantage-console 0 0.1 console1', '0'),
-                                                (b'advantage-console 10 3.0 c', '10')])
-    def test_another_protocol_is_refused_by_its_number(self, monkeypatch, caplog, line, protocol):
-        reason, unused, unused = self.refused(monkeypatch, caplog,
-                                              [b'\n\r', b'\n\rOK\n\r' + line + b'\n\r'])
-        assert reason == (self.WHERE + 'speaks advantage protocol %s; this driver knows 1.  '
-                          'Upgrade weewx-vantagenext' % protocol)
+    def test_an_older_protocol_is_refused_by_its_number(self, monkeypatch, caplog):
+        reason, unused, unused = self.refused(
+            monkeypatch, caplog, [b'\n\r', b'\n\rOK\n\radvantage-console 0 0.1 console1\n\r'])
+        assert reason == (self.WHERE + 'speaks advantage protocol 0; this driver needs 1 or '
+                          'later.  Upgrade the advantage console')
+
+    @pytest.mark.parametrize('protocol', [2, 10])
+    def test_a_later_protocol_is_spoken_to_and_named_in_the_log(self, monkeypatch, caplog,
+                                                                 protocol):
+        # A console serves every lower number's requests as that number
+        # defined them, so this driver's requests are still answered.
+        wrapper, made = wrapper_on(monkeypatch, [
+            b'\n\r', b'\n\rOK\n\radvantage-console %d 0.9 console1\n\r' % protocol])
+        caplog.clear()
+        with caplog.at_level(logging.INFO):
+            wrapper.openPort()
+        assert lines(caplog) == ['Advantage console console1: version 0.9, protocol %d.'
+                                 % protocol]
+        assert made[0].sent == [b'\n', b'ADVID\n'] and not made[0].closed
+        assert wrapper.socket is made[0]
 
     @pytest.mark.parametrize('reply', [
         b'\n\rOK\n\radvantage-console 1 0.1\n\r',                 # three fields

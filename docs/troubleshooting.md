@@ -160,7 +160,7 @@ With `type = advantage` (see [An advantage console](installation.md#an-advantage
 
 | Message | Meaning |
 |---|---|
-| `Advantage console ...: version ..., protocol ....` | Each time the connection is opened, at startup and at a reopen: the console's name, its program's version and the protocol it speaks. |
+| `Advantage console ...: version ..., protocol ....` | Each time the connection is opened, at startup and at a reopen: the console's name, its program's version and its protocol number, the newest protocol it serves (it serves every earlier one too, so the driver may speak an earlier one to it). |
 | `time change windows: not used with type = advantage` | At startup.  See [Daylight-saving time changes](dst.md#an-advantage-console). |
 | `tcp_send_delay     : not used with type = advantage` | At startup: the option is in `weewx.conf`, and belongs to `type = ethernet`.  Harmless; delete it if the station is staying with this type. |
 | `Clock: the advantage console reports that its clock is not synchronized.` | A WARNING at a clock check.  The time is still used; WeeWX's `Clock error` line says whether it is wrong.  See [An advantage console](clock.md#an-advantage-console). |
@@ -188,7 +188,7 @@ open the port again: ....  Trying again in ... seconds.`
 | `... port ... closed the connection before it had said what it is` | The connection was closed after it had begun to answer: a console whose program stopped or was restarted at that moment.  The driver tries again. |
 | `... port ... began to answer, and the connection failed before it had said what it is (...)` | The same, ended by a network error or by the read timeout: which is in the parentheses.  The driver tries again. |
 | `... port ... answered ADVID with ..., which is not an advantage console's answer` or `... answered a newline with ..., which is not a console's answer` | Whatever is at that address is not an advantage console. |
-| `... port ... speaks advantage protocol ...; this driver knows 1.  Upgrade weewx-vantagenext` | The console's program is newer than this driver understands. |
+| `... port ... speaks advantage protocol ...; this driver needs 1 or later.  Upgrade the advantage console` | The console's program is older than this driver needs.  A console newer than the driver is spoken to in the driver's own protocol, which it still serves. |
 
 ## Printing live LOOP packets
 

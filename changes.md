@@ -22,8 +22,10 @@
   driver warns when the console says its clock is not synchronized and when
   WeeWX asks for a set past `max_drift`.  The console is asked who it is every
   time the connection is opened, so `type = advantage` pointed at a Davis
-  console or a WeatherLinkIP stops with a line that says so.  `weectl device
-  --set-time` sets nothing and says how the two clocks compare, `--info` shows
+  console or a WeatherLinkIP stops with a line that says so.  A console that
+  speaks a later advantage protocol than the driver is spoken to in the
+  driver's own, which it still serves; an earlier one is refused.  `weectl
+  device --set-time` sets nothing and says how the two clocks compare, `--info` shows
   the console's own time, and `--dump` takes every record with its own time.
   `type = ethernet` works with an advantage console as before, as with any
   Davis console.
@@ -34,7 +36,8 @@
   ISS the averages go on for about a minute and the direction briefly.  All
   of them are now missing, and a gust of 0xFFFF still is.  This corrects 2.2,
   which stopped treating 0x00FF as missing.  Any LOOP wind direction outside
-  1-360 is now missing too.
+  1-360 is now missing too, and so is an archive record's wind direction
+  outside the 16 compass points.
 ## 3.4.1 UNRELEASED
 - A reopen of the port does not begin sooner than five seconds after the
   last one succeeded.  When five LOOP batches fail at once and the port opens
