@@ -43,7 +43,8 @@ below, the hardware catch-up, the loop-gust bookkeeping, the units, the observat
 | | Built-in driver | This driver |
 |---|---|---|
 | **LOOP2 dewpoint, heat index, wind chill, THSW** | Any value whose low byte is 255 is treated as missing, so a real reading of −1 °F is dropped. | Only the documented dash value is missing (2.2). |
-| **LOOP2 ten-minute gust** | The dash value is tested as one byte, so a dashed gust decodes as 65,535 mph. | Tested as the two bytes it is (2.2). |
+| **LOOP2 wind averages and gust** | A console with no ISS set up sends 0x7FFF for the two- and ten-minute averages and 0xFFFF for the ten-minute gust's direction, and goes on sending them after it finds the ISS, the averages for about a minute and the direction briefly: they decode as 3,276.7 mph and 65,535°.  A gust sent as 0xFFFF decodes as 65,535 mph. | All of them are missing, as is the 0x00FF gust such a console sends (3.5; a 0xFFFF gust since 2.2). |
+| **LOOP wind direction** (LOOP1 and LOOP2) | Only 0 and 0x7FFF are missing; any other value is reported, up to 65,535°. | Anything outside 1–360 is missing (3.5). |
 
 ## `weectl device`
 

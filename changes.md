@@ -27,6 +27,14 @@
   the console's own time, and `--dump` takes every record with its own time.
   `type = ethernet` works with an advantage console as before, as with any
   Davis console.
+- A console with no ISS set up sends LOOP2 wind values that are not
+  readings: 0x7FFF for the two- and ten-minute wind averages, 0x00FF for the
+  ten-minute gust and 0xFFFF for its direction.  These were reported as
+  3,276.7 mph, 255 mph and 65,535 degrees, and after the console finds its
+  ISS the averages go on for about a minute and the direction briefly.  All
+  of them are now missing, and a gust of 0xFFFF still is.  This corrects 2.2,
+  which stopped treating 0x00FF as missing.  Any LOOP wind direction outside
+  1-360 is now missing too.
 ## 3.4.1 UNRELEASED
 - A reopen of the port does not begin sooner than five seconds after the
   last one succeeded.  When five LOOP batches fail at once and the port opens

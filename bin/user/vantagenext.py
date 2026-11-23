@@ -5348,7 +5348,10 @@ def _decode_windSpeed_H(p, k):
     if p['packet_type'] == 0:
         return float(p[k]) if p[k] != 0xff else None
     elif p['packet_type'] == 1:
-        return float(p[k]) / 10.0 if p[k] != 0xffff else None
+        # LOOP2 dashes these as 0x7FFF while the console has no wind average
+        # (no ISS set up, and for about a minute after it is found); 0xFFFF is
+        # dashed too.
+        return float(p[k]) / 10.0 if p[k] not in (0x7fff, 0xffff) else None
     else:
         log.warning("Unknown LOOP packet type %s" % p['packet_type'])
 
@@ -5441,11 +5444,16 @@ _loop_map = {
     'txBatteryStatus' : lambda p, k: int(p[k]),
     'UV'              : lambda p, k: float(p[k]) / 10.0 if p[k] != 0xff else None,
     'windchill'       : lambda p, k: float(p[k]) if p[k] != 255 else None,
-    'windDir'         : lambda p, k: (float(p[k]) if p[k] != 360 else 0) if p[k] and p[k] != 0x7fff else None,
+    # A wind direction (windDir, windGustDir10) is 1-360, 360 being north;
+    # anything else is no reading.  0 and 0x7FFF are the dashes, and a console
+    # with no ISS set up, and briefly after it finds one, sends 0xFFFF for
+    # windGustDir10.
+    'windDir'         : lambda p, k: (float(p[k]) if p[k] != 360 else 0) if 1 <= p[k] <= 360 else None,
     # windGust10 is a 16-bit field in whole mph (the Davis doc's 0.1 mph claim
-    # is wrong); it dashes as 0xFFFF like windSpeed10/windSpeed2.
-    'windGust10'      : lambda p, k: float(p[k]) if p[k] != 0xffff else None,
-    'windGustDir10'   : lambda p, k: (float(p[k]) if p[k] != 360 else 0) if p[k] and p[k] != 0x7fff else None,
+    # is wrong).  A console with no ISS set up sends 0x00FF; 0xFFFF is dashed
+    # too, like the LOOP2 wind averages.
+    'windGust10'      : lambda p, k: float(p[k]) if p[k] not in (0xff, 0xffff) else None,
+    'windGustDir10'   : lambda p, k: (float(p[k]) if p[k] != 360 else 0) if 1 <= p[k] <= 360 else None,
     'windSpeed'       : lambda p, k: float(p[k]) if p[k] != 0xff else None,
     'windSpeed10'     : _decode_windSpeed_H,
     'windSpeed2'      : _decode_windSpeed_H,

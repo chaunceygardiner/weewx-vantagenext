@@ -681,6 +681,49 @@ class TestUnpackLoop2Packet:
         assert pkt['windchill'] == -1.0
         assert pkt['THSW'] == -1.0
 
+    # Three LOOP2 packets from a real Vantage console, captured
+    # 2026-11-22 with no ISS set up and then as it found one.  Bytes 18-25 are
+    # windSpeed10, windSpeed2, windGust10 and windGustDir10.
+    NO_ISS = bytes.fromhex(  # 21:40:44: 7FFF 7FFF 00FF FFFF
+        '4c4f4f1401ff7f0000ff7fffff7fffffff7fff7fff7fff00ffffff7fff7fff00ffffffff00ff00ff00'
+        '0000ffff7f0000ffff0200000000002000020002fdffeeff000000000000ff000612020817112f0102'
+        '02ff7fff7fff7fff7fff7fff7f0a0dc235')
+    ISS_FOUND = bytes.fromhex(  # 21:42:21: 7FFF 7FFF 0000 FFFF
+        '4c4f4f1401ff7f9475a6023aff7f00ffb400ff7fff7f0000ffffff7fff7fff00ffffffff00ff00ff00'
+        '0000ffff7f0000ffff0200000000002000020002fdffeeff8b7588759475ff02071202080111310102'
+        '02ff7fff7fff7fff7fff7fff7f0a0dbeb3')
+    ISS_FOUND_LATER = bytes.fromhex(  # 21:42:45: 7FFF 7FFF 0000 0168
+        '4c4f4f1401ff7f9475a6023abc0200ffff7fff7fff7f00006801ff7fff7fff00ffffffff004600ff00'
+        '0000ffff7f0000ffff0200000000002000020002fdffeeff8b7588759475ff02071202080111310102'
+        '02ff7fff7fff7fff7fff7fff7f0a0dd190')
+
+    def test_captured_packets_are_whole(self):
+        for packet in (self.NO_ISS, self.ISS_FOUND, self.ISS_FOUND_LATER):
+            assert len(packet) == 99
+            assert vantagenext.crc16(packet) == 0
+
+    def test_no_iss_wind_values_are_dashed(self):
+        # Decoded as readings these were 3276.7 mph, 255 mph and 65535 degrees.
+        pkt = bare_station()._unpackLoopPacket(self.NO_ISS[:95])
+        for name in ('windSpeed10', 'windSpeed2', 'windGust10', 'windGustDir10'):
+            assert name not in pkt
+
+    def test_wind_values_after_the_iss_is_found(self):
+        # The averages stay dashed for about a minute; the gust is a real 0,
+        # and its direction is dashed at first, then sent as 360 with the gust
+        # still 0.
+        station = bare_station()
+        pkt = station._unpackLoopPacket(self.ISS_FOUND[:95])
+        assert 'windSpeed10' not in pkt
+        assert 'windSpeed2' not in pkt
+        assert pkt['windGust10'] == 0.0
+        assert 'windGustDir10' not in pkt
+        pkt = station._unpackLoopPacket(self.ISS_FOUND_LATER[:95])
+        assert 'windSpeed10' not in pkt
+        assert 'windSpeed2' not in pkt
+        assert pkt['windGust10'] == 0.0
+        assert pkt['windGustDir10'] == 0
+
 
 # ===============================================================================
 #                            Decode map details
@@ -696,16 +739,33 @@ class TestLoopMapDetails:
         assert self.decode('windDir', 360) == 0.0  # 360 means north
         assert self.decode('windDir', 0) is None   # 0 means dashed
         assert self.decode('windDir', 0x7fff) is None
+        # Not a direction, so no reading.
+        for raw in (361, 0xFFFF):
+            for packet_type in (0, 1):
+                assert self.decode('windDir', raw, packet_type) is None
 
     def test_cons_battery_voltage(self):
         assert self.decode('consBatteryVoltage', 512) == pytest.approx(3.0)
 
     def test_wind_gust10(self):
-        # Whole mph in a 16-bit field; the dash value is 0xFFFF (255 is a
-        # valid, if extreme, gust -- the old code dashed on 0xFF and let a
-        # dashed 0xFFFF through as 65535 mph).
-        assert self.decode('windGust10', 255, packet_type=1) == 255.0
+        # Whole mph in a 16-bit field.  A console with no ISS sends 0x00FF,
+        # and 0xFFFF is dashed too (an older decoder let it through as 65535
+        # mph).
+        assert self.decode('windGust10', 254, packet_type=1) == 254.0
+        assert self.decode('windGust10', 0xFF, packet_type=1) is None
         assert self.decode('windGust10', 0xFFFF, packet_type=1) is None
+
+    def test_wind_gust_dir10(self):
+        assert self.decode('windGustDir10', 90, packet_type=1) == 90.0
+        assert self.decode('windGustDir10', 360, packet_type=1) == 0
+        for dash in (0, 361, 0x7FFF, 0xFFFF):
+            assert self.decode('windGustDir10', dash, packet_type=1) is None
+
+    def test_loop2_wind_averages(self):
+        for name in ('windSpeed10', 'windSpeed2'):
+            assert self.decode(name, 55, packet_type=1) == pytest.approx(5.5)
+            assert self.decode(name, 0x7FFF, packet_type=1) is None
+            assert self.decode(name, 0xFFFF, packet_type=1) is None
 
     def test_extra_temp_offset_and_dash(self):
         assert self.decode('extraTemp1', 90) == 0.0

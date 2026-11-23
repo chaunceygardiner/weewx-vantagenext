@@ -99,7 +99,8 @@ problems below.
 - **Ready for 2028, and other fixes.**  The console's year byte is handled unsigned; signed,
   every clock set from 2028-01-01 raises an error WeeWX does not catch.  Also fixed here:
   `--set-retransmit` programming the wrong channel, LOOP2 readings of −1 °F dropped as
-  missing, a dashed ten-minute gust decoding as 65,535 mph, and a dashed day-rain value
+  missing, wind averages of 3,276.7 mph and gust directions of 65,535° from a console with
+  no ISS, a gust sent as 0xFFFF decoding as 65,535 mph, and a dashed day-rain value
   crashing the driver.
   → [Differences from the built-in driver](https://chaunceygardiner.github.io/weewx-vantagenext/differences.html)
 
