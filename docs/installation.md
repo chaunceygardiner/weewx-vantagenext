@@ -152,7 +152,8 @@ If those lines are missing, WeeWX is still running another driver: check `statio
 
 An advantage console (3.5) is a computer that runs the advantage-console program: it listens
 to the Davis transmitters itself and answers on the network as a Davis console does.  The
-driver can talk to one in two ways.
+advantage-console program is still under development.  The driver can talk to one in two
+ways.
 
 With `type = ethernet` it is a Davis console like any other, and everything in this manual
 applies to it as it does to a WeatherLinkIP.

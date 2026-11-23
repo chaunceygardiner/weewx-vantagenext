@@ -1,9 +1,13 @@
 # weewx-vantagenext change history
 
 ## 3.5 UNRELEASED
+- ACTION REQUIRED if weewx.conf sets `loop_request` to anything but 1, 2 or
+  3: the driver now stops at startup with an error that says so.  Set it to
+  1, 2 or 3, or delete the line (the default is 1).
 - A third connection type, `type = advantage`, for an advantage console: a
   computer that listens to the Davis transmitters itself and answers on the
-  network as a console does.  With it the driver asks for LOOP packets, archive
+  network as a console does (the advantage-console program is still under
+  development).  With it the driver asks for LOOP packets, archive
   records and the time by the console's own commands, in which the console
   stamps everything with its own time.  The driver uses each stamp as it
   arrives, so a LOOP packet is counted by WeeWX in the archive period the
@@ -42,9 +46,6 @@
   chill, THSW, station pressure and altimeter, which WeeWX takes in place of
   its own unless `[StdWXCalculate]` says `software`; the heat index is then
   the console's formula.  A console that says protocol 1 is read as before.
-- A `loop_request` other than 1, 2 or 3 stops the driver at startup, with an
-  error that says so, before anything is sent to the console; before, it was
-  sent in every request for LOOP packets as it stood.
 - A console with no ISS set up sends LOOP2 wind values that are not
   readings: 0x7FFF for the two- and ten-minute wind averages, 0x00FF for the
   ten-minute gust and 0xFFFF for its direction.  These were reported as
@@ -54,7 +55,6 @@
   which stopped treating 0x00FF as missing.  Any LOOP wind direction outside
   1-360 is now missing too, and so is an archive record's wind direction
   outside the 16 compass points.
-## 3.4.1 UNRELEASED
 - A reopen of the port does not begin sooner than five seconds after the
   last one succeeded.  When five LOOP batches fail at once and the port opens
   again at its first try (a console that answers but does not acknowledge

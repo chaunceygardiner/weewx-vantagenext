@@ -2,7 +2,7 @@
 title: Upgrading
 layout: default
 nav_order: 10
-description: What existing weewx-vantagenext users need to do when upgrading — nothing for 3.4 beyond a log watcher's patterns, nothing for 3.3, 3.2 and 3.1 beyond a clock_check warning, the clock options retired and max_drift in 3.0, the live iss_id line in 2.3, [[dst_periods]] in 2.0, and the WeeWX 5 requirement.
+description: What existing weewx-vantagenext users need to do when upgrading — a loop_request of 1, 2 or 3 for 3.5, nothing for 3.4 beyond a log watcher's patterns, nothing for 3.3, 3.2 and 3.1 beyond a clock_check warning, the clock options retired and max_drift in 3.0, the live iss_id line in 2.3, [[dst_periods]] in 2.0, and the WeeWX 5 requirement.
 ---
 
 # Upgrading
@@ -29,19 +29,29 @@ The full history is in the
 
 ## To 3.5
 
-Nothing to change.  3.5 adds a third connection type, `type = advantage`, for an advantage
-console ([An advantage console](installation.md#an-advantage-console)).  Serial, USB and
-`type = ethernet` stations run as they did.
+One thing to check: `loop_request` in `weewx.conf`, if it is there, must be 1, 2 or 3.  Any
+other value now stops the driver at startup, with an error that says so, before anything is
+sent to the console; before, it was sent in every request for LOOP packets as it stood.
+Leave it out, and the default, 1, is used.
 
-## To 3.4.1
+Nothing else to change.  For every station:
 
-Nothing to change.  One correction to live data: the `windGust` the driver adds to each LOOP
-packet now starts afresh with the first packet of each archive period, where that packet
-used to carry the gust of the period before.  Anything that reads `windGust` from LOOP
-packets sees the corrected value.  Archive records are as they were under hardware record
-generation, WeeWX's default for this driver, where a record's gust is the console's; under
-`record_generation = software` a record's gust comes from the LOOP packets, and is corrected
-with them.
+- **The `windGust` the driver adds to each LOOP packet** now starts afresh with the first
+  packet of each archive period, where that packet used to carry the gust of the period
+  before.  Anything that reads `windGust` from LOOP packets sees the corrected value.
+  Archive records are as they were under hardware record generation, WeeWX's default for
+  this driver, where a record's gust is the console's; under `record_generation = software`
+  a record's gust comes from the LOOP packets, and is corrected with them.
+- **Wind values that are not readings are now missing.**  A console with no ISS set up, and
+  for about a minute after it finds one, sends LOOP2 wind averages, a ten-minute gust and
+  its direction that used to be reported as 3,276.7 mph, 255 mph and 65,535°.  A wind
+  direction outside 1–360 in a LOOP packet, or outside the 16 compass points in an archive
+  record, is missing too.  See [Differences from the built-in driver](differences.md).
+- **A reopen of the port** does not begin sooner than five seconds after the last one
+  succeeded ([Any other error](recovery.md#any-other-error)).
+
+3.5 also adds a third connection type, `type = advantage`, for an advantage console
+([An advantage console](installation.md#an-advantage-console)).
 
 ## To 3.4
 

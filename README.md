@@ -80,7 +80,8 @@ problems below.
   → [Keeping the console clock](https://chaunceygardiner.github.io/weewx-vantagenext/clock.html)
 
 - **An advantage console, read in its own terms** (3.5).  An advantage console is a computer
-  that listens to the Davis transmitters itself and answers on the network as a console does.
+  that listens to the Davis transmitters itself and answers on the network as a console does;
+  the program it runs is still under development.
   With `type = advantage` the driver takes every LOOP packet and archive record with the
   console's own time on it: a reading is counted in the same archive period by WeeWX and by
   the console, LOOP packets missed during a download or a lost connection are sent again,

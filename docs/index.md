@@ -60,7 +60,8 @@ keeps the clock without that cost, and solves the specific problems below.
   readings.  A console the driver cannot steer and a clock lost to a power failure are set
   as before.  See [Keeping the console clock](clock.md).
 - **An advantage console, read in its own terms** (3.5).  An advantage console is a computer
-  that listens to the Davis transmitters itself and answers on the network as a console does.
+  that listens to the Davis transmitters itself and answers on the network as a console does;
+  the program it runs is still under development.
   With `type = advantage` the driver takes every LOOP packet and archive record with the
   console's own time on it, so a reading is counted in the same archive period by WeeWX and
   by the console, the LOOP packets missed during a download or a lost connection are sent
