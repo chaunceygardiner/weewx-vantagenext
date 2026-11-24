@@ -1369,6 +1369,77 @@ class TestLoop:
         assert station.port.reads == [] and sleeps == []
         assert station.protocol._last_stamp == E + 8 and station.pkt_count == 2
 
+    # ---- packets the console did not send ----
+
+    @staticmethod
+    def not_received(caplog):
+        return [m for m in lines(caplog) if 'not received' in m]
+
+    @pytest.mark.parametrize('console_protocol', [1, 2])
+    @pytest.mark.parametrize('step, said', [(4, '1 packet'), (8, '3 packets'), (600, '299 packets')])
+    def test_a_stamp_more_than_a_beat_after_the_last_says_how_many_were_not_sent(
+            self, caplog, console_protocol, step, said):
+        E = self.E
+        make = frame if console_protocol == 1 else combined
+        station = station_on([WAKE, ACK, make(E + 4), make(E + 6), make(E + 6 + step),
+                              make(E + 8 + step)], console_protocol=console_protocol)
+        with caplog.at_level(logging.INFO):
+            got = [p['dateTime'] for p in station.protocol.loop_batch(4)]
+        # Every frame that came is a packet, the one after the gap included.
+        assert got == [E + 4, E + 6, E + 6 + step, E + 8 + step]
+        stamp = vantagenext.weeutil.weeutil.timestamp_to_string
+        assert self.not_received(caplog) == [
+            'LOOP: %s not received: the console sent nothing stamped after %s and before %s.'
+            % (said, stamp(E + 6), stamp(E + 6 + step))]
+        assert [r.levelno for r in caplog.records if 'not received' in r.getMessage()] \
+            == [logging.ERROR]
+
+    def test_the_gap_is_counted_from_the_last_stamp_of_the_batch_before(self, caplog):
+        # A reopen, after which the console holds nothing of the minute before.
+        E = self.E
+        station = station_on([WAKE, ACK, frame(E + 60)], last_stamp=E + 18)
+        with caplog.at_level(logging.INFO):
+            assert next(station.genLoopPackets())['dateTime'] == E + 60
+        assert len(self.not_received(caplog)) == 1
+        assert self.not_received(caplog)[0].startswith('LOOP: 20 packets not received')
+
+    def test_frames_a_beat_apart_and_the_first_frame_of_all_say_nothing(self, caplog):
+        E = self.E
+        station = station_on([WAKE, ACK] + [frame(E + 2 * n) for n in range(50, 60)])
+        with caplog.at_level(logging.INFO):
+            assert len(list(station.protocol.loop_batch(10))) == 10
+        assert self.not_received(caplog) == []
+
+    def test_a_frame_sent_again_after_a_bad_one_is_not_a_gap(self, caplog):
+        # The bad frame's stamp is among the bytes that arrived wrong, and
+        # reads as a time far ahead.  It is not believed: nothing is said of
+        # a gap up to it, the last stamp does not move, the next batch asks
+        # from the frame before it, and the console sends it again.
+        E = self.E
+        bad = bytearray(frame(E + 6))
+        bad[102] ^= 0x10
+        assert struct.unpack_from('<I', bad, 99)[0] > E + 1000000
+        station = station_on([WAKE, ACK, frame(E + 4), bytes(bad),
+                              WAKE, ACK, frame(E + 6), frame(E + 8)])
+        loop = station.genLoopPackets()
+        with caplog.at_level(logging.INFO):
+            assert next(loop)['dateTime'] == E + 4
+            assert next(loop)['dateTime'] == E + 6
+            assert station.port.writes[-1] == b'ADVLOOP 3 200 %d\n' % (E + 4)
+            assert next(loop)['dateTime'] == E + 8
+        assert self.not_received(caplog) == []
+
+    @pytest.mark.parametrize('second', [0, -4, 1, 3])
+    def test_a_stamp_less_than_two_beats_after_the_last_says_nothing(self, caplog, second):
+        # The same second again, an earlier one, and one or three seconds on
+        # (stamps a console that keeps to even seconds cannot send): no whole
+        # frame was left out between them.
+        E = self.E
+        station = station_on([WAKE, ACK, frame(E + 4), make_frame(make_loop1(), E + 4 + second)])
+        with caplog.at_level(logging.INFO):
+            assert len(list(station.protocol.loop_batch(2))) == 2
+        assert self.not_received(caplog) == []
+
     def test_a_replay_of_more_than_one_request_comes_in_two_with_none_repeated(self):
         E = self.E
         stamps = [E + 2 * n for n in range(1, 251)]

@@ -84,8 +84,9 @@ problems below.
   the program it runs is still under development.
   With `type = advantage` the driver takes every LOOP packet and archive record with the
   console's own time on it: a reading is counted in the same archive period by WeeWX and by
-  the console, LOOP packets missed during a download or a lost connection are sent again,
-  and there is no console clock to steer.  From a console that speaks protocol 2, every LOOP
+  the console, LOOP packets missed during a download or a lost connection are sent again
+  (those a restart of the console cost are logged instead), and there is no console clock
+  to steer.  From a console that speaks protocol 2, every LOOP
   packet has both Davis packets' fields, and the values they round come finer.
   → [An advantage console](https://chaunceygardiner.github.io/weewx-vantagenext/installation.html#an-advantage-console)
 

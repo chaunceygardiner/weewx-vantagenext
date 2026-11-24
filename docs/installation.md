@@ -177,7 +177,8 @@ What that changes:
   before.
 - **LOOP packets missed are sent again.**  After each archive download, and after a
   connection that was lost, the console sends the packets the driver missed, for up to ten
-  minutes back.  See [An advantage console](recovery.md#an-advantage-console).
+  minutes back.  Those it cannot send, the packets of a restart of its receiver among them,
+  are logged with their number.  See [An advantage console](recovery.md#an-advantage-console).
 - **Every archive record carries its own time too,** so the repeated hour when the clocks go
   back is not ambiguous and the time change windows are not used.  See
   [An advantage console](dst.md#an-advantage-console).

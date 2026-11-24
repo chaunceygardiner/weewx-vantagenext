@@ -540,6 +540,16 @@ class TestAdvantage:
         # the 80.0 of the frame stamped E, and not the 90.0 of E + 2.
         assert self.rows(db_file, 'SELECT max FROM archive_day_outTemp') == [(pytest.approx(80.0),)]
 
+    @staticmethod
+    def accumulator_of(archive, stop):
+        """StdArchive's accumulator for the period ending at stop.  WeeWX 5.6
+        keeps one for each period still collecting (periods.open, by stop
+        time); before it there were two, the current one and the one before."""
+        if hasattr(archive, 'periods'):
+            return archive.periods.open[stop]
+        return [a for a in (archive.old_accumulator, archive.accumulator)
+                if a is not None and a.timespan.stop == stop][0]
+
     def test_a_gust_is_counted_in_one_archive_period(self, monkeypatch, tmp_path):
         # A 31 mph gust in the frame stamped E, the last of its period, and
         # 5 mph after.  The running gust the driver adds to each packet starts
@@ -578,8 +588,9 @@ class TestAdvantage:
         assert seen[300] == (9.0, 9.0) and seen[302] == (5.0, 5.0)
         # WeeWX's own accumulator for the period (E, E + 300]: its gust high
         # is that period's 9, where the 31 of the period before would be.
-        assert archive.old_accumulator.timespan.stop == E + 300
-        assert archive.old_accumulator['windGust'].max == 9.0
+        period = self.accumulator_of(archive, E + 300)
+        assert period.timespan.stop == E + 300
+        assert period['windGust'].max == 9.0
 
     def test_a_replay_across_two_archive_boundaries(self, monkeypatch, tmp_path, caplog):
         # After an outage the driver asks from the last stamp it received,

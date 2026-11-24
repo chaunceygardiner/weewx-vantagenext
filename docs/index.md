@@ -65,7 +65,8 @@ keeps the clock without that cost, and solves the specific problems below.
   With `type = advantage` the driver takes every LOOP packet and archive record with the
   console's own time on it, so a reading is counted in the same archive period by WeeWX and
   by the console, the LOOP packets missed during a download or a lost connection are sent
-  again, and there is no console clock to steer.
+  again (those a restart of the console cost are logged instead), and there is no console
+  clock to steer.
   See [An advantage console](installation.md#an-advantage-console).
 - **The Davis sonic anemometer.**  Newer console firmware keeps the wind cup type in a
   place, and with a third value, that the built-in driver does not write.

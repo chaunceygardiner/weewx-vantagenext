@@ -692,9 +692,22 @@ class EthernetWrapper(BaseWrapper):
 #   check, any other command; the port
 #   is closed and opened again
 #
-# It is read in one place, the ADVLOOP line, where it is <after>: the console
-# first sends the frames it holds with a later stamp (it keeps ten minutes of
-# them), so no LOOP packet is lost across a download or a reopen.
+# It is read in two places.  The ADVLOOP line, where it is <after>: the
+# console first sends the frames it holds with a later stamp (it keeps ten
+# minutes of them), so a LOOP packet missed across a download or a reopen is
+# sent again while the console holds it.
+# And where it is set (_get_stamped_frame), to say when one was not: a stamp
+# is an even second and each has one frame, so a frame stamped two beats
+# (2 x ADVANTAGE_BEAT) or more after the last one received means the console
+# sent none for the seconds between, and that is logged, with how many.
+# Either the console no longer held them (its receiver restarted, which
+# empties what it keeps, or the driver was away for more than the ten
+# minutes), or it never made them (it makes none while its receiver is down,
+# across a forward step of its clock, or in a long stall).  Nothing is done
+# about it and nothing is asked again: the console has already answered from
+# the last stamp.  The first frame a protocol object receives has no stamp
+# before it and says nothing, so what goes by while WeeWX restarts the driver
+# is neither sent again nor counted.
 
 # The size of a stamped LOOP frame and of a stamped archive record, in
 # protocol 1 and in protocol 2; the most records one ADVDMP brings; and the
@@ -704,6 +717,9 @@ ADVANTAGE_FRAME_2 = 256
 ADVANTAGE_RECORD = 56
 ADVANTAGE_RECORD_2 = 80
 ADVANTAGE_DMP_MAX = 512
+# The seconds from one LOOP frame's stamp to the next: the console makes a
+# frame for every even second.
+ADVANTAGE_BEAT = 2
 # The number rises with each addition to the protocol, and a console serves
 # every request of a lower number byte for byte as that number defined it.
 # ADVANTAGE_PROTOCOL_MIN is the lowest this driver accepts: only a console
@@ -5815,6 +5831,15 @@ class AdvantageProtocol:
         if crc16(_buffer):
             raise weewx.CRCError("LOOP frame failed CRC check")
         (epoch,) = struct.unpack_from("<I", _buffer, size - 6)
+        if self._last_stamp is not None:
+            # The frames the console made between the last one received and
+            # this one, and did not send.
+            missing = (epoch - self._last_stamp) // ADVANTAGE_BEAT - 1
+            if missing > 0:
+                log.error("LOOP: %d packet%s not received: the console sent nothing stamped "
+                          "after %s and before %s.", missing, '' if missing == 1 else 's',
+                          weeutil.weeutil.timestamp_to_string(self._last_stamp),
+                          weeutil.weeutil.timestamp_to_string(epoch))
         # Received, whatever decoding makes of it.
         self._last_stamp = epoch
         return _buffer, epoch

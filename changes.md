@@ -15,7 +15,10 @@
   after an interval ends can hold a gust the console put in the interval
   before.  After an archive download, and after a connection that was lost and
   opened again, the console sends the LOOP packets the driver missed, for up to
-  ten minutes back.  A connection the console closes (it closes them all
+  ten minutes back; packets the console does not send, those of a restart of
+  its receiver among them, are logged with their number (`LOOP: ... not
+  received`), but for what goes by while WeeWX restarts the driver.  A
+  connection the console closes (it closes them all
   while its receiver restarts) is opened again by the driver's next command,
   tried every five seconds, so a clock check or an archive download rides out
   a restart of up to about a minute (a longer one is raised to WeeWX, as an

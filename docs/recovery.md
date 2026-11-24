@@ -261,8 +261,16 @@ when the driver asks for packets it names the time of the last one it received. 
 keeps the last ten minutes of them and first sends every one after that time.  So the
 packets that went by during an archive download, or while a lost connection was being
 opened again, arrive when LOOP data resumes, each under its own time, and WeeWX puts each
-in the archive period it belongs to.  An outage longer than ten minutes loses what is older
-than that.
+in the archive period it belongs to.
+
+What is not sent again is logged.  An outage longer than ten minutes loses what is older
+than that.  A restart of the console's receiver empties the packets it kept, and the console
+makes none while its receiver is down, across a forward step of its clock, or in a long
+stall of its program.  The console stamps a packet for every even second, so the driver
+knows: a packet stamped four seconds or more after the last one received is logged with the
+number of packets the console did not send between them (`LOOP: ... not received`).  One
+case is not counted: when WeeWX restarts the driver, the new one asks for no packets from
+before it started and has no last packet to measure from.
 
 One limit.  WeeWX adds a period's LOOP highs and lows to its archive record when the record
 is stored.  After an outage that ran past more than one archive interval, the driver
@@ -307,8 +315,9 @@ INFO user.vantagenext: Advantage console console1: version 0.2, protocol 1.
 **A console that closes the connection gets a new one.**  An advantage console closes every
 connection, and refuses new ones, while its receiver restarts, as it does for an upgrade.
 The driver's next read finds the connection closed, and its next command opens a new one,
-trying every five seconds until the console accepts it.  LOOP data resumes from the last
-packet received.  A clock check or an archive download waits the restart out too, for up to
+trying every five seconds until the console accepts it.  LOOP data resumes with the first
+packet the console makes once its receiver is back; the packets of the restart itself are
+not sent again, and the driver logs how many that was.  A clock check or an archive download waits the restart out too, for up to
 about a minute, and then asks again.  A longer outage during a download ends as it does with
 any console that is down: the error goes to WeeWX, which waits 60 seconds and starts the
 driver again.  If the console answers by then, the driver catches up from the console's
