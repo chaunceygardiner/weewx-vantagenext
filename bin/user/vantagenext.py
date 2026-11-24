@@ -538,9 +538,10 @@ class EthernetWrapper(BaseWrapper):
 #                                  even second it is the console's state as
 #                                  of, an epoch (loop_batch).  Protocol 2:
 #                                  mask 4, both packets in every frame.
-#   ADVDMP <after> <max> [4]       the archive records after an epoch, each
+#   ADVDMP <after> <max> [4|12]    the archive records after an epoch, each
 #                                  with the epoch that ends its interval
-#                                  (archive_records); 4, protocol 2's.
+#                                  (archive_records); 4, protocol 2's
+#                                  records; 12, protocol 3's.
 #   ADVTIME                        the console's clock, as an epoch
 #                                  (_ask_time).  Nothing sets it.
 #
@@ -579,6 +580,50 @@ class EthernetWrapper(BaseWrapper):
 # every frame has both packets.  The form is the connection's: a console
 # upgraded or rolled back closes every connection, and the next one asks
 # ADVID again.
+#
+# Protocol 3, asked of a connection whose console said 3 or more
+# (AdvantageWrapper.wants_protocol_3), changes the record only: LOOP is
+# protocol 2's.  A record is ADVANTAGE_RECORD_3 bytes: protocol 2's 76, then
+# three times in whole seconds, each 2 bytes, signed, low byte first (the
+# record's listening time at 76, the length of the record's own interval at
+# 78, the ISS's listening time at 80), and the epoch at 82.  A record does not
+# always cover its whole interval: the first one after the console's receiver
+# starts covers the seconds since the start, and with protocols 1 and 2
+# nothing says so, so its rxCheckPercent, worked out against a whole
+# interval's packets, reads low (85 s with every packet heard read 28.9 %).
+# With protocol 3:
+#
+#   rxCheckPercent      the wind samples over the packets due in the ISS's
+#                       listening time, which the console counts from the
+#                       ISS's first packet after its receiver began to listen
+#                       (so the time a restarted receiver takes to find the
+#                       ISS is not counted as missed).  No figure when that
+#                       time is a dash (the ISS's ID was changed inside the
+#                       interval) or less than one packet was due in it:
+#                       below one transmit period, hearing nothing is what
+#                       perfect reception looks like too.  Over a few seconds
+#                       the figure is coarse: the times are whole seconds and
+#                       one packet is tens of percent.  It is reception
+#                       while listening: the time the receiver was down shows
+#                       in the LOOP stream (_get_stamped_frame) and in the
+#                       records the console did not make, not here.
+#   interval            the record's own, where it is the station's archive
+#                       interval otherwise: a record made before the archive
+#                       interval was changed keeps its length, and one across
+#                       a time change is an hour longer.  A record of part of
+#                       its interval still carries the whole of it: nothing
+#                       but the reception figure is scaled by a listening
+#                       time.
+#   the record's        not used, but in the check that follows.
+#   listening time
+#
+# The console holds the three inside 60 <= the interval's length <= 32,766
+# and a whole number of minutes (it becomes the record's interval, which is
+# in minutes), 0 <= the record's time <= the interval's length, and the ISS's
+# time a dash or 0 <= it <= the record's time.  A block outside those is a fault in the
+# console: it is not used, the record is read as protocol 2's (the station's
+# interval, a whole interval's packets), and a line says so
+# (_listening_block).  An interval of 0 given to WeeWX would be refused.
 #
 # ADVID, after every open (_identify).  It is the guard against type =
 # advantage pointed at a Davis console or a WeatherLinkIP, which answer a line
@@ -670,7 +715,9 @@ class EthernetWrapper(BaseWrapper):
 #                        opened (set by openPort after ADVID); None with no
 #                        connection (_drop, closePort).  It decides the
 #                        requests' form and the frames' size (wants_protocol_2,
-#                        frame_size), the wake-up's drain included.
+#                        frame_size), the wake-up's drain included, and the
+#                        download's request and its records' size
+#                        (wants_protocol_3 with wants_protocol_2).
 #
 # The base wake-up's flush and its second, "rude" read are not here: they are
 # for a console that may be asleep, on a stream with no way to tell a packet
@@ -709,13 +756,14 @@ class EthernetWrapper(BaseWrapper):
 # before it and says nothing, so what goes by while WeeWX restarts the driver
 # is neither sent again nor counted.
 
-# The size of a stamped LOOP frame and of a stamped archive record, in
-# protocol 1 and in protocol 2; the most records one ADVDMP brings; and the
-# protocol numbers.
+# The size of a stamped LOOP frame, in protocol 1 and in protocol 2, and of a
+# stamped archive record, in protocols 1, 2 and 3; the most records one ADVDMP
+# brings; and the protocol numbers.
 ADVANTAGE_FRAME = 105
 ADVANTAGE_FRAME_2 = 256
 ADVANTAGE_RECORD = 56
 ADVANTAGE_RECORD_2 = 80
+ADVANTAGE_RECORD_3 = 86
 ADVANTAGE_DMP_MAX = 512
 # The seconds from one LOOP frame's stamp to the next: the console makes a
 # frame for every even second.
@@ -726,9 +774,12 @@ ADVANTAGE_BEAT = 2
 # that says less is refused (_ask_identity), with the advice to upgrade the
 # console.  ADVANTAGE_PROTOCOL_2 is the number from which protocol 2's forms
 # are asked for (AdvantageWrapper.wants_protocol_2): a console that says 1 is
-# still spoken to, in protocol 1's.
+# still spoken to, in protocol 1's.  ADVANTAGE_PROTOCOL_3 is the number from
+# which protocol 3's records are asked for (wants_protocol_3): a console that
+# says 2 is still asked for protocol 2's.
 ADVANTAGE_PROTOCOL_MIN = 1
 ADVANTAGE_PROTOCOL_2 = 2
+ADVANTAGE_PROTOCOL_3 = 3
 # The wake-up reads past no more frames than this before it takes the bytes
 # for something else: more than the 199 that can be waiting (a request's 200
 # less the one that broke the LOOP).  A bound, not a retry count.
@@ -770,6 +821,12 @@ class AdvantageWrapper(EthernetWrapper):
         """Whether this connection is asked in protocol 2's forms: its
         console said ADVANTAGE_PROTOCOL_2 or more.  False with no connection."""
         return self.console_protocol is not None and self.console_protocol >= ADVANTAGE_PROTOCOL_2
+
+    def wants_protocol_3(self):
+        """Whether this connection's records are asked for in protocol 3's
+        form: its console said ADVANTAGE_PROTOCOL_3 or more.  False with no
+        connection.  LOOP has no protocol 3 form: see wants_protocol_2."""
+        return self.console_protocol is not None and self.console_protocol >= ADVANTAGE_PROTOCOL_3
 
     def frame_size(self):
         """The size of the LOOP frames this connection is sent."""
@@ -5149,7 +5206,8 @@ class VantageNext(weewx.drivers.AbstractDevice):
                 return dateTime + shift
         return dateTime
 
-    def _unpackArchivePacket(self, raw_archive_buffer, stamp=None):
+    def _unpackArchivePacket(self, raw_archive_buffer, stamp=None, interval_secs=None,
+                             iss_secs=None):
         """Decode a Davis archive packet, returning the results as a dictionary.
 
         raw_archive_buffer: The archive record data buffer, passed in as
@@ -5158,6 +5216,15 @@ class VantageNext(weewx.drivers.AbstractDevice):
         stamp: The console's own time for the record, an epoch (an advantage
         console).  It is the record's time: the date and time fields and the
         time change windows are not consulted.  None: from those fields.
+
+        interval_secs: The length of the record's own interval in seconds (an
+        advantage console's protocol 3).  None: the station's archive interval.
+
+        iss_secs: The seconds the record's wind samples were due over (an
+        advantage console's protocol 3: the ISS's listening time, or 0 for
+        its dash).  rxCheckPercent is worked out against the packets due in
+        them, and left out when that is less than one packet.  None: against
+        a whole interval's packets.
 
         returns:
 
@@ -5187,7 +5254,8 @@ class VantageNext(weewx.drivers.AbstractDevice):
             'dateTime': stamp,
             'usUnits': weewx.US,
             # Divide archive interval by 60 to keep consistent with wview
-            'interval': int(self.archive_interval // 60),
+            'interval': int((self.archive_interval if interval_secs is None
+                             else interval_secs) // 60),
         }
         if stamp is None:
             archive_record['dateTime'] = _archive_datetime(raw_archive_record['date_stamp'],
@@ -5198,10 +5266,20 @@ class VantageNext(weewx.drivers.AbstractDevice):
             archive_record['dateTime'] = VantageNext.adjust_for_dst(
                     now, archive_record['dateTime'], VantageNext.inTimeChangeWindow(self.time_change_windows, now))
 
-        archive_record['rxCheckPercent'] = _rxcheck(self.model_type,
-                                                    archive_record['interval'],
-                                                    self.iss_id,
-                                                    raw_archive_record['wind_samples'])
+        if iss_secs is None:
+            archive_record['rxCheckPercent'] = _rxcheck(self.model_type,
+                                                        archive_record['interval'],
+                                                        self.iss_id,
+                                                        raw_archive_record['wind_samples'])
+        else:
+            # Against the packets due in the time the console says they were
+            # due over, when at least one was: see "An advantage console".
+            _due = _packets_due(self.model_type, iss_secs / 60.0, self.iss_id)
+            if _due is not None and _due >= 1.0:
+                archive_record['rxCheckPercent'] = _rxcheck(self.model_type,
+                                                            iss_secs / 60.0,
+                                                            self.iss_id,
+                                                            raw_archive_record['wind_samples'])
 
         for _type in raw_archive_record:
             if _type in extra_sensors and self.hardware_type == 17:
@@ -5395,17 +5473,24 @@ def _apply_block(packet, data, block, hardware_type):
             packet[name] = value
 
 
-def _rxcheck(model_type, interval, iss_id, number_of_wind_samples):
-    """Gives an estimate of the fraction of packets received.
+def _packets_due(model_type, interval, iss_id):
+    """The wind packets an ISS sends in an interval given in minutes (not
+    always a whole number of them), or None for a model with no formula.
 
     Ref: Vantage Serial Protocol doc, V2.1.0, released 25-Jan-05; p42"""
     # The formula for the expected # of packets varies with model number.
     if model_type == 1:
-        _expected_packets = float(interval * 60) / (2.5 + (iss_id - 1) / 16.0) - \
-                            float(interval * 60) / (50.0 + (iss_id - 1) * 1.25)
+        return float(interval * 60) / (2.5 + (iss_id - 1) / 16.0) - \
+               float(interval * 60) / (50.0 + (iss_id - 1) * 1.25)
     elif model_type == 2:
-        _expected_packets = 960.0 * interval / float(41 + iss_id - 1)
-    else:
+        return 960.0 * interval / float(41 + iss_id - 1)
+    return None
+
+
+def _rxcheck(model_type, interval, iss_id, number_of_wind_samples):
+    """Gives an estimate of the fraction of packets received."""
+    _expected_packets = _packets_due(model_type, interval, iss_id)
+    if _expected_packets is None:
         return None
     _frac = number_of_wind_samples * 100.0 / _expected_packets
     if _frac > 100.0:
@@ -5888,11 +5973,17 @@ class AdvantageProtocol:
                 progress_fn()
             self.port.wakeup_console(self.max_tries)
             # The connection's form, as for LOOP: protocol 2's records carry
-            # the block; to a protocol 1 console the third parameter is NAKed.
+            # the block of finer values and protocol 3's the listening block
+            # after it; a console is asked for the newest it said it serves,
+            # and NAKs a third parameter it does not know.
             blocks = self.port.wants_protocol_2()
-            size = ADVANTAGE_RECORD_2 if blocks else ADVANTAGE_RECORD
+            listening = self.port.wants_protocol_3()
+            size = (ADVANTAGE_RECORD_3 if listening
+                    else ADVANTAGE_RECORD_2 if blocks else ADVANTAGE_RECORD)
             try:
-                if blocks:
+                if listening:
+                    self.port.send_data(b"ADVDMP %d %d 12\n" % (after, ADVANTAGE_DMP_MAX))
+                elif blocks:
                     self.port.send_data(b"ADVDMP %d %d 4\n" % (after, ADVANTAGE_DMP_MAX))
                 else:
                     self.port.send_data(b"ADVDMP %d %d\n" % (after, ADVANTAGE_DMP_MAX))
@@ -5934,9 +6025,13 @@ class AdvantageProtocol:
                 # Past this record whatever decoding makes of it: asked
                 # for again, one that cannot be decoded would come again.
                 after = epoch
+                interval_secs, iss_secs = (self._listening_block(_record_string, epoch)
+                                           if listening else (None, None))
                 try:
                     _record = self.station._unpackArchivePacket(_record_string[:52],
-                                                                stamp=epoch)
+                                                                stamp=epoch,
+                                                                interval_secs=interval_secs,
+                                                                iss_secs=iss_secs)
                 except weewx.UnknownArchiveType as e:
                     # Not a WeeWxIOError: raised, it would stop WeeWX, and
                     # at every start after it, on the same record.  Left
@@ -5950,6 +6045,23 @@ class AdvantageProtocol:
                 yield _record
             if not more:
                 return
+
+    @staticmethod
+    def _listening_block(record, epoch):
+        """The length of a protocol 3 record's own interval and the time its
+        wind samples were due over, each in seconds (the second 0 for a
+        dash); or (None, None), with a line, for a block the console's own
+        rules do not allow, which has the record read as protocol 2's: see
+        "An advantage console"."""
+        listened, interval_secs, iss_secs = struct.unpack_from("<hhh", record, 76)
+        if (60 <= interval_secs <= 32766 and interval_secs % 60 == 0
+                and 0 <= listened <= interval_secs
+                and (iss_secs == 0x7fff or 0 <= iss_secs <= listened)):
+            return interval_secs, 0 if iss_secs == 0x7fff else iss_secs
+        log.error("ADVDMP: the record stamped %d has listening times the console's rules do "
+                  "not allow (%d, %d and %d s).  They are not used.",
+                  epoch, listened, interval_secs, iss_secs)
+        return None, None
 
     def log_download_try(self, count, e):
         log.error("ADVDMP try #%d; error: %s", count, e)

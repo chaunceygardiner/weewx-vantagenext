@@ -87,7 +87,9 @@ problems below.
   the console, LOOP packets missed during a download or a lost connection are sent again
   (those a restart of the console cost are logged instead), and there is no console clock
   to steer.  From a console that speaks protocol 2, every LOOP
-  packet has both Davis packets' fields, and the values they round come finer.
+  packet has both Davis packets' fields, and the values they round come finer; from one
+  that speaks protocol 3, each archive record's reception figure is of the time the console
+  listened.
   → [An advantage console](https://chaunceygardiner.github.io/weewx-vantagenext/installation.html#an-advantage-console)
 
 - **The Davis sonic anemometer.**  `weectl device --set-wind-cup=3` selects it; see the

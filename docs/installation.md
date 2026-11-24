@@ -196,6 +196,22 @@ What that changes:
   wind chill, THSW, station pressure and altimeter, WeeWX takes those (it prefers the
   console's values unless `[StdWXCalculate]` says `software`) where, with LOOP1 packets,
   it worked them out itself.
+- **A true reception figure, from a console that speaks protocol 3.**  A record does not
+  always cover its whole archive interval: the first one after the console's receiver starts
+  covers only the seconds since the start, and `rxCheckPercent`, worked out against a whole
+  interval's packets, reads low for it however well the transmitter was heard.  A protocol 3
+  console sends with each record how long it listened for the ISS, and the driver works the
+  figure out against the packets due in that time.  It is then reception while the receiver
+  was listening: the time it was down shows as LOOP packets not received and as records the
+  console did not make, not as a low figure.  A record in which less than one packet was due
+  has no `rxCheckPercent` (in under one transmit period, hearing nothing proves nothing), and
+  neither has one in whose interval the ISS's transmitter ID was changed.  A record that
+  covers only a few seconds has a coarse figure: with two or three packets due, one packet
+  is tens of percent, and it can read under 100 with nothing missed.  Each record also
+  carries the length of its own interval, which the driver stores as the record's
+  `interval`: a record made before the archive interval was changed keeps its length, and a
+  two-hour record across the night the clocks go back is three hours.  LOOP packets are
+  protocol 2's.  The driver asks for this from any console that says protocol 3 or later.
 
 The startup lines differ accordingly:
 

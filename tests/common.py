@@ -218,6 +218,16 @@ def make_record_2(record, block, epoch):
     return record + block + struct.pack('<I', epoch)
 
 
+def make_record_3(record, block, listened, interval_secs, iss_secs, epoch):
+    """A protocol 3 archive record: the rev B record, protocol 2's 24-byte
+    block, the listening block (the record's listening time, the length of
+    its own interval, the ISS's listening time, each 2 bytes, signed, low
+    byte first, in seconds; 0x7fff is the ISS's dash), the epoch."""
+    assert len(record) == 52 and len(block) == 24
+    return (record + block + struct.pack('<hhh', listened, interval_secs, iss_secs)
+            + struct.pack('<I', epoch))
+
+
 def advdmp_reply(records, more):
     """What follows ADVDMP's ACK: the count (2 bytes, low byte first), the
     more flag, the stamped records, and the CRC of all of it.  Split as the
@@ -293,6 +303,7 @@ class ScriptedAdvantage(ScriptedWrapper):
     wakeup_console = vantagenext.AdvantageWrapper.wakeup_console
     _replace = vantagenext.AdvantageWrapper._replace
     wants_protocol_2 = vantagenext.AdvantageWrapper.wants_protocol_2
+    wants_protocol_3 = vantagenext.AdvantageWrapper.wants_protocol_3
     frame_size = vantagenext.AdvantageWrapper.frame_size
     _partial = b''
     _awaiting = False

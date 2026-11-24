@@ -36,6 +36,24 @@
   the console's own time, and `--dump` takes every record with its own time.
   `type = ethernet` works with an advantage console as before, as with any
   Davis console.
+- From an advantage console that speaks protocol 3 or later, each archive
+  record's `rxCheckPercent` is worked out against the packets due in the time
+  the console listened for the ISS, which the console now sends with the
+  record.  Before, the first record after the console's receiver restarted,
+  which covers only the time since the restart, read low however well the
+  transmitter was heard (85 seconds with every packet heard read 28.9 %).  The
+  figure is now reception while the console was listening; the time it was down
+  shows as LOOP packets not received and as records the console did not make.
+  A record in which less than one packet was due has no `rxCheckPercent`, and
+  neither has one in whose interval the ISS's transmitter ID was changed; one
+  that covers only a few seconds has a coarse figure, which can read under 100
+  with nothing missed.
+  Each record's `interval` is the record's own, sent by the console, where it
+  was the station's archive interval: a record made before the archive
+  interval was changed keeps its length.  A record whose listening times
+  cannot be is read as a protocol 2 record and logged (`ADVDMP: the record
+  stamped ... has listening times ...`).  A console that says 2 or 1 is read
+  as before.
 - From an advantage console that speaks protocol 2 or later, every LOOP packet
   has all the fields of both Davis packets, LOOP1 and LOOP2, every two
   seconds, and the values the Davis packets round come finer: humidities,

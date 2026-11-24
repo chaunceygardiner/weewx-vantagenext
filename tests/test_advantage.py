@@ -32,7 +32,7 @@ from common import (ACK, ADV_E, WAKE, FakeClock, ScriptedAdvantage, ScriptedWrap
                     advdmp_reads, advdmp_reply, advtime_reads, advtime_reply, archive_page,
                     archive_record_at,
                     bare_station, make_block, make_combined_frame, make_frame, make_loop1,
-                    make_loop2, make_record_2, make_stamped_record,
+                    make_loop2, make_record_2, make_record_3, make_stamped_record,
                     reply_reads, setup_reads, waiting_frames, with_crc)
 
 import vantagenext
@@ -2332,6 +2332,12 @@ def record_2(epoch, block=None, **overrides):
                          make_block(vantagenext.record_block, **(block or {})), epoch)
 
 
+def record_3(epoch, listened=300, interval_secs=300, iss_secs=300, block=None, **overrides):
+    return make_record_3(archive_record_at(datetime.datetime.fromtimestamp(epoch), **overrides),
+                         make_block(vantagenext.record_block, **(block or {})),
+                         listened, interval_secs, iss_secs, epoch)
+
+
 def apply(block, data, hardware_type=16, packet=None):
     packet = {} if packet is None else packet
     vantagenext._apply_block(packet, data, block, hardware_type)
@@ -2417,12 +2423,14 @@ class TestTheConnectionsProtocol:
         assert [(p['dateTime'], p['outTemp']) for p in got] == [(ADV_E + 2, pytest.approx(70.2))]
         assert made[0].sent[2:] == [b'\n', b'ADVLOOP 4 1\n' if two else b'ADVLOOP 3 1\n']
 
-    @pytest.mark.parametrize('protocol', [1, 2, 3])
+    @pytest.mark.parametrize('protocol', [1, 2, 3, 4])
     def test_the_download_request_and_records_follow_the_number(self, monkeypatch, protocol):
-        two = protocol >= 2
-        sent = (record_2(ADV_E, block=dict(outHumidity=456), outTemp=710) if two
+        two, three = protocol >= 2, protocol >= 3
+        sent = (record_3(ADV_E, block=dict(outHumidity=456), outTemp=710) if three
+                else record_2(ADV_E, block=dict(outHumidity=456), outTemp=710) if two
                 else make_stamped_record(archive_record_at(
                     datetime.datetime.fromtimestamp(ADV_E), outTemp=710), ADV_E))
+        assert len(sent) == (86 if three else 80 if two else 56)
         wrapper, made = wrapper_on(monkeypatch, [b'\n\r', ID2 % protocol, b'\n\r', ACK]
                                    + advdmp_reply([sent], False))
         wrapper.openPort()
@@ -2431,8 +2439,9 @@ class TestTheConnectionsProtocol:
         assert [(r['dateTime'], r['outTemp']) for r in got] == [(ADV_E, pytest.approx(71.0))]
         # The Davis record's 0 %, or the block's 45.6.
         assert got[0]['outHumidity'] == pytest.approx(45.6 if two else 0.0)
-        assert made[0].sent[2:] == [b'\n', b'ADVDMP %d 512%s\n' % (ADV_E - 300,
-                                                                    b' 4' if two else b'')]
+        assert wrapper.wants_protocol_3() == three
+        assert made[0].sent[2:] == [b'\n', b'ADVDMP %d 512%s\n' % (
+            ADV_E - 300, b' 12' if three else b' 4' if two else b'')]
 
     @pytest.mark.parametrize('protocol, options, logged', [
         (2, {'loop_request': '3'}, True), (3, {'loop_request': '1'}, True),
@@ -2456,6 +2465,7 @@ class TestTheConnectionsProtocol:
         with pytest.raises(weewx.WeeWxIOError):
             wrapper.read(2)
         assert wrapper.console_protocol is None and not wrapper.wants_protocol_2()
+        assert not wrapper.wants_protocol_3()
         assert wrapper.frame_size() == 105
         # Closed.
         wrapper, made = wrapper_on(monkeypatch, [b'\n\r', ID2 % 2])
@@ -2517,6 +2527,248 @@ class TestTheConnectionsProtocol:
         assert got[1]['outHumidity'] == 45.6
         assert [m.sent[-1] for m in made] == [b'ADVLOOP 3 2\n', b'ADVLOOP 4 2 %d\n' % (ADV_E + 2),
                                               b'ADVLOOP 3 2 %d\n' % (ADV_E + 4)]
+
+
+# What an advantage console's program sends for five of its own records, the
+# archive intervals ending 2026-11-23 09:10, 09:15, 09:25, 09:30 and 09:35
+# PST, from the ACK to the CRC: asked with 12 (protocol 3) and with 4
+# (protocol 2).  The console's receiver was restarted at 09:13:34; its board
+# was unplugged from 09:19 to 09:24 and found the ISS again 79 s into the
+# record for 09:30.  The console's own values for each record: the epoch, the
+# listening block (the record's time, the interval's length, the ISS's time)
+# and the wind samples.
+CAPTURED_12 = bytes.fromhex(
+    '060500007735ae06d901d901d20100000000f775fb007200b602365d010306050e00fd000ec1ffffffffffff'
+    'ffff00ff3cff9cffffffffff9e031902ff7f9002ff7fff7f5c020c0083006f00a29b04002c012c012c016873'
+    '046b7735b306de01df01de0100000000f87507012100b802365d010206060f0008010fc1ffffffffffffffff'
+    '00ff3dff9cffffffffff9d031702ff7f9002ff7fff7f5d020a0087008600af9b040055002c0155009474046b'
+    '7735bd06ff7f0080ff7f000000000276ff7f0000b90236ffff00ffffff00000000c1ffffffffffffffff00ff'
+    'ffffffffffffffffff7f1d02ff7fff7fff7fff7fff7fff7fff7fff7f159c040021002c010000ec76046b7735'
+    'c206e601e601e30100000000047621015500b902365c020308061100240111c1ffffffffffffffff003b3da0'
+    '9cffffffffff9c031a02b8029002ff7f4e0260021100ac008600299c04002c012c01dd001878046b7735c706'
+    'e801e801e6010000000006762a017200b802365c0104050a12002e0112c1ffffffffffffffff003b3da09cff'
+    'ffffffff9a031c02b8029002ff7f4e0260020c007800e0003c9c04002c012c012c014479046be094')
+CAPTURED_4 = bytes.fromhex(
+    '060500007735ae06d901d901d20100000000f775fb007200b602365d010306050e00fd000ec1ffffffffffff'
+    'ffff00ff3cff9cffffffffff9e031902ff7f9002ff7fff7f5c020c0083006f00a29b04006873046b7735b306'
+    'de01df01de0100000000f87507012100b802365d010206060f0008010fc1ffffffffffffffff00ff3dff9cff'
+    'ffffffff9d031702ff7f9002ff7fff7f5d020a0087008600af9b04009474046b7735bd06ff7f0080ff7f0000'
+    '00000276ff7f0000b90236ffff00ffffff00000000c1ffffffffffffffff00ffffffffffffffffffff7f1d02'
+    'ff7fff7fff7fff7fff7fff7fff7fff7f159c0400ec76046b7735c206e601e601e30100000000047621015500'
+    'b902365c020308061100240111c1ffffffffffffffff003b3da09cffffffffff9c031a02b8029002ff7f4e02'
+    '60021100ac008600299c04001878046b7735c706e801e801e6010000000006762a017200b802365c0104050a'
+    '12002e0112c1ffffffffffffffff003b3da09cffffffffff9a031c02b8029002ff7f4e0260020c007800e000'
+    '3c9c04004479046b9eba')
+CAPTURED = [(1795453800, (300, 300, 300), 114),
+            (1795454100, (85, 300, 85), 33),
+            (1795454700, (33, 300, 0), 0),
+            (1795455000, (300, 300, 221), 85),
+            (1795455300, (300, 300, 300), 114)]
+
+
+class TestProtocol3Records:
+    """A console that says 3 sends each record's listening times, and the
+    reception figure and the record's interval come from them.  The station
+    here hears an ISS at ID 2, a packet each 2.625 s, 114.3 in 300 s."""
+
+    E = ADV_E
+
+    def download(self, records, caplog=None, console_protocol=3, **attrs):
+        attrs.setdefault('iss_id', 2)
+        station = station_on(advdmp_reads(records), console_protocol=console_protocol, **attrs)
+        return list(station.protocol.archive_records(self.E - 300))
+
+    def test_the_specifications_bytes(self):
+        # The console's three examples: the six bytes at 76, the epoch at 82.
+        for times, sent in (((300, 300, 300), '2C012C012C01'), ((85, 300, 85), '55002C015500'),
+                            ((280, 300, 222), '18012C01DE00')):
+            built = make_record_3(b'\x00' * 52, SPEC_RECORD_BLOCK, *times, ADV_E)
+            assert len(built) == 86 and built[76:82] == bytes.fromhex(sent)
+            assert built[52:76] == SPEC_RECORD_BLOCK and built[82:] == bytes.fromhex('C09EF96A')
+        assert make_record_3(b'\x00' * 52, SPEC_RECORD_BLOCK, 300, 300, 0x7fff,
+                             ADV_E)[80:82] == b'\xff\x7f'
+
+    @pytest.mark.parametrize('times, samples, figure', [
+        ((300, 300, 300), 114, 99.75),       # a whole interval
+        ((85, 300, 85), 33, 100.0),          # 2026-11-23 09:15: 32.4 due, held to 100
+        ((280, 300, 222), 84, 99.3243),      # a board restart, the ISS found 58 s in
+        ((300, 300, 166), 0, 0.0),           # a dead ISS: counted from 51 periods in
+        ((3, 300, 3), 1, 87.5),              # 1.14 due
+        ((3, 300, 3), 0, 0.0),
+    ])
+    def test_reception_is_of_the_packets_due_in_the_isss_listening_time(
+            self, times, samples, figure):
+        (record,) = self.download([record_3(self.E, *times, wind_samples=samples)])
+        assert record['rxCheckPercent'] == pytest.approx(figure, abs=1e-3)
+
+    @pytest.mark.parametrize('times, samples', [
+        ((300, 300, 0x7fff), 60),            # the ISS's ID changed in the interval
+        ((0, 300, 0), 0),                    # the receiver never listened
+        ((0, 300, 0), 1),                    # half a second, and a packet in it
+        ((2, 300, 2), 0),                    # 0.76 of a packet due
+        ((2, 300, 2), 1),
+        ((300, 300, 2), 1),                  # the ISS found in the last two seconds
+    ])
+    def test_no_figure_for_a_dash_or_for_less_than_one_packet_due(self, times, samples, caplog):
+        with caplog.at_level(logging.INFO):
+            (record,) = self.download([record_3(self.E, *times, wind_samples=samples)])
+        assert 'rxCheckPercent' not in record
+        # The record is otherwise whole, and nothing is said: these are
+        # records the console's rules allow.
+        assert record['dateTime'] == self.E and record['interval'] == 5
+        assert lines(caplog) == []
+
+    def test_one_packet_due_is_the_floor_for_the_stations_own_iss_and_model(self):
+        # ID 2: 2.625 s a packet, so 3 s is the first whole second with a
+        # figure.  ID 8: 3 s a packet exactly, so 3 s has one due, and 2 none.
+        # A Vantage Pro 1 at ID 1: 2.5 s less its every-twentieth, 2.63 s.
+        def figures(seconds, **attrs):
+            (record,) = self.download(
+                [record_3(self.E, 300, 300, seconds, wind_samples=1)], **attrs)
+            return record.get('rxCheckPercent')
+        assert figures(2, iss_id=2) is None and figures(3, iss_id=2) == pytest.approx(87.5)
+        assert figures(2, iss_id=8) is None and figures(3, iss_id=8) == pytest.approx(100.0)
+        assert figures(2, iss_id=1, model_type=1) is None
+        assert figures(3, iss_id=1, model_type=1) == pytest.approx(100 / (3 / 2.5 - 3 / 50.0))
+
+    @pytest.mark.parametrize('interval_secs, minutes', [
+        (300, 5), (3600, 60), (3300, 55), (10800, 180), (60, 1), (32760, 546)])
+    def test_the_interval_is_the_records_own(self, interval_secs, minutes):
+        # On a station whose own archive interval is five minutes.
+        (record,) = self.download([record_3(self.E, 60, interval_secs, 60, wind_samples=22)],
+                                  archive_interval_=300)
+        assert record['interval'] == minutes
+        # ... and the figure is of the 60 s listened, whatever the interval:
+        # 22 of 22.9 due.
+        assert record['rxCheckPercent'] == pytest.approx(22 * 100 / (16 * 60 / 42.0))
+
+    def test_a_whole_record_reads_as_the_same_bytes_do_in_protocol_2(self):
+        # When the record's interval is the station's.
+        kw = dict(block=dict(outHumidity=456), outTemp=710, wind_samples=101)
+        (three,) = self.download([record_3(self.E, **kw)])
+        (two,) = self.download([record_2(self.E, **kw)], console_protocol=2)
+        assert three == two and three['rxCheckPercent'] == pytest.approx(101 * 100 / 114.2857)
+        assert three['outHumidity'] == pytest.approx(45.6)
+
+    @pytest.mark.parametrize('times', [
+        (-1, 300, 0), (-1, 300, 0x7fff), (301, 300, 300),   # the record's time outside its interval
+        (0, 0, 0), (59, 59, 59), (300, 0x7fff, 300), (300, -300, 300),   # no such interval
+        (60, 90, 60), (300, 3599, 300), (300, 32766, 300),   # ... nor one of part of a minute
+        (85, 300, 86), (85, 300, -1), (85, 300, 0x7ffe),   # the ISS's time outside the record's
+    ])
+    def test_a_block_the_consoles_rules_do_not_allow_is_not_used(self, times, caplog):
+        kw = dict(block=dict(outHumidity=456), outTemp=710, wind_samples=33)
+        with caplog.at_level(logging.INFO):
+            (record,) = self.download([record_3(self.E, *times, **kw)])
+        (two,) = self.download([record_2(self.E, **kw)], console_protocol=2)
+        # Read as protocol 2's: the station's interval, a whole interval's
+        # packets (33 of 114.3).
+        assert record == two and record['interval'] == 5
+        assert record['rxCheckPercent'] == pytest.approx(28.875)
+        assert lines(caplog) == [
+            "ADVDMP: the record stamped %d has listening times the console's rules do not "
+            "allow (%d, %d and %d s).  They are not used." % ((self.E,) + times)]
+        assert caplog.records[-1].levelno == logging.ERROR
+
+    @pytest.mark.parametrize('times', [(60, 60, 60), (32760, 32760, 32760), (85, 300, 85),
+                                       (85, 300, 0), (0, 60, 0x7fff)])
+    def test_the_edges_of_the_rules_are_allowed(self, times, caplog):
+        with caplog.at_level(logging.INFO):
+            (record,) = self.download([record_3(self.E, *times, wind_samples=1)])
+        assert lines(caplog) == [] and record['interval'] == times[1] // 60
+
+    def test_each_record_of_a_download_is_read_by_its_own_block(self, caplog):
+        E = self.E
+        station = station_on(
+            advdmp_reply([record_3(E, 85, 300, 85, wind_samples=33),
+                          record_3(E + 300, 300, 300, 0x7fff, wind_samples=60),
+                          record_3(E + 600, 300, 300, 301, wind_samples=57)], True)
+            + advdmp_reads([record_3(E + 900, wind_samples=114)]),
+            console_protocol=3, iss_id=2)
+        station.port.reads[:0] = [WAKE, ACK]
+        with caplog.at_level(logging.INFO):
+            got = list(station.protocol.archive_records(E - 300))
+        assert [r['dateTime'] for r in got] == [E, E + 300, E + 600, E + 900]
+        assert [r.get('rxCheckPercent') for r in got] == [
+            100.0, None, pytest.approx(49.875), pytest.approx(99.75)]
+        assert len(lines(caplog)) == 1 and str(E + 600) in lines(caplog)[0]
+        # Both requests in protocol 3's form, the second from the last epoch.
+        assert [w for w in station.port.writes if w != b'\n'] == [
+            b'ADVDMP %d 512 12\n' % (E - 300), b'ADVDMP %d 512 12\n' % (E + 600)]
+
+    def test_a_record_that_cannot_be_decoded_is_left_out_as_before(self, caplog):
+        E = self.E
+        with caplog.at_level(logging.INFO):
+            got = self.download([record_3(E, download_record_type=7), record_3(E + 300)])
+        assert [r['dateTime'] for r in got] == [E + 300]
+        assert lines(caplog) == ['ADVDMP: the record stamped %d could not be decoded: Unknown '
+                                 'archive type = 0x7.  It is left out.' % E]
+
+    def test_a_console_upgraded_from_2_to_3_is_asked_12_on_its_new_connection(
+            self, monkeypatch, sleeps):
+        _Monotonic(monkeypatch)
+        wrapper, made = wrapper_on(
+            monkeypatch,
+            [b'\n\r', ID2 % 2, b'\n\r', ACK] + advdmp_reply([record_2(ADV_E)], True) + [b''],
+            [b'\n\r', ID2 % 3, b'\n\r', ACK]
+            + advdmp_reply([record_3(ADV_E + 300, 85, 300, 85, wind_samples=33)], False))
+        wrapper.openPort()
+        station = bare_station(port=wrapper, loop_request=3, archive_interval_=300, iss_id=2)
+        # The console said there were more, and closed the connection for its
+        # upgrade: the second request's wake-up finds it gone and opens a new
+        # one, and the same download carries on in the new connection's form.
+        first, record = station.protocol.archive_records(ADV_E - 300)
+        assert first['dateTime'] == ADV_E and first['rxCheckPercent'] == 0.0
+        assert record['dateTime'] == ADV_E + 300 and record['rxCheckPercent'] == 100.0
+        assert [[w for w in m.sent if w.startswith(b'ADVDMP')] for m in made] == [
+            [b'ADVDMP %d 512 4\n' % (ADV_E - 300)], [b'ADVDMP %d 512 12\n' % ADV_E]]
+
+    @staticmethod
+    def captured(reply, console_protocol):
+        station = station_on([WAKE, reply[:1], reply[1:4], reply[4:]],
+                             console_protocol=console_protocol, iss_id=2)
+        return list(station.protocol.archive_records(CAPTURED[0][0] - 300))
+
+    def test_records_captured_from_the_consoles_program(self, caplog):
+        with caplog.at_level(logging.INFO):
+            three = self.captured(CAPTURED_12, 3)
+        two = self.captured(CAPTURED_4, 2)
+        assert lines(caplog) == []
+        assert [r['dateTime'] for r in three] == [epoch for epoch, times, samples in CAPTURED]
+        # The bytes hold what the console says they hold.
+        assert len(CAPTURED_12) == 1 + 3 + 5 * 86 + 2 and len(CAPTURED_4) == 1 + 3 + 5 * 80 + 2
+        for n, (epoch, times, samples) in enumerate(CAPTURED):
+            record = CAPTURED_12[4 + 86 * n:4 + 86 * (n + 1)]
+            assert struct.unpack_from('<hhh', record, 76) == times
+            assert struct.unpack_from('<I', record, 82) == (epoch,)
+            assert record[:76] == CAPTURED_4[4 + 80 * n:4 + 80 * n + 76]
+        # A whole record; 33 heard of 32.4 due; the ISS not yet found, so no
+        # figure; 85 heard of 84.2 due; a whole record.
+        assert [r.get('rxCheckPercent') for r in three] == [
+            pytest.approx(99.75), 100.0, None, 100.0, pytest.approx(99.75)]
+        assert 'rxCheckPercent' not in three[2]
+        # The same records in protocol 2: against a whole interval's packets.
+        assert [r['rxCheckPercent'] for r in two] == [
+            pytest.approx(99.75), pytest.approx(28.875), 0.0, pytest.approx(74.375),
+            pytest.approx(99.75)]
+        # Nothing else differs between the two readings.
+        for a, b in zip(three, two):
+            a, b = dict(a), dict(b)
+            a.pop('rxCheckPercent', None)
+            b.pop('rxCheckPercent')
+            assert a == b and a['interval'] == 5
+
+    def test_the_davis_figure_is_what_it_was(self):
+        # _rxcheck against the formulas as they stood before _packets_due was
+        # taken out of it.
+        for iss_id in range(1, 9):
+            for minutes in (1, 5, 10, 15, 30, 60, 120):
+                due = 960.0 * minutes / float(41 + iss_id - 1)
+                assert vantagenext._rxcheck(2, minutes, iss_id, 7) == min(100.0, 700.0 / due)
+                due = (float(minutes * 60) / (2.5 + (iss_id - 1) / 16.0)
+                       - float(minutes * 60) / (50.0 + (iss_id - 1) * 1.25))
+                assert vantagenext._rxcheck(1, minutes, iss_id, 7) == min(100.0, 700.0 / due)
+        assert vantagenext._rxcheck(3, 5, 1, 7) is None
 
 
 class TestTheCombinedFrame:

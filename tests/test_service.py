@@ -27,7 +27,7 @@ import pytest
 from common import (ACK, ADV_E, BASE_DT, WAKE, FakeClock, ScriptedAdvantage, ScriptedWrapper,
                     SteeredConsole, advdmp_reads, advtime_reads, archive_page,
                     archive_record_at, dmpaft_reads, make_block, make_combined_frame,
-                    make_frame, make_loop1, make_loop2, make_record_2, make_stamped_record,
+                    make_frame, make_loop1, make_loop2, make_record_2, make_record_3, make_stamped_record,
                     setup_reads, waiting_frames)
 
 import vantagenext
@@ -508,6 +508,43 @@ class TestAdvantage:
         for p in seen:
             assert p['outHumidity'] == pytest.approx(45.6) and p['dewpoint'] == pytest.approx(25.2)
             assert p['monthRain'] == pytest.approx(1.23) and p['windGust10'] == 9.0
+
+    def test_protocol_3_through_the_engine(self, monkeypatch, tmp_path):
+        # A console that says 3: the catch-up lands 86-byte records.  The
+        # first covers 85 s after a restart of the receiver, with more
+        # packets than were due in them at any ISS ID: stored as 100, where a
+        # whole interval's packets would make it about a third.  The second
+        # was made at a 60-minute interval and is stored as one.  The third's
+        # ISS changed ID inside it: no reception figure.  LOOP is protocol 2's.
+        E = self.E
+        now = E - 10.0
+
+        def rec(t, listened, interval_secs, iss_secs, samples):
+            return make_record_3(
+                archive_record_at(datetime.datetime.fromtimestamp(t), outTemp=700,
+                                  wind_samples=samples),
+                make_block(vantagenext.record_block, outHumidity=456), listened,
+                interval_secs, iss_secs, t)
+        recs = [rec(E - 900, 85, 300, 85, 40), rec(E - 600, 3600, 3600, 3600, 0),
+                rec(E - 300, 300, 300, 0x7fff, 60)]
+        frame = make_combined_frame(make_loop1(outTemp=700), make_loop2(outTemp=700),
+                                    make_block(vantagenext.loop_block, outHumidity=456), E - 8)
+        engine, port, clock, db_file = self.make_engine(
+            monkeypatch, tmp_path, now,
+            advdmp_reads(recs) + [WAKE] + advtime_reads(now) + [WAKE, ACK, frame, EndTest()],
+            console_protocol=3)
+        seen = []
+        engine.bind(weewx.NEW_LOOP_PACKET, lambda event: seen.append(event.packet['dateTime']))
+        with pytest.raises(EndTest):
+            engine.run()
+        monkeypatch.undo()
+        assert self.requests(port) == [b'ADVDMP 0 512 12\n', b'ADVTIME\n', b'ADVLOOP 4 200\n']
+        assert self.rows(db_file, 'SELECT dateTime, interval, rxCheckPercent, outHumidity '
+                                  'FROM archive ORDER BY dateTime') == [
+            (E - 900, 5, 100.0, pytest.approx(45.6)),
+            (E - 600, 60, 0.0, pytest.approx(45.6)),
+            (E - 300, 5, None, pytest.approx(45.6))]
+        assert seen == [E - 8]
 
     def test_one_interval_end_to_end(self, monkeypatch, tmp_path):
         # The frame stamped E is in the period ending E; the frame stamped
