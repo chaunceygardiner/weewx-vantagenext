@@ -189,8 +189,9 @@ What that changes:
   is not used.  Humidities, extra temperatures, dew point, heat index, wind chill and THSW
   come in tenths, and the barometer, station pressure and altimeter in ten-thousandths of
   an inch, where the Davis packets round them.  Each archive record's humidities and extra
-  temperatures come in tenths too, its average wind in tenths of a mile an hour, and its
-  wind directions in whole degrees in place of compass points.  The driver asks for these
+  temperatures come in tenths too, its average wind in tenths of a mile an hour, its
+  barometer in ten-thousandths of an inch, and its wind directions in whole degrees in
+  place of compass points.  The driver asks for these
   from any console that says protocol 2 or later, and from one that says 1 it reads the
   Davis values as before.  Since every packet carries the console's dew point, heat index,
   wind chill, THSW, station pressure and altimeter, WeeWX takes those (it prefers the

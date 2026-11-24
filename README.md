@@ -170,10 +170,11 @@ and what to do when
 
 Upgrading from an earlier release?  Run the same `weectl extension install` command, then
 restart WeeWX.  An upgrade never rewrites weewx.conf, so a few things need doing by hand —
+a `loop_request` that is not 1, 2 or 3, which now stops the driver at startup (3.5),
 deleting the obsolete clock options and checking `max_drift` (3.0), a live `iss_id` line that
 suppresses ISS detection (2.3), the `[[dst_periods]]` section (2.0) — and all of them are on
 the [Upgrading page](https://chaunceygardiner.github.io/weewx-vantagenext/upgrading.html).
-Nothing needs doing for 3.5, 3.4 or 3.3 (upgrading from 3.2, a WeatherLinkIP's clock is learned
+Nothing needs doing for 3.4 or 3.3 (upgrading from 3.2, a WeatherLinkIP's clock is learned
 afresh and steered two days after the restart).  The full history is in the
 [change history](https://github.com/chaunceygardiner/weewx-vantagenext/blob/master/changes.md).
 

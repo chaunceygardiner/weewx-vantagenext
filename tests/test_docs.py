@@ -295,7 +295,7 @@ UNDOCUMENTED_FORMATS = {
 # driver, and the messages the manual shows them carrying.
 CARRIED_TEXTS = {
     'get_packet: ': ('Expected %d chars; got %d',),
-    'DMPAFT try #': ('Expected %d chars; got %d',),
+    'DMPAFT try #': ('Expected %d chars; got %d', 'Timeout in get_data_with_crc16'),
     'LOOP try #': ('LOOP buffer failed CRC check', 'LOOP frame failed CRC check',
                    'Expected %d characters; got zero instead'),
     'genLoopPackets: Error: ': ('Max tries exceeded while getting LOOP data.',
@@ -530,8 +530,8 @@ class TestConstants:
             'a reading outside the band: the page says none is more than %g from center' % VantageNext.JUMP_BAND
         assert "![Seven Envoys' clocks, steered, %s, one row each: no reading more than %.2f seconds" % (
             figure.fleet_span(), figure.fleet_largest()) in page
-        assert 'since %s, the first night' % time.strftime(
-            '%-d %B %Y', time.localtime(figure.fleet_x0())) in page
+        assert 'at every clock check from %s %s, starting the first night' % (
+            figure.fleet_span(), time.strftime('%Y', time.localtime(figure.fleet_x0()))) in page
         assert 'In %d readings from %s no clock was more than %.2f seconds from center' % (
             figure.fleet_count(), figure.fleet_span(), figure.fleet_largest()) in page
         assert any(figure.fleet_changes().values())

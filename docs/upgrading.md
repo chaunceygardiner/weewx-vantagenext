@@ -104,7 +104,7 @@ does not set it; see [Keeping the console clock](clock.md).  It needs no clock o
    it to make the clock more accurate.  It is a backstop only now, and too small a value
    forces clock sets that are not needed.
 
-For about a day after the upgrade — from under a day to a day and three quarters, depending
+For about a day after the upgrade — from under a day to a little under two days, depending
 on the hour WeeWX restarts, or two days for a WeatherLinkIP ([To 3.3](#to-33)) — the driver is
 learning the console's drift and changes nothing;
 from then on it writes a new midnight jump to the console, in the evening, when the clock

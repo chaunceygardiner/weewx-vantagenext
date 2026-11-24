@@ -33,8 +33,8 @@ console, at a rate that does not change with the hour.  This is its **drift**.
 **Just after midnight it corrects itself** by its **midnight jump**, a value it keeps in its
 own memory (EEPROM address `0x2E`, in quarter-seconds).  The jump is not a step.  Measured
 closely on the Vantage Pro2 console: for the first few seconds of the day the console does not
-answer at all; then its clock runs fast, a quarter of a second every second, until the jump is
-made.  A jump of 3.75 seconds takes about fifteen seconds:
+answer at all, and from about a second in its clock runs fast, a quarter of a second every
+second, until the jump is made.  A jump of 3.75 seconds takes about fifteen seconds:
 
 ![A console's clock error across its midnight: flat before; no readings for the first five seconds; then rising a quarter of a second each second to 3.75 seconds by about sixteen seconds past midnight, and flat again](images/clock-midnight.svg)
 
@@ -152,7 +152,7 @@ takes a precise reading, and fits a straight line
 through the last 14 days of them, with the jumps and any sets it knows of taken out.  Until its
 readings span half a day and a midnight it is **learning**: half a day to a little over a day,
 depending on the hour WeeWX starts.  Its first decision comes on the first evening after that:
-from under a day to a day and three quarters from the start.  (Behind a WeatherLinkIP it
+from under a day to a little under two days from the start.  (Behind a WeatherLinkIP it
 learns for two days: [A WeatherLinkIP](#a-weatherlinkip).)
 
 **Then it steers by the jump.**  Once a day, on the evening reading, it works out where
@@ -258,13 +258,13 @@ lands the clock nearest center, however far off it is, and that midnight puts it
 steering keeps.  The distance comes from a precise reading, good to a few hundredths of a
 second, of where the clock is, so a jump several seconds from the drift is as safe as one a
 quarter-second from it.  The
-first decision is made from under a day to a day and three quarters after WeeWX starts.
+first decision is made from under a day to a little under two days after WeeWX starts.
 Behind a WeatherLinkIP it comes about two days in, or as soon as there is a line for a clock
 more than a second off, and a clock within a second of center is brought in over a few nights
 ([A WeatherLinkIP](#a-weatherlinkip)).  While
 it learns, the console keeps the jump it came with, so each midnight moves the clock by however
 far that jump is from the console's real drift: nothing to speak of for a console whose jump
-matches its drift, 0.61 seconds a night for the one in the figure above.
+matches its drift, 0.83 seconds a night for the one in the figure above.
 
 For example, a console that loses 3.66 seconds a day and is 2.3 seconds fast of center at its
 first decision gets a jump of 1.25 seconds, not the 3.66 that would only cancel its drift, and
@@ -324,8 +324,8 @@ is brought in by the first decision.
   ([A clock that starts off center](#a-clock-that-starts-off-center)).
 
 Here is a whole site: seven Envoys, each with its own drift and its own jump, and a precise
-reading at every clock check since 15 October 2026, the first night every jump in force was
-one an evening decision had chosen:
+reading at every clock check from 15 to 20 October 2026, starting the first night every jump
+in force was one an evening decision had chosen:
 
 ![Seven Envoys' clocks, steered, 15 to 20 October, one row each: no reading more than 0.19 seconds from center, and a marker at each midnight a console made a new jump](images/clock-fleet.svg)
 
@@ -339,7 +339,7 @@ The driver recovers by itself from anything that changes the console or its cloc
 | What happened | What the driver does |
 |---|---|
 | WeeWX restarted, or the computer rebooted | Resumes from `clock.json` where it left off — including a jump it wrote just before and had not yet confirmed: found in the console, it is taken as written. |
-| `clock.json` deleted or lost | Starts learning afresh from the jump the console holds — the best starting point there is.  It costs up to a day and three quarters before the first decision (two days to two and three quarters, behind a WeatherLinkIP), nothing more. |
+| `clock.json` deleted or lost | Starts learning afresh from the jump the console holds — the best starting point there is.  It costs up to a little under two days before the first decision (two days to two and three quarters, behind a WeatherLinkIP), nothing more. |
 | The console replaced by another | Sees a jump in the console other than the one it last held, at startup or at the next reading, and learns the console afresh.  If a new console happens to hold the same jump, the first reading the old drift cannot explain does the same (below). |
 | The clock moved — a power loss, a set by hand, another program on the cable | A clock off by more than `max_drift` is set at once by [the backstop](#the-backstop).  Then, or for any smaller move, **a reading that the drift cannot explain by 1.5 seconds** shows the clock was moved — or, while the driver is still learning, a line that cannot explain its own readings — and the driver starts learning afresh from that reading.  How far it moved makes no difference: seconds or months.  A move the backstop did not set back is steered out by the [decisions that follow](#a-clock-that-starts-off-center): the first one after the learning, if the move caused any. |
 | The console moved between serial or USB and ethernet, either way | Learns it afresh: whole-second readings and precise ones are not mixed ([A WeatherLinkIP](#a-weatherlinkip)). |
@@ -560,7 +560,9 @@ WARNING user.vantagenext: Clock: not set.  An advantage console keeps its own cl
 ```
 
 The same warning from every computer that reads the console points at the console; from one
-alone, at that computer.
+alone, at that computer.  If the console does not answer when asked the time, the warning
+says that in place of the difference: `Clock: not set.  An advantage console keeps its own
+clock, and it did not answer when asked the time.`
 
 `weectl device --set-time` prints that sentence and sets nothing.  `weectl device --info`
 shows the console's time and, in place of the clock report [below](#what-weectl-device---info-shows),

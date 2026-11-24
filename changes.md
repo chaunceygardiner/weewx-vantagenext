@@ -34,7 +34,8 @@
   driver's own, which it still serves; an earlier one is refused.  `weectl
   device --set-time` sets nothing and says how the two clocks compare, `--info` shows
   the console's own time, and `--dump` takes every record with its own time.
-  `type = ethernet` works with an advantage console as before, as with any
+  `weectl station reconfigure` offers `advantage` among the connection types
+  and asks for the console's host.  `type = ethernet` works with an advantage console as before, as with any
   Davis console.
 - From an advantage console that speaks protocol 3 or later, each archive
   record's `rxCheckPercent` is worked out against the packets due in the time

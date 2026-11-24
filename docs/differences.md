@@ -15,10 +15,11 @@ description: Everything weewx-vantagenext does differently from the Vantage driv
 
 VantageNext began as a copy of WeeWX's Vantage driver and is kept comparable with it, line
 for line, so that fixes can travel in both directions.  This page is the whole list of
-where the two differ.  "The built-in driver" means the one in WeeWX 5.5.
+where the two differ.  "The built-in driver" means the one in WeeWX 5.5 and 5.6, which are
+the same file.
 
-Anything not listed here is the same: the LOOP and archive decoding, bar the two LOOP2 fields
-below, the hardware catch-up, the loop-gust bookkeeping, the units, the observation names.
+Anything not listed here is the same: the LOOP and archive decoding, bar the fields in the
+decoding table below, the hardware catch-up, the units, the observation names.
 
 ## Behavior
 

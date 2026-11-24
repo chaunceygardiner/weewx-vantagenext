@@ -27,6 +27,7 @@ in this manual is describing a driver you are not running.
 | Symptom | Likely cause |
 |---|---|
 | WeeWX will not start: `KeyError: 'port'` (or `'host'`) | `[VantageNext]` has no `port`, or `type = ethernet` or `type = advantage` with no `host`.  Settings in `[Vantage]` are not read; see [Switching from the built-in driver](installation.md#switching-from-the-built-in-driver). |
+| WeeWX will not start: `Import of driver failed: loop_request must be 1, 2 or 3 (weewx.conf says ...)` | Since 3.5 a `loop_request` other than 1, 2 or 3 stops the driver at startup.  Set it to 1, 2 or 3, or delete the line (the default is 1).  See [`loop_request`](configuration.md). |
 | `Could not open serial port ...` and then a failure to start | The port named does not exist, or your WeeWX user may not open it (on Debian, serial ports belong to the `dialout` group). |
 | `SerialException on read.` with `Is there a competing process running??` | Something else has the port: a second `weewxd`, a `weectl device` left running, a modem manager. |
 | `rxCheckPercent` low in one record just after midnight, or in the record a clock set fell in | Routine: the console let go of its transmitter, for about a minute after a set, or now and then for a few minutes at midnight.  See [What it costs in reception](recovery.md#what-it-costs-in-reception). |
@@ -47,7 +48,9 @@ in this manual is describing a driver you are not running.
 
 Every message the driver logs at INFO or above while WeeWX is running, other than the
 startup summary shown on the [Installation](installation.md#confirming-it-took) page.
-`...` stands for a value.
+(One more pair at WeeWX's `debug = 2` only: a LOOP packet that fails its checksum is also
+logged with its CRC and its bytes, `LOOP buffer failed CRC check. Calculated CRC=...` and
+`Buffer: ...`.)  `...` stands for a value.
 
 ### Clock
 
@@ -128,7 +131,7 @@ driver falling back:
 | `The port is open again.` | The reopen worked at its first attempt; LOOP batches go on from here. |
 | `The port is open again.  It took ... tries over ... seconds.` | The reopen worked after the port had failed to open: how many attempts it took, and how long from closing the port to opening it.  The failed batches before the reopen are not in that time. |
 | `Could not open the port again: ....  Trying again in ... seconds.` | The console, the adapter or the WeatherLinkIP is still not there.  It is tried every five seconds until it opens; this line comes at the first failure and then once a minute. |
-| `DMPAFT try #...; error: ...` / `DMPAFT max tries (...) exceeded.` | The same, while downloading archive records.  This one is handed to WeeWX. |
+| `DMPAFT try #...; error: ...` / `DMPAFT max tries (...) exceeded.` | As the `LOOP try` and `LOOP max tries` lines above, while downloading archive records.  This one is handed to WeeWX. |
 | `Could not open serial port ..., sleeping 5s and trying again.` | The port was not ready at startup. |
 | `ISS ID is ...` | At startup: the ISS configured, or found in the transmitter table. |
 | `LOOP try #...; error: Unknown LOOP packet type ...` | The console sent a packet type the driver does not decode.  It is retried like any other bad packet; see the `LOOP try` row. |
@@ -139,7 +142,9 @@ driver falling back:
 These come from the exchange of commands beneath everything else, and they are the same
 messages the built-in driver logs.  One, now and then, followed by normal service, is a
 retry that worked.  A run of them means the console is not answering: power, cabling, the
-data logger's seating, or a second program holding the port.
+data logger's seating, or a second program holding the port.  With `type = advantage`, a run
+of the first one after `Lost the connection to the console` is the console's receiver
+restarting, and ends by itself ([the recovery page](recovery.md#an-advantage-console)).
 
 | Message | Meaning |
 |---|---|
@@ -163,7 +168,7 @@ With `type = advantage` (see [An advantage console](installation.md#an-advantage
 |---|---|
 | `Advantage console ...: version ..., protocol ....` | Each time the connection is opened, at startup and at a reopen: the console's name, its program's version and its protocol number, the newest protocol it serves (it serves every earlier one too, so the driver may speak an earlier one to it). |
 | `time change windows: not used with type = advantage` | At startup.  See [Daylight-saving time changes](dst.md#an-advantage-console). |
-| `loop_request       : not used for the LOOP packets weewxd reads from this console (protocol 2 sends LOOP1 and LOOP2 in every frame)` | Each time the connection is opened, at startup and at a reopen, as the line before it is, if `loop_request` is in `weewx.conf` and the console speaks protocol 2 or later: every LOOP packet then has all the fields of both Davis packets, and `loop_request` chooses nothing.  Harmless.  It is still what `weectl device --current` asks for. |
+| `loop_request       : not used for the LOOP packets weewxd reads from this console (protocol 2 sends LOOP1 and LOOP2 in every frame)` | Each time the connection is opened, at startup and at a reopen, after the `Advantage console ...` line, if `loop_request` is in `weewx.conf` and the console speaks protocol 2 or later: every LOOP packet then has all the fields of both Davis packets, and `loop_request` chooses nothing.  Harmless.  It is still what `weectl device --current` asks for. |
 | `tcp_send_delay     : not used with type = advantage` | At startup: the option is in `weewx.conf`, and belongs to `type = ethernet`.  Harmless; delete it if the station is staying with this type. |
 | `Clock: the advantage console reports that its clock is not synchronized.` | A WARNING at a clock check.  The time is still used; WeeWX's `Clock error` line says whether it is wrong.  See [An advantage console](clock.md#an-advantage-console). |
 | `Clock: not set.  An advantage console keeps its own clock; it reads ... s against this host (the console reports its clock ...).  Check the time service on whichever is wrong.` | A WARNING: WeeWX asked for a clock set past `max_drift`, and the driver sets nothing on this console. |

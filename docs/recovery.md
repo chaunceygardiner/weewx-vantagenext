@@ -295,7 +295,7 @@ once a minute, and the driver tries again every five seconds.
 
 ```
 ERROR user.vantagenext: Could not open the port again: console1 port 22222 accepted the connection and did not answer (timed out).  If it is a Davis console, it wants type = ethernet.  Trying again in 5 seconds.
-INFO user.vantagenext: Advantage console console1: version 0.2, protocol 1.
+INFO user.vantagenext: Advantage console console1: version 0.2, protocol 3.
 INFO user.vantagenext: The port is open again.  It took 14 tries over 126 seconds.
 ```
 
@@ -311,7 +311,7 @@ again.  LOOP data then resumes from the last packet received, as after any reope
 
 ```
 ERROR user.vantagenext: Lost its place in what the console sends (a reply to ADVDMP was given up on); opening a new connection.
-INFO user.vantagenext: Advantage console console1: version 0.2, protocol 1.
+INFO user.vantagenext: Advantage console console1: version 0.2, protocol 3.
 ```
 
 **A console that closes the connection gets a new one.**  An advantage console closes every
@@ -331,11 +331,18 @@ else restarts it.
 
 ```
 ERROR user.vantagenext: Lost the connection to the console (the console closed it).
-ERROR user.vantagenext: LOOP try #1; error: Expected 105 characters; got zero instead
-INFO user.vantagenext: genLoopPackets: Error: Expected 105 characters; got zero instead. (try 1)
+ERROR user.vantagenext: LOOP try #1; error: Expected 256 characters; got zero instead
+INFO user.vantagenext: genLoopPackets: Error: Expected 256 characters; got zero instead. (try 1)
 ERROR user.vantagenext: Could not open a new connection: [Errno 111] Connection refused.
-INFO user.vantagenext: Advantage console console1: version 0.2, protocol 1.
+INFO user.vantagenext: Advantage console console1: version 0.2, protocol 3.
 ```
+
+That is a restart the console finished within about fifteen seconds.  A longer one adds the
+lines of a console that does not answer: each wake-up tries the connection `max_tries` times,
+five seconds apart, and then logs `Unable to wake up Vantage console`, and after five batches
+have failed that way the driver closes the port and opens it again, as
+[for any console](#any-other-error).  With this type those lines, between a
+`Lost the connection` and an `Advantage console ...`, are the restart and not a fault.
 
 The console has no silence at midnight, and the `LOOP gap` line is not logged for it.
 
@@ -361,7 +368,7 @@ built-in driver does, because at that point WeeWX's own handling — wait, and r
 driver — is the right one:
 
 ```
-ERROR user.vantagenext: DMPAFT try #1; error: Expected 267 chars; got 0
+ERROR user.vantagenext: DMPAFT try #1; error: Timeout in get_data_with_crc16
 ERROR user.vantagenext: DMPAFT max tries (4) exceeded.
 ```
 

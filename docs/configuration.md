@@ -52,7 +52,7 @@ commented, and they go on working as they did.
 | `baudrate` | `19200` | Serial baud rate.  It must match the console's own setting. |
 | `tcp_port` | `22222` | TCP port, when `type = ethernet` or `type = advantage`. |
 | `tcp_send_delay` | `0.5` | Seconds to wait after each write to a WeatherLinkIP, to let it process the command.  For `type = ethernet` only: with `type = advantage` there is no wait, and a `tcp_send_delay` left in `weewx.conf` is not used, which the log says at startup. |
-| `loop_request` | `1` | The LOOP packets to ask for: `1` = LOOP1, `2` = LOOP2, `3` = both, alternating.  Not used for the LOOP packets of an advantage console that speaks protocol 2, whose every packet has both (see [An advantage console](installation.md#an-advantage-console)). |
+| `loop_request` | `1` | The LOOP packets to ask for: `1` = LOOP1, `2` = LOOP2, `3` = both, alternating.  Any other value stops the driver at startup with an error that says so (3.5).  Not used for the LOOP packets of an advantage console that speaks protocol 2, whose every packet has both (see [An advantage console](installation.md#an-advantage-console)). |
 | `iss_id` | read from the console | The transmitter id of the ISS.  See [below](#iss_id). |
 | `model_type` | `2` | `1` = Vantage Pro, `2` = Vantage Pro2.  Only the owner of an original Vantage Pro sets it: a Vue is detected, whatever this says. |
 | `timeout` | `4.5` | Seconds to wait for the console to answer before giving up on a read.  A value under 4.5 is raised to 4.5, and the log says so at startup (3.1): the console sends nothing for about three seconds after its own midnight, and the old default of four gave up on that silence just as it ended; see [the recovery page](recovery.md#the-consoles-midnight). |

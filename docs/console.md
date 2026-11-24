@@ -15,8 +15,10 @@ description: Configuring a Davis console through weectl device with weewx-vantag
 
 The console itself — its archive interval, time zone, transmitters, calibration — is
 configured through WeeWX's standard `weectl device`, which hands the work to whichever
-driver `station_type` names.  WeeWX must be stopped first: only one program can hold the
-port.
+driver `station_type` names.  With a serial console or a WeatherLinkIP, WeeWX must be
+stopped first: only one program can hold the port.  An advantage console serves each
+connection independently, so WeeWX can stay running
+([With an advantage console](#with-an-advantage-console)).
 
 ```
 weectl device --info
@@ -138,7 +140,8 @@ Every other option sends the same Davis commands as to any console.  What differ
 setting it changes.
 
 **A setting belongs to the console, and every host on that console gets the change.**  An
-advantage console serves several WeeWX hosts at once.  Only the LOOP stream and the place in
+advantage console serves several WeeWX hosts at once, each connection independently of the
+others, which is why WeeWX does not have to be stopped for `weectl device` here.  Only the LOOP stream and the place in
 an archive download are a connection's own.  Everything `weectl device` writes is the
 console's — the transmitter table, the archive interval, the calibration offsets, the
 barometer and altitude, the latitude and longitude, the start of the rain year, the rain
@@ -148,8 +151,7 @@ changing one, think of the other hosts:
 - **`--set-interval` and `--clear-memory` clear the console's archive for every host.**  On
   a Davis console that is a few days of records; here it can be years.  The records each
   host has already stored in its own database are not touched.
-- **`--set-transmitter-type`** changes what the console listens to, and reception stops for
-  every host while its receiver restarts.
+- **`--set-transmitter-type`** changes what the console listens to, for every host.
 - **`--set-dst`, `--set-tz-code` and `--set-tz-offset`** are stored, and `--info` shows them,
   but the console does not use them: its time zone is its computer's.  The console's computer
   and every host must be set to the same time zone.
