@@ -134,7 +134,8 @@ its own data and keeps its own clock:
   console can hold years of records, far more than a Davis console's 2,560.  From one that
   speaks protocol 2 the records carry its finer values, as a download's do, and from one
   that speaks protocol 3 each has its own interval and its reception figure for the time
-  the console listened.
+  the console listened.  From one that speaks protocol 4 each has the console's own count
+  of every station's reception.
 
 Every other option sends the same Davis commands as to any console.  What differs is whose
 setting it changes.

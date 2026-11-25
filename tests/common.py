@@ -228,6 +228,23 @@ def make_record_3(record, block, listened, interval_secs, iss_secs, epoch):
             + struct.pack('<I', epoch))
 
 
+def reception_block(stations):
+    """A protocol 4 reception block: for each transmitter ID from 1 to 8, 7
+    bytes: what the station is (1 byte), then its packets heard, due and not
+    listened for (each 2 bytes, signed, low byte first).  `stations` maps an
+    ID to those four; an ID it does not name has no row: 0 and three dashes."""
+    assert all(1 <= station_id <= 8 for station_id in stations)
+    return b''.join(struct.pack('<Bhhh', *stations.get(station_id, (0, 0x7fff, 0x7fff, 0x7fff)))
+                    for station_id in range(1, 9))
+
+
+def make_record_4(record, block, listened, interval_secs, iss_secs, stations, epoch):
+    """A protocol 4 archive record: protocol 3's first 82 bytes, the
+    reception block's 56 (reception_block), the epoch."""
+    return (make_record_3(record, block, listened, interval_secs, iss_secs, epoch)[:82]
+            + reception_block(stations) + struct.pack('<I', epoch))
+
+
 def advdmp_reply(records, more):
     """What follows ADVDMP's ACK: the count (2 bytes, low byte first), the
     more flag, the stamped records, and the CRC of all of it.  Split as the
@@ -304,6 +321,7 @@ class ScriptedAdvantage(ScriptedWrapper):
     _replace = vantagenext.AdvantageWrapper._replace
     wants_protocol_2 = vantagenext.AdvantageWrapper.wants_protocol_2
     wants_protocol_3 = vantagenext.AdvantageWrapper.wants_protocol_3
+    wants_protocol_4 = vantagenext.AdvantageWrapper.wants_protocol_4
     frame_size = vantagenext.AdvantageWrapper.frame_size
     _partial = b''
     _awaiting = False

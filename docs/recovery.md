@@ -48,7 +48,8 @@ Truncated reads are the visible side of something the archive records more preci
 Every archive record carries `rxCheckPercent`: how many of the ISS's packets the console
 received in that interval, against the number it should have.  (From an advantage console
 that speaks protocol 3 it is against the number due while the console listened, and a few
-records have none: see [An advantage console](installation.md#an-advantage-console).)  A
+records have none; from one that speaks protocol 4 it is the console's own count of both:
+see [An advantage console](installation.md#an-advantage-console).)  A
 sound link runs at 98 to 100 percent, record after record, so a single low record is easy to spot — and on
 these consoles it means one of two things: a **clock set** — the `max_drift` backstop's, or on
 a console the driver keeps by setting — which costs the console about a minute of its
@@ -320,7 +321,7 @@ The driver's next read finds the connection closed, and its next command opens a
 trying every five seconds until the console accepts it.  LOOP data resumes with the first
 packet the console makes once its receiver is back; the packets of the restart itself are
 not sent again, and the driver logs how many that was.  The first archive record after
-the restart covers only the time since it: from a console that speaks protocol 3 its
+the restart covers only the time since it: from a console that speaks protocol 3 or later its
 `rxCheckPercent` is of that time and reads true, and from an earlier one it is against the
 whole interval and reads low.  A clock check or an archive download waits the restart out too, for up to
 about a minute, and then asks again.  A longer outage during a download ends as it does with

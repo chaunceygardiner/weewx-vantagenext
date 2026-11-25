@@ -37,6 +37,22 @@
   `weectl station reconfigure` offers `advantage` among the connection types
   and asks for the console's host.  `type = ethernet` works with an advantage console as before, as with any
   Davis console.
+- From an advantage console that speaks protocol 4 or later, each archive
+  record's `rxCheckPercent` is the console's own count: the ISS's packets heard
+  over its packets due, both sent with the record, where otherwise it is an
+  estimate from the transmitter's nominal period.  A record heard in full reads
+  100, a record of a few seconds is not coarse, a record in whose interval the
+  console's list of stations was changed has its figure from the packets since
+  the change, and `iss_id` plays no part: the record says which transmitter was
+  the ISS.  Only a record in which no packet of the ISS was due has none (the
+  console had not yet found the ISS, after its receiver started or after its
+  list of stations was changed).  Each record also carries the same
+  figure for every station the console listens to, the ISS among them, as
+  `rxCheckPercentId1` to `rxCheckPercentId8` by transmitter ID.  WeeWX's
+  database has no column for those: the manual says how to add one.  A record
+  whose counts cannot be is read as a protocol 3 record and logged (`ADVDMP:
+  the record stamped ... has a reception block ...`).  A console that says 3, 2
+  or 1 is read as before.
 - From an advantage console that speaks protocol 3 or later, each archive
   record's `rxCheckPercent` is worked out against the packets due in the time
   the console listened for the ISS, which the console now sends with the

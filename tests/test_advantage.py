@@ -32,7 +32,7 @@ from common import (ACK, ADV_E, WAKE, FakeClock, ScriptedAdvantage, ScriptedWrap
                     advdmp_reads, advdmp_reply, advtime_reads, advtime_reply, archive_page,
                     archive_record_at,
                     bare_station, make_block, make_combined_frame, make_frame, make_loop1,
-                    make_loop2, make_record_2, make_record_3, make_stamped_record,
+                    make_loop2, make_record_2, make_record_3, make_record_4, make_stamped_record,
                     reply_reads, setup_reads, waiting_frames, with_crc)
 
 import vantagenext
@@ -2338,6 +2338,16 @@ def record_3(epoch, listened=300, interval_secs=300, iss_secs=300, block=None, *
                          listened, interval_secs, iss_secs, epoch)
 
 
+def record_4(epoch, stations=None, listened=300, interval_secs=300, iss_secs=300, block=None,
+             **overrides):
+    """A protocol 4 record; with no stations given, ID 2 is the ISS and was
+    heard in full."""
+    return make_record_4(archive_record_at(datetime.datetime.fromtimestamp(epoch), **overrides),
+                         make_block(vantagenext.record_block, **(block or {})),
+                         listened, interval_secs, iss_secs,
+                         {2: (1, 114, 114, 0)} if stations is None else stations, epoch)
+
+
 def apply(block, data, hardware_type=16, packet=None):
     packet = {} if packet is None else packet
     vantagenext._apply_block(packet, data, block, hardware_type)
@@ -2423,14 +2433,15 @@ class TestTheConnectionsProtocol:
         assert [(p['dateTime'], p['outTemp']) for p in got] == [(ADV_E + 2, pytest.approx(70.2))]
         assert made[0].sent[2:] == [b'\n', b'ADVLOOP 4 1\n' if two else b'ADVLOOP 3 1\n']
 
-    @pytest.mark.parametrize('protocol', [1, 2, 3, 4])
+    @pytest.mark.parametrize('protocol', [1, 2, 3, 4, 5])
     def test_the_download_request_and_records_follow_the_number(self, monkeypatch, protocol):
-        two, three = protocol >= 2, protocol >= 3
-        sent = (record_3(ADV_E, block=dict(outHumidity=456), outTemp=710) if three
+        two, three, four = protocol >= 2, protocol >= 3, protocol >= 4
+        sent = (record_4(ADV_E, block=dict(outHumidity=456), outTemp=710) if four
+                else record_3(ADV_E, block=dict(outHumidity=456), outTemp=710) if three
                 else record_2(ADV_E, block=dict(outHumidity=456), outTemp=710) if two
                 else make_stamped_record(archive_record_at(
                     datetime.datetime.fromtimestamp(ADV_E), outTemp=710), ADV_E))
-        assert len(sent) == (86 if three else 80 if two else 56)
+        assert len(sent) == (142 if four else 86 if three else 80 if two else 56)
         wrapper, made = wrapper_on(monkeypatch, [b'\n\r', ID2 % protocol, b'\n\r', ACK]
                                    + advdmp_reply([sent], False))
         wrapper.openPort()
@@ -2439,9 +2450,9 @@ class TestTheConnectionsProtocol:
         assert [(r['dateTime'], r['outTemp']) for r in got] == [(ADV_E, pytest.approx(71.0))]
         # The Davis record's 0 %, or the block's 45.6.
         assert got[0]['outHumidity'] == pytest.approx(45.6 if two else 0.0)
-        assert wrapper.wants_protocol_3() == three
+        assert wrapper.wants_protocol_3() == three and wrapper.wants_protocol_4() == four
         assert made[0].sent[2:] == [b'\n', b'ADVDMP %d 512%s\n' % (
-            ADV_E - 300, b' 12' if three else b' 4' if two else b'')]
+            ADV_E - 300, b' 28' if four else b' 12' if three else b' 4' if two else b'')]
 
     @pytest.mark.parametrize('protocol, options, logged', [
         (2, {'loop_request': '3'}, True), (3, {'loop_request': '1'}, True),
@@ -2465,7 +2476,7 @@ class TestTheConnectionsProtocol:
         with pytest.raises(weewx.WeeWxIOError):
             wrapper.read(2)
         assert wrapper.console_protocol is None and not wrapper.wants_protocol_2()
-        assert not wrapper.wants_protocol_3()
+        assert not wrapper.wants_protocol_3() and not wrapper.wants_protocol_4()
         assert wrapper.frame_size() == 105
         # Closed.
         wrapper, made = wrapper_on(monkeypatch, [b'\n\r', ID2 % 2])
@@ -2769,6 +2780,387 @@ class TestProtocol3Records:
                        - float(minutes * 60) / (50.0 + (iss_id - 1) * 1.25))
                 assert vantagenext._rxcheck(1, minutes, iss_id, 7) == min(100.0, 700.0 / due)
         assert vantagenext._rxcheck(3, 5, 1, 7) is None
+
+
+# Replies of an advantage console (its program at 66a78a3, saying 4),
+# live, on 2026-11-25, to "ADVDMP <after> 512 28" and "ADVDMP <after> 3 28",
+# and to the same two requests with 12, each from the ACK to the CRC.  The
+# first: the records for 07:05 to 07:20, of which 07:10 follows a restart of
+# the console's program at 07:06:14.  The second: 06:30 to 06:40, with more
+# to come.  The console's own values for each record, from its archive: the
+# epoch, the listening block, the wind samples, and each station's ID, type,
+# packets heard, due and not listened for.
+CAPTURED_4A_28 = bytes.fromhex(
+    '060400007935c10205020702050200000000d175040072009c023e5a01020d0d0000050000c1ffffffffffff'
+    'ffff0041429e9cffffffffff81036d02a7028f02ff7f870297020900220126012a9a04002c012c012c0100ff'
+    '7fff7fff7f0172007200000004700070000000046d006d00000000ff7fff7fff7f00ff7fff7fff7f00ff7fff'
+    '7fff7f00ff7fff7fff7f1cf9066b7935c60204020602040200000000cf75050055009b023e5a00010d0c0000'
+    '050000c1ffffffffffffffff0041429e9cffffffffff81036c02a7028f02ff7f8502960201001f010d01139a'
+    '0400df002c01dd0000ff7fff7fff7f01550055000000045300530000000451005100000000ff7fff7fff7f00'
+    'ff7fff7fff7f00ff7fff7fff7f00ff7fff7fff7f48fa066b7935cb0203020502030200000000d37507007200'
+    '9b023e5a010201010000070000c1ffffffffffffffff0041429e9bffffffffff83036c02a7028e02ff7f8702'
+    '960207000f0013003a9a04002c012c012c0100ff7fff7fff7f0172007200000004700070000000046d006d00'
+    '000000ff7fff7fff7f00ff7fff7fff7f00ff7fff7fff7f00ff7fff7fff7f74fb066b7935d002030204020202'
+    '00000000d475080072009b023e5a00010e0e0000090000c1ffffffffffffffff0041429e9bffffffffff8203'
+    '6d02a7028e02ff7f86029602020044013c014b9a04002c012c012c0100ff7fff7fff7f01720072000000046d'
+    '006f000200046d006d00000000ff7fff7fff7f00ff7fff7fff7f00ff7fff7fff7f00ff7fff7fff7fa0fc066b'
+    '2214')
+CAPTURED_4A_12 = bytes.fromhex(
+    '060400007935c10205020702050200000000d175040072009c023e5a01020d0d0000050000c1ffffffffffff'
+    'ffff0041429e9cffffffffff81036d02a7028f02ff7f870297020900220126012a9a04002c012c012c011cf9'
+    '066b7935c60204020602040200000000cf75050055009b023e5a00010d0c0000050000c1ffffffffffffffff'
+    '0041429e9cffffffffff81036c02a7028f02ff7f8502960201001f010d01139a0400df002c01dd0048fa066b'
+    '7935cb0203020502030200000000d375070072009b023e5a010201010000070000c1ffffffffffffffff0041'
+    '429e9bffffffffff83036c02a7028e02ff7f8702960207000f0013003a9a04002c012c012c0174fb066b7935'
+    'd00203020402020200000000d475080072009b023e5a00010e0e0000090000c1ffffffffffffffff0041429e'
+    '9bffffffffff82036d02a7028e02ff7f86029602020044013c014b9a04002c012c012c01a0fc066b40e9')
+CAPTURED_4B_28 = bytes.fromhex(
+    '060300017935760210021202100200000000c875000072009d023e5901020f0e0000000000c1ffffffffffff'
+    'ffff0041429e9cffffffffff7c036b02a8029002ff7f8b02960208005b013c01cc9904002c012c012c0100ff'
+    '7fff7fff7f01720072000000046c006f0003000469006d00040000ff7fff7fff7f00ff7fff7fff7f00ff7fff'
+    '7fff7f00ff7fff7fff7fe8f0066b79357b020e0210020e0200000000cb75000073009d023e5900010d000000'
+    '000000c1ffffffffffffffff0041429e9cffffffffff7b036a02a8028f02ff7f8a02970204002e010100ee99'
+    '04002c012c012c0100ff7fff7fff7f01730073000000046b00700003000466006d00070000ff7fff7fff7f00'
+    'ff7fff7fff7f00ff7fff7fff7f00ff7fff7fff7f14f2066b793580020c020d020c0200000000cc7500007200'
+    '9d023e59000102010000000000c1ffffffffffffffff0041429e9cffffffffff7c036b02a8028f02ff7f8b02'
+    '970201002e001c00fd9904002c012c012c0100ff7fff7fff7f017200720000000468006f000500046a006d00'
+    '030000ff7fff7fff7f00ff7fff7fff7f00ff7fff7fff7f00ff7fff7fff7f40f3066b324e')
+CAPTURED_4B_12 = bytes.fromhex(
+    '060300017935760210021202100200000000c875000072009d023e5901020f0e0000000000c1ffffffffffff'
+    'ffff0041429e9cffffffffff7c036b02a8029002ff7f8b02960208005b013c01cc9904002c012c012c01e8f0'
+    '066b79357b020e0210020e0200000000cb75000073009d023e5900010d000000000000c1ffffffffffffffff'
+    '0041429e9cffffffffff7b036a02a8028f02ff7f8a02970204002e010100ee9904002c012c012c0114f2066b'
+    '793580020c020d020c0200000000cc75000072009d023e59000102010000000000c1ffffffffffffffff0041'
+    '429e9cffffffffff7c036b02a8028f02ff7f8b02970201002e001c00fd9904002c012c012c0140f3066bddb3')
+CAPTURED_4A = [
+    (1795619100, (300, 300, 300), 114,
+     [(2, 1, 114, 114, 0), (3, 4, 112, 112, 0), (4, 4, 109, 109, 0)]),
+    (1795619400, (223, 300, 221), 85,
+     [(2, 1, 85, 85, 0), (3, 4, 83, 83, 0), (4, 4, 81, 81, 0)]),
+    (1795619700, (300, 300, 300), 114,
+     [(2, 1, 114, 114, 0), (3, 4, 112, 112, 0), (4, 4, 109, 109, 0)]),
+    (1795620000, (300, 300, 300), 114,
+     [(2, 1, 114, 114, 0), (3, 4, 109, 111, 2), (4, 4, 109, 109, 0)])]
+CAPTURED_4B = [
+    (1795617000, (300, 300, 300), 114,
+     [(2, 1, 114, 114, 0), (3, 4, 108, 111, 3), (4, 4, 105, 109, 4)]),
+    (1795617300, (300, 300, 300), 115,
+     [(2, 1, 115, 115, 0), (3, 4, 107, 112, 3), (4, 4, 102, 109, 7)]),
+    (1795617600, (300, 300, 300), 114,
+     [(2, 1, 114, 114, 0), (3, 4, 104, 111, 5), (4, 4, 106, 109, 3)])]
+
+
+DASH = 0x7fff
+
+
+class TestProtocol4Records:
+    """A console that says 4 sends, for each transmitter ID, what the station
+    is and its packets heard, due and not listened for, counted by the
+    console, and each station's reception is heard over due."""
+
+    E = ADV_E
+    ISS = (1, 113, 114, 0)
+
+    def download(self, records, console_protocol=4, **attrs):
+        attrs.setdefault('iss_id', 2)
+        station = station_on(advdmp_reads(records), console_protocol=console_protocol, **attrs)
+        return list(station.protocol.archive_records(self.E - 300))
+
+    def test_the_specifications_bytes(self):
+        # The console's example: ID 2 the ISS, 113 of 114; ID 3 a temperature
+        # station, 108 of 112 with 3 not listened for; no other station.
+        built = make_record_4(b'\x00' * 52, SPEC_RECORD_BLOCK, 300, 300, 300,
+                              {2: (1, 113, 114, 0), 3: (2, 108, 112, 3)}, ADV_E)
+        none = bytes.fromhex('00FF7FFF7FFF7F')
+        assert len(built) == 142
+        assert built[82:89] == none and built[89:96] == bytes.fromhex('01710072000000')
+        assert built[96:103] == bytes.fromhex('026C0070000300') and built[103:138] == none * 5
+        assert built[138:] == bytes.fromhex('C09EF96A')
+        # ID 8's slot, the last, at 131.
+        assert make_record_4(b'\x00' * 52, SPEC_RECORD_BLOCK, 300, 300, 300, {8: (4, 1, 2, 1)},
+                             ADV_E)[131:138] == bytes.fromhex('04010002000100')
+        # Before the block, protocol 3's record without its epoch.
+        assert built[:82] == make_record_3(b'\x00' * 52, SPEC_RECORD_BLOCK, 300, 300, 300,
+                                           ADV_E)[:82]
+
+    @pytest.mark.parametrize('counts, times, samples, figure', [
+        ((114, 114), (300, 300, 300), 114, 100.0),    # heard in full: 99.75 by protocol 3
+        ((113, 114), (300, 300, 300), 113, 99.1228),  # the console's example
+        ((33, 33), (85, 300, 85), 33, 100.0),         # 85 s after a start
+        ((0, 114), (300, 300, 300), 0, 0.0),          # a dead ISS, counted
+        # The list of stations changed 100 s before the close: counts since
+        # the change, wind samples of the whole interval, and a dash, for
+        # which protocol 3 makes no figure.
+        ((38, 38), (300, 300, DASH), 100, 100.0),
+        ((1, 1), (1, 300, 1), 1, 100.0),              # one packet due: no figure by protocol 3
+        ((0, 1), (2, 300, 2), 0, 0.0),
+        ((57, 114), (300, 300, 300), 114, 50.0),      # the counts, not the wind samples
+    ])
+    def test_reception_is_the_isss_packets_heard_over_those_due(
+            self, counts, times, samples, figure, caplog):
+        with caplog.at_level(logging.INFO):
+            (record,) = self.download([record_4(self.E, {2: (1,) + counts + (0,)}, *times,
+                                                wind_samples=samples)])
+        assert record['rxCheckPercent'] == pytest.approx(figure, abs=1e-3)
+        # The ISS's figure under its ID too.
+        assert record['rxCheckPercentId2'] == record['rxCheckPercent']
+        assert lines(caplog) == []
+
+    @pytest.mark.parametrize('times, samples', [
+        ((0, 300, 0), 0),             # the ISS not yet found after a start
+        ((300, 300, 300), 114),       # ... and no figure is made of the wind samples
+        ((300, 300, DASH), 60),
+    ])
+    def test_no_figure_when_no_packet_was_due(self, times, samples, caplog):
+        with caplog.at_level(logging.INFO):
+            (record,) = self.download([record_4(self.E, {2: (1, 0, 0, 0)}, *times,
+                                                wind_samples=samples)])
+        assert 'rxCheckPercent' not in record and 'rxCheckPercentId2' not in record
+        assert record['dateTime'] == self.E and record['interval'] == 5
+        assert lines(caplog) == []
+
+    def test_the_iss_is_the_records_and_no_transmit_period_is_used(self):
+        sent = [record_4(self.E, {7: (1, 90, 100, 0), 2: (4, 30, 40, 0)}, wind_samples=114)]
+        for attrs in (dict(iss_id=2), dict(iss_id=7), dict(iss_id=5, model_type=1)):
+            (record,) = self.download(sent, **attrs)
+            assert record['rxCheckPercent'] == 90.0 and record['rxCheckPercentId7'] == 90.0
+            assert record['rxCheckPercentId2'] == 75.0
+
+    def test_every_station_has_its_figure_under_its_id(self, caplog):
+        # Every kind the console has a number for, one it has none for (255)
+        # and one this driver has never heard of (5); ID 6 found, with nothing
+        # yet due; ID 8 not in the console's list.
+        stations = {1: (2, 108, 112, 3), 2: (1, 113, 114, 0), 3: (3, 50, 100, 50),
+                    4: (4, 109, 110, 1), 5: (255, 1, 4, 0), 6: (4, 0, 0, 0), 7: (5, 3, 3, 0)}
+        with caplog.at_level(logging.INFO):
+            (record,) = self.download([record_4(self.E, stations)])
+        assert {k: v for k, v in record.items() if k.startswith('rxCheckPercent')} == {
+            'rxCheckPercent': pytest.approx(11300 / 114.0),
+            'rxCheckPercentId1': pytest.approx(10800 / 112.0),
+            'rxCheckPercentId2': pytest.approx(11300 / 114.0),
+            'rxCheckPercentId3': 50.0,
+            'rxCheckPercentId4': pytest.approx(10900 / 110.0),
+            'rxCheckPercentId5': 25.0,
+            'rxCheckPercentId7': 100.0}
+        assert lines(caplog) == []
+
+    def test_the_names_are_percentages(self):
+        for station_id in range(1, 9):
+            assert weewx.units.obs_group_dict['rxCheckPercentId%d' % station_id] == 'group_percent'
+        assert 'rxCheckPercentId0' not in weewx.units.obs_group_dict
+        assert 'rxCheckPercentId9' not in weewx.units.obs_group_dict
+
+    @pytest.mark.parametrize('stations, wrong', [
+        # No row, and a count that is not a dash.
+        ({2: ISS, 5: (0, 1, DASH, DASH)},
+         'ID 5: type 0, 1 heard, 32767 due, 32767 not listened for'),
+        ({2: ISS, 5: (0, DASH, DASH, 0)},
+         'ID 5: type 0, 32767 heard, 32767 due, 0 not listened for'),
+        # A station, and a dash.
+        ({2: ISS, 3: (4, DASH, DASH, DASH)},
+         'ID 3: type 4, 32767 heard, 32767 due, 32767 not listened for'),
+        ({2: ISS, 3: (4, 5, DASH, 0)}, 'ID 3: type 4, 5 heard, 32767 due, 0 not listened for'),
+        # More heard than due; fewer than none.
+        ({2: (1, 115, 114, 0)}, 'ID 2: type 1, 115 heard, 114 due, 0 not listened for'),
+        ({2: ISS, 3: (2, -1, 10, 0)}, 'ID 3: type 2, -1 heard, 10 due, 0 not listened for'),
+        # Not listened for: more than were not heard; fewer than none.
+        ({2: ISS, 3: (2, 100, 110, 11)}, 'ID 3: type 2, 100 heard, 110 due, 11 not listened for'),
+        ({2: ISS, 3: (2, 100, 110, -1)}, 'ID 3: type 2, 100 heard, 110 due, -1 not listened for'),
+        # The first thing wrong is the one named.
+        ({1: (2, 2, 1, 0), 2: (1, 115, 114, 0)},
+         'ID 1: type 2, 2 heard, 1 due, 0 not listened for'),
+        # Not exactly one ISS.
+        ({3: (4, 108, 112, 3)}, '0 of its stations are the ISS'),
+        ({}, '0 of its stations are the ISS'),
+        ({2: ISS, 3: ISS}, '2 of its stations are the ISS'),
+    ])
+    def test_a_block_the_consoles_rules_do_not_allow_is_not_used(self, stations, wrong, caplog):
+        kw = dict(listened=85, iss_secs=85, block=dict(outHumidity=456), outTemp=710,
+                  wind_samples=30)
+        with caplog.at_level(logging.INFO):
+            (record,) = self.download([record_4(self.E, stations, **kw)])
+        (three,) = self.download([record_3(self.E, **kw)], console_protocol=3)
+        # Read as protocol 3's: 30 wind samples of the 32.4 packets due in
+        # 85 s, and no station's own figure.
+        assert record == three and record['rxCheckPercent'] == pytest.approx(92.647, abs=1e-3)
+        assert [k for k in record if k.startswith('rxCheckPercentId')] == []
+        assert lines(caplog) == [
+            "ADVDMP: the record stamped %d has a reception block the console's rules do not "
+            "allow (%s).  It is not used." % (self.E, wrong)]
+        assert caplog.records[-1].levelno == logging.ERROR
+
+    @pytest.mark.parametrize('stations', [
+        {2: (1, 32766, 32766, 0)}, {2: (1, 0, 32766, 32766)}, {2: (1, 0, 0, 0)},
+        {2: ISS, 3: (2, 100, 110, 10)}, {2: ISS, 3: (2, 100, 100, 0)}, {8: ISS}])
+    def test_the_edges_of_the_rules_are_allowed(self, stations, caplog):
+        with caplog.at_level(logging.INFO):
+            (record,) = self.download([record_4(self.E, stations)])
+        assert lines(caplog) == []
+        assert ('rxCheckPercent' in record) == (stations != {2: (1, 0, 0, 0)})
+
+    @pytest.mark.parametrize('good_times, good_stations', [
+        (True, True), (True, False), (False, True), (False, False)])
+    def test_the_two_blocks_are_checked_each_on_its_own(self, good_times, good_stations, caplog):
+        # On a station whose own archive interval is ten minutes; the record
+        # says five.  33 wind samples; the console's count is 30 of 33.
+        times = (85, 300, 85) if good_times else (85, 301, 85)
+        stations = {2: (1, 30, 33, 0), 3: (4, 20, 40, 0)} if good_stations else {2: (1, 34, 33, 0)}
+        with caplog.at_level(logging.INFO):
+            (record,) = self.download([record_4(self.E, stations, *times, wind_samples=33)],
+                                      archive_interval_=600)
+        assert record['interval'] == (5 if good_times else 10)
+        if good_stations:
+            assert record['rxCheckPercent'] == pytest.approx(3000 / 33.0)
+            assert record['rxCheckPercentId3'] == 50.0
+        else:
+            # Protocol 3's (33 of 32.4, held to 100), or protocol 2's (33 of
+            # the 228.6 due in ten minutes).
+            assert record['rxCheckPercent'] == (100.0 if good_times
+                                                else pytest.approx(3300 / 228.5714))
+            assert 'rxCheckPercentId3' not in record
+        said = lines(caplog)
+        assert len(said) == (not good_times) + (not good_stations)
+        assert any('listening times' in line for line in said) == (not good_times)
+        assert any('reception block' in line for line in said) == (not good_stations)
+
+    def test_the_finer_values_and_the_records_own_interval_still_apply(self):
+        (record,) = self.download([record_4(self.E, {2: self.ISS}, 3300, 3300, 3300,
+                                            block=dict(outHumidity=456), outTemp=710)])
+        assert record['interval'] == 55 and record['outHumidity'] == pytest.approx(45.6)
+        assert record['outTemp'] == pytest.approx(71.0)
+        assert record['rxCheckPercent'] == pytest.approx(11300 / 114.0)
+
+    @pytest.mark.parametrize('console_protocol', [3, 4])
+    def test_a_record_that_cannot_be_decoded_says_nothing_of_its_blocks(
+            self, console_protocol, caplog):
+        # Both blocks outside the console's rules, in a record that is left
+        # out: neither was used, and neither is spoken of.
+        E = self.E
+        make = record_4 if console_protocol == 4 else (
+            lambda epoch, stations=None, *times, **kw: record_3(epoch, *times, **kw))
+        with caplog.at_level(logging.INFO):
+            got = self.download([make(E, {2: (1, 115, 114, 0)}, 85, 301, 85,
+                                      download_record_type=7), make(E + 300)],
+                                console_protocol=console_protocol)
+        assert [r['dateTime'] for r in got] == [E + 300]
+        assert lines(caplog) == ['ADVDMP: the record stamped %d could not be decoded: Unknown '
+                                 'archive type = 0x7.  It is left out.' % E]
+
+    def test_each_record_of_a_download_is_read_by_its_own_block(self, caplog):
+        E = self.E
+        station = station_on(
+            advdmp_reply([record_4(E, {2: (1, 33, 33, 0)}, 85, 300, 85, wind_samples=33),
+                          record_4(E + 300, {2: (1, 0, 0, 0), 3: (4, 9, 10, 0)}),
+                          record_4(E + 600, {2: (1, 2, 1, 0)}, wind_samples=57)], True)
+            + advdmp_reads([record_4(E + 900, {2: (1, 57, 114, 0)}, wind_samples=114)]),
+            console_protocol=4, iss_id=2)
+        station.port.reads[:0] = [WAKE, ACK]
+        with caplog.at_level(logging.INFO):
+            got = list(station.protocol.archive_records(E - 300))
+        assert [r['dateTime'] for r in got] == [E, E + 300, E + 600, E + 900]
+        # The third's block is not used: protocol 3's 57 of 114.3.
+        assert [r.get('rxCheckPercent') for r in got] == [
+            100.0, None, pytest.approx(49.875), 50.0]
+        assert [r.get('rxCheckPercentId3') for r in got] == [None, 90.0, None, None]
+        assert len(lines(caplog)) == 1 and str(E + 600) in lines(caplog)[0]
+        assert [w for w in station.port.writes if w != b'\n'] == [
+            b'ADVDMP %d 512 28\n' % (E - 300), b'ADVDMP %d 512 28\n' % (E + 600)]
+
+    def test_a_console_upgraded_from_3_to_4_is_asked_28_on_its_new_connection(
+            self, monkeypatch, sleeps):
+        _Monotonic(monkeypatch)
+        wrapper, made = wrapper_on(
+            monkeypatch,
+            [b'\n\r', ID2 % 3, b'\n\r', ACK]
+            + advdmp_reply([record_3(ADV_E, wind_samples=114)], True) + [b''],
+            [b'\n\r', ID2 % 4, b'\n\r', ACK]
+            + advdmp_reply([record_4(ADV_E + 300, {2: (1, 57, 114, 0)}, wind_samples=114)],
+                           False))
+        wrapper.openPort()
+        station = bare_station(port=wrapper, loop_request=3, archive_interval_=300, iss_id=2)
+        first, record = station.protocol.archive_records(ADV_E - 300)
+        assert first['dateTime'] == ADV_E and first['rxCheckPercent'] == pytest.approx(99.75)
+        assert 'rxCheckPercentId2' not in first
+        assert record['dateTime'] == ADV_E + 300 and record['rxCheckPercent'] == 50.0
+        assert [[w for w in m.sent if w.startswith(b'ADVDMP')] for m in made] == [
+            [b'ADVDMP %d 512 12\n' % (ADV_E - 300)], [b'ADVDMP %d 512 28\n' % ADV_E]]
+
+    @staticmethod
+    def captured(reply, console_protocol, after):
+        # The reply, and to a console that said there are more, a last one
+        # of no records.
+        station = station_on([WAKE, reply[:1], reply[1:4], reply[4:]] + advdmp_reads([]),
+                             console_protocol=console_protocol, iss_id=2)
+        return list(station.protocol.archive_records(after))
+
+    @pytest.mark.parametrize('reply_28, reply_12, held, after', [
+        (CAPTURED_4A_28, CAPTURED_4A_12, CAPTURED_4A, 1795618800),
+        (CAPTURED_4B_28, CAPTURED_4B_12, CAPTURED_4B, 1795616700)])
+    def test_records_captured_from_a_console(self, reply_28, reply_12, held, after, caplog):
+        with caplog.at_level(logging.INFO):
+            four = self.captured(reply_28, 4, after)
+        three = self.captured(reply_12, 3, after)
+        assert lines(caplog) == []
+        assert [r['dateTime'] for r in four] == [epoch for epoch, times, samples, stations in held]
+        # The bytes hold what the console says they hold.
+        count = len(held)
+        assert len(reply_28) == 1 + 3 + count * 142 + 2 and len(reply_12) == 1 + 3 + count * 86 + 2
+        for n, (epoch, times, samples, stations) in enumerate(held):
+            sent = reply_28[4 + 142 * n:4 + 142 * (n + 1)]
+            assert struct.unpack_from('<hhh', sent, 76) == times
+            assert struct.unpack_from('<I', sent, 138) == (epoch,)
+            assert sent[:82] == reply_12[4 + 86 * n:4 + 86 * n + 82]
+            slots = [struct.unpack_from('<Bhhh', sent, 82 + 7 * i) for i in range(8)]
+            assert [(i + 1,) + slot for i, slot in enumerate(slots) if slot[0]] == stations
+            assert all(slot == (0, DASH, DASH, DASH) for slot in slots if not slot[0])
+        # Each station's packets heard over its packets due, the ISS's (ID 2)
+        # under both names; the IDs the console does not listen to, nothing.
+        for record, (epoch, times, samples, stations) in zip(four, held):
+            assert {k: v for k, v in record.items() if k.startswith('rxCheckPercent')} == dict(
+                [('rxCheckPercent', pytest.approx(100.0 * stations[0][2] / stations[0][3]))]
+                + [('rxCheckPercentId%d' % station_id, pytest.approx(100.0 * heard / due))
+                   for station_id, kind, heard, due, busy in stations])
+            assert stations[0][:2] == (2, 1)
+        # The same records in protocol 3: the wind samples over the packets
+        # due in the ISS's listening time, held to 100.
+        for record, (epoch, times, samples, stations) in zip(three, held):
+            assert record['rxCheckPercent'] == pytest.approx(
+                min(100.0, samples * 100 / (16 * times[2] / 42.0)))
+        # Nothing else differs between the two readings.
+        for a, b in zip(four, three):
+            a = {k: v for k, v in a.items() if not k.startswith('rxCheckPercent')}
+            b = {k: v for k, v in b.items() if not k.startswith('rxCheckPercent')}
+            assert a == b and a['interval'] == 5
+
+    def test_what_the_captured_records_read(self):
+        # Spelled out, for the record after the restart and for one with
+        # packets not listened for.
+        four = self.captured(CAPTURED_4A_28, 4, 1795618800)
+        assert [r['rxCheckPercent'] for r in four] == [100.0, 100.0, 100.0, 100.0]
+        assert four[1]['rxCheckPercentId3'] == 100.0 and four[1]['rxCheckPercentId4'] == 100.0
+        assert four[3]['rxCheckPercentId3'] == pytest.approx(98.198, abs=1e-3)
+        four = self.captured(CAPTURED_4B_28, 4, 1795616700)
+        assert [r['rxCheckPercentId4'] for r in four] == [
+            pytest.approx(96.330, abs=1e-3), pytest.approx(93.578, abs=1e-3),
+            pytest.approx(97.248, abs=1e-3)]
+
+    def test_the_largest_reply_is_read_whole(self, monkeypatch):
+        # 512 records, 72,706 bytes after the header, as the socket gives
+        # them: no more than 4,096 at a time.
+        records = [record_4(ADV_E + 300 * n, {2: (1, n % 115, 114 + n % 2, 0)})
+                   for n in range(512)]
+        header, body = advdmp_reply(records, False)
+        assert len(body) == 72706
+        wrapper, made = wrapper_on(
+            monkeypatch, [b'\n\r', ID2 % 4, b'\n\r', ACK, header]
+            + [body[at:at + 4096] for at in range(0, len(body), 4096)])
+        wrapper.openPort()
+        station = bare_station(port=wrapper, loop_request=3, archive_interval_=300, iss_id=2)
+        got = list(station.protocol.archive_records(ADV_E - 300))
+        assert [r['dateTime'] for r in got] == [ADV_E + 300 * n for n in range(512)]
+        assert [r['rxCheckPercent'] for r in got] == [
+            pytest.approx(100.0 * (n % 115) / (114 + n % 2)) for n in range(512)]
+        assert made[0].recvs == []
 
 
 class TestTheCombinedFrame:

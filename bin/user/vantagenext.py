@@ -538,10 +538,11 @@ class EthernetWrapper(BaseWrapper):
 #                                  even second it is the console's state as
 #                                  of, an epoch (loop_batch).  Protocol 2:
 #                                  mask 4, both packets in every frame.
-#   ADVDMP <after> <max> [4|12]    the archive records after an epoch, each
+#   ADVDMP <after> <max> [4|12|28] the archive records after an epoch, each
 #                                  with the epoch that ends its interval
 #                                  (archive_records); 4, protocol 2's
-#                                  records; 12, protocol 3's.
+#                                  records; 12, protocol 3's; 28, protocol
+#                                  4's.
 #   ADVTIME                        the console's clock, as an epoch
 #                                  (_ask_time).  Nothing sets it.
 #
@@ -595,11 +596,14 @@ class EthernetWrapper(BaseWrapper):
 #
 #   rxCheckPercent      the wind samples over the packets due in the ISS's
 #                       listening time, which the console counts from the
-#                       ISS's first packet after its receiver began to listen
-#                       (so the time a restarted receiver takes to find the
-#                       ISS is not counted as missed).  No figure when that
-#                       time is a dash (the ISS's ID was changed inside the
-#                       interval) or less than one packet was due in it:
+#                       ISS's first packet, heard or known to be missed,
+#                       after its receiver began to listen (so the time a
+#                       restarted receiver takes to find the ISS is not
+#                       counted as missed).  No figure when that time is a
+#                       dash (the console's list of stations was changed
+#                       inside the interval; before the console's protocol 4
+#                       build, only when the ISS's ID was) or less than one
+#                       packet was due in it:
 #                       below one transmit period, hearing nothing is what
 #                       perfect reception looks like too.  Over a few seconds
 #                       the figure is coarse: the times are whole seconds and
@@ -623,7 +627,49 @@ class EthernetWrapper(BaseWrapper):
 # time a dash or 0 <= it <= the record's time.  A block outside those is a fault in the
 # console: it is not used, the record is read as protocol 2's (the station's
 # interval, a whole interval's packets), and a line says so
-# (_listening_block).  An interval of 0 given to WeeWX would be refused.
+# (_listening_block; the line, in archive_records, once the record has
+# decoded).  An interval of 0 given to WeeWX would be refused.
+#
+# Protocol 4, asked of a connection whose console said 4 or more
+# (AdvantageWrapper.wants_protocol_4), again changes the record only.  A
+# record is ADVANTAGE_RECORD_4 bytes: protocol 3's first 82, then the
+# reception block's 56, then the epoch at 138.  The block is eight slots of 7
+# bytes, for the transmitter IDs 1 to 8 in order: what the station is (1
+# byte: 0, the console's list did not name this ID when the interval closed;
+# 1, the ISS; any other number, another station), then its packets heard,
+# its packets due (sent, and could have been heard), and of those due the
+# ones not listened for (the receiver's radio was taking another station's
+# packet), each 2 bytes, signed, low byte first, and each a dash (0x7FFF)
+# where the type is 0.  The console counts them itself, so nothing is
+# estimated from a transmit period or a listening time.  With protocol 4:
+#
+#   rxCheckPercent      100 x heard / due of the slot whose type is 1: the
+#                       ISS as the record has it, whatever iss_id is now.
+#                       No figure when none was due (the ISS not yet found,
+#                       after the receiver started or after the list of
+#                       stations changed).  No figure is made of
+#                       the wind samples or of the ISS's listening time: the
+#                       record of an interval in which the list of stations
+#                       changed has counts since the change, and its figure
+#                       from them.
+#   rxCheckPercentIdN   the same for the station at ID N, for every ID with
+#                       a station, the ISS's among them (so the ISS's figure
+#                       is there twice); none where none was due.  The names
+#                       are registered as percentages below.  WeeWX's schema
+#                       has no column for them and WeeWX passes by a key
+#                       with none, so one is stored only where a column has
+#                       been added.
+#   interval            protocol 3's, from the listening block, whose other
+#                       two times are then used only in its check.
+#   not listened for    not used, but in the check that follows.
+#
+# The console holds, for a slot with a station, 0 <= heard <= due <= 32,766
+# and 0 <= not listened for <= due - heard, and names exactly one ISS.  A
+# block outside those, or a type 0 whose counts are not all dashes, is a
+# fault in the console: it is not used, the record is read as protocol 3's,
+# and a line says so (_reception_block).  The two blocks are checked each on
+# its own: a record whose listening block is not used and whose reception
+# block is has the station's interval and the reception block's figures.
 #
 # ADVID, after every open (_identify).  It is the guard against type =
 # advantage pointed at a Davis console or a WeatherLinkIP, which answer a line
@@ -717,7 +763,8 @@ class EthernetWrapper(BaseWrapper):
 #                        requests' form and the frames' size (wants_protocol_2,
 #                        frame_size), the wake-up's drain included, and the
 #                        download's request and its records' size
-#                        (wants_protocol_3 with wants_protocol_2).
+#                        (wants_protocol_4 and wants_protocol_3 with
+#                        wants_protocol_2).
 #
 # The base wake-up's flush and its second, "rude" read are not here: they are
 # for a console that may be asleep, on a stream with no way to tell a packet
@@ -757,13 +804,14 @@ class EthernetWrapper(BaseWrapper):
 # is neither sent again nor counted.
 
 # The size of a stamped LOOP frame, in protocol 1 and in protocol 2, and of a
-# stamped archive record, in protocols 1, 2 and 3; the most records one ADVDMP
+# stamped archive record, in protocols 1, 2, 3 and 4; the most records one ADVDMP
 # brings; and the protocol numbers.
 ADVANTAGE_FRAME = 105
 ADVANTAGE_FRAME_2 = 256
 ADVANTAGE_RECORD = 56
 ADVANTAGE_RECORD_2 = 80
 ADVANTAGE_RECORD_3 = 86
+ADVANTAGE_RECORD_4 = 142
 ADVANTAGE_DMP_MAX = 512
 # The seconds from one LOOP frame's stamp to the next: the console makes a
 # frame for every even second.
@@ -776,10 +824,19 @@ ADVANTAGE_BEAT = 2
 # are asked for (AdvantageWrapper.wants_protocol_2): a console that says 1 is
 # still spoken to, in protocol 1's.  ADVANTAGE_PROTOCOL_3 is the number from
 # which protocol 3's records are asked for (wants_protocol_3): a console that
-# says 2 is still asked for protocol 2's.
+# says 2 is still asked for protocol 2's.  ADVANTAGE_PROTOCOL_4 is the number
+# from which protocol 4's records are asked for (wants_protocol_4): a console
+# that says 3 is still asked for protocol 3's.
 ADVANTAGE_PROTOCOL_MIN = 1
 ADVANTAGE_PROTOCOL_2 = 2
 ADVANTAGE_PROTOCOL_3 = 3
+ADVANTAGE_PROTOCOL_4 = 4
+# Each station's reception in a protocol 4 record, by its transmitter ID: a
+# percentage, as WeeWX's own rxCheckPercent is.  Registered when this module
+# is imported, which weewxd does and "weectl report run" does not.
+for _station_id in range(1, 9):
+    weewx.units.obs_group_dict['rxCheckPercentId%d' % _station_id] = 'group_percent'
+del _station_id
 # The wake-up reads past no more frames than this before it takes the bytes
 # for something else: more than the 199 that can be waiting (a request's 200
 # less the one that broke the LOOP).  A bound, not a retry count.
@@ -827,6 +884,13 @@ class AdvantageWrapper(EthernetWrapper):
         form: its console said ADVANTAGE_PROTOCOL_3 or more.  False with no
         connection.  LOOP has no protocol 3 form: see wants_protocol_2."""
         return self.console_protocol is not None and self.console_protocol >= ADVANTAGE_PROTOCOL_3
+
+    def wants_protocol_4(self):
+        """Whether this connection's records are asked for in protocol 4's
+        form: its console said ADVANTAGE_PROTOCOL_4 or more.  False with no
+        connection.  The record's first 82 bytes are protocol 3's: see
+        wants_protocol_3."""
+        return self.console_protocol is not None and self.console_protocol >= ADVANTAGE_PROTOCOL_4
 
     def frame_size(self):
         """The size of the LOOP frames this connection is sent."""
@@ -5841,7 +5905,7 @@ class AdvantageProtocol:
         advantage console: see "An advantage console".
 
         Args:
-            N(int): The number of packets to generate. Default is 1.
+            N(int): The number of packets to generate.  Default is 1.
 
         Yields:
              dict: up to N loop packets, each with the console's own time
@@ -5973,15 +6037,20 @@ class AdvantageProtocol:
                 progress_fn()
             self.port.wakeup_console(self.max_tries)
             # The connection's form, as for LOOP: protocol 2's records carry
-            # the block of finer values and protocol 3's the listening block
-            # after it; a console is asked for the newest it said it serves,
-            # and NAKs a third parameter it does not know.
+            # the block of finer values, protocol 3's the listening block
+            # after it and protocol 4's the reception block after that; a
+            # console is asked for the newest it said it serves, and NAKs a
+            # third parameter it does not know.
             blocks = self.port.wants_protocol_2()
             listening = self.port.wants_protocol_3()
-            size = (ADVANTAGE_RECORD_3 if listening
+            reception = self.port.wants_protocol_4()
+            size = (ADVANTAGE_RECORD_4 if reception
+                    else ADVANTAGE_RECORD_3 if listening
                     else ADVANTAGE_RECORD_2 if blocks else ADVANTAGE_RECORD)
             try:
-                if listening:
+                if reception:
+                    self.port.send_data(b"ADVDMP %d %d 28\n" % (after, ADVANTAGE_DMP_MAX))
+                elif listening:
                     self.port.send_data(b"ADVDMP %d %d 12\n" % (after, ADVANTAGE_DMP_MAX))
                 elif blocks:
                     self.port.send_data(b"ADVDMP %d %d 4\n" % (after, ADVANTAGE_DMP_MAX))
@@ -6025,8 +6094,8 @@ class AdvantageProtocol:
                 # Past this record whatever decoding makes of it: asked
                 # for again, one that cannot be decoded would come again.
                 after = epoch
-                interval_secs, iss_secs = (self._listening_block(_record_string, epoch)
-                                           if listening else (None, None))
+                interval_secs, iss_secs, _not_allowed = (
+                    self._listening_block(_record_string) if listening else (None, None, None))
                 try:
                     _record = self.station._unpackArchivePacket(_record_string[:52],
                                                                 stamp=epoch,
@@ -6039,29 +6108,79 @@ class AdvantageProtocol:
                     log.error("ADVDMP: the record stamped %d could not be decoded: %s.  "
                               "It is left out.", epoch, e)
                     continue
+                # After the record has decoded, here and below: one that is
+                # left out says nothing of its blocks.
+                if _not_allowed is not None:
+                    log.error("ADVDMP: the record stamped %d has listening times the "
+                              "console's rules do not allow (%d, %d and %d s).  They are not "
+                              "used.", epoch, *_not_allowed)
                 if blocks:
                     _apply_block(_record, _record_string[52:76], record_block,
                                  self.station.hardware_type)
+                if reception:
+                    _stations = self._reception_block(_record_string, epoch)
+                    if _stations is not None:
+                        self._apply_reception(_record, _stations)
                 yield _record
             if not more:
                 return
 
     @staticmethod
-    def _listening_block(record, epoch):
+    def _listening_block(record):
         """The length of a protocol 3 record's own interval and the time its
         wind samples were due over, each in seconds (the second 0 for a
-        dash); or (None, None), with a line, for a block the console's own
-        rules do not allow, which has the record read as protocol 2's: see
-        "An advantage console"."""
+        dash), and None; or None, None and the block's three times, for the
+        caller's line, for a block the console's own rules do not allow,
+        which has the record's interval and, unless its
+        reception block gives one (protocol 4), its reception figure read as
+        protocol 2's: see "An advantage console"."""
         listened, interval_secs, iss_secs = struct.unpack_from("<hhh", record, 76)
         if (60 <= interval_secs <= 32766 and interval_secs % 60 == 0
                 and 0 <= listened <= interval_secs
                 and (iss_secs == 0x7fff or 0 <= iss_secs <= listened)):
-            return interval_secs, 0 if iss_secs == 0x7fff else iss_secs
-        log.error("ADVDMP: the record stamped %d has listening times the console's rules do "
-                  "not allow (%d, %d and %d s).  They are not used.",
-                  epoch, listened, interval_secs, iss_secs)
-        return None, None
+            return interval_secs, 0 if iss_secs == 0x7fff else iss_secs, None
+        return None, None, (listened, interval_secs, iss_secs)
+
+    @staticmethod
+    def _reception_block(record, epoch):
+        """The stations of a protocol 4 record's reception block, each as
+        (its transmitter ID, what it is, its packets heard, its packets
+        due); or None, with a line, for a block the console's own rules do
+        not allow, which has the record read as protocol 3's: see "An
+        advantage console"."""
+        fields = struct.unpack_from("<" + "Bhhh" * 8, record, 82)
+        stations, wrong, isses = [], None, 0
+        for index in range(8):
+            kind, heard, due, busy = fields[4 * index:4 * index + 4]
+            if kind == 0:
+                allowed = heard == due == busy == 0x7fff
+            else:
+                allowed = 0 <= heard <= due <= 32766 and 0 <= busy <= due - heard
+                stations.append((index + 1, kind, heard, due))
+                isses += kind == 1
+            if not allowed and wrong is None:
+                wrong = ("ID %d: type %d, %d heard, %d due, %d not listened for"
+                         % (index + 1, kind, heard, due, busy))
+        if wrong is None and isses != 1:
+            wrong = "%d of its stations are the ISS" % isses
+        if wrong is None:
+            return stations
+        log.error("ADVDMP: the record stamped %d has a reception block the console's rules "
+                  "do not allow (%s).  It is not used.", epoch, wrong)
+        return None
+
+    @staticmethod
+    def _apply_reception(archive_record, stations):
+        """Put each station's reception in a record, from the console's own
+        counts, in place of the figure worked out from the wind samples
+        (which is not there for every record): see "An advantage console"."""
+        archive_record.pop('rxCheckPercent', None)
+        for station_id, kind, heard, due in stations:
+            if due:
+                figure = 100.0 * heard / due
+                archive_record['rxCheckPercentId%d' % station_id] = figure
+                if kind == 1:
+                    archive_record['rxCheckPercent'] = figure
 
     def log_download_try(self, count, e):
         log.error("ADVDMP try #%d; error: %s", count, e)
@@ -6126,7 +6245,7 @@ class AdvantageProtocol:
                     console = int(reply.group(1)) + int(reply.group(2)) / 1000.0
                     return console - sent, reply.group(3) == b'1'
             except weewx.WeeWxIOError:
-                # Caught an error. Keep retrying...
+                # Caught an error.  Keep retrying...
                 pass
             # Not the time, or a read of it that failed.  This try's reply is
             # given up on, and what there is of it (waiting, kept by the port

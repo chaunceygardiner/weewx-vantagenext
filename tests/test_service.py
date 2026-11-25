@@ -27,7 +27,7 @@ import pytest
 from common import (ACK, ADV_E, BASE_DT, WAKE, FakeClock, ScriptedAdvantage, ScriptedWrapper,
                     SteeredConsole, advdmp_reads, advtime_reads, archive_page,
                     archive_record_at, dmpaft_reads, make_block, make_combined_frame,
-                    make_frame, make_loop1, make_loop2, make_record_2, make_record_3, make_stamped_record,
+                    make_frame, make_loop1, make_loop2, make_record_2, make_record_3, make_record_4, make_stamped_record,
                     setup_reads, waiting_frames)
 
 import vantagenext
@@ -545,6 +545,52 @@ class TestAdvantage:
             (E - 600, 60, 0.0, pytest.approx(45.6)),
             (E - 300, 5, None, pytest.approx(45.6))]
         assert seen == [E - 8]
+
+    def test_protocol_4_through_the_engine(self, monkeypatch, tmp_path):
+        # A console that says 4: the catch-up lands 142-byte records, and the
+        # reception figure stored is the console's own count for the ISS (ID
+        # 2 here), not the wind samples over the packets due.  The second
+        # record's list of stations changed inside its interval (a dash for
+        # the ISS's listening time): it has a figure all the same.  In the
+        # third the ISS was not yet found: none.  Each station's own figure
+        # reaches the services, and is stored where the database has a column
+        # for it (ID 3 here) and passed by where it has none (ID 4).
+        E = self.E
+        now = E - 10.0
+
+        def rec(t, iss_secs, samples, stations):
+            return make_record_4(
+                archive_record_at(datetime.datetime.fromtimestamp(t), outTemp=700,
+                                  wind_samples=samples),
+                make_block(vantagenext.record_block, outHumidity=456), 300, 300, iss_secs,
+                stations, t)
+        recs = [rec(E - 900, 300, 114, {2: (1, 57, 114, 0), 3: (4, 84, 112, 2),
+                                        4: (4, 110, 110, 0)}),
+                rec(E - 600, 0x7fff, 100, {2: (1, 38, 38, 0), 3: (4, 0, 0, 0)}),
+                rec(E - 300, 300, 0, {2: (1, 0, 0, 0), 3: (4, 28, 112, 0)})]
+        frame = make_combined_frame(make_loop1(outTemp=700), make_loop2(outTemp=700),
+                                    make_block(vantagenext.loop_block, outHumidity=456), E - 8)
+        engine, port, clock, db_file = self.make_engine(
+            monkeypatch, tmp_path, now,
+            advdmp_reads(recs) + [WAKE] + advtime_reads(now) + [WAKE, ACK, frame, EndTest()],
+            console_protocol=4)
+        # The column, as "weectl database add-column" adds it; WeeWX reads a
+        # table's columns when it opens it, so, as after the restart that
+        # follows, they are read again.
+        manager = engine.db_binder.get_manager('wx_binding', initialize=True)
+        manager.add_column('rxCheckPercentId3', 'REAL')
+        manager.sqlkeys = manager.connection.columnsOf(manager.table_name)
+        seen = []
+        engine.bind(weewx.NEW_ARCHIVE_RECORD, lambda event: seen.append(
+            (event.record['dateTime'], event.record.get('rxCheckPercentId4'))))
+        with pytest.raises(EndTest):
+            engine.run()
+        monkeypatch.undo()
+        assert self.requests(port) == [b'ADVDMP 0 512 28\n', b'ADVTIME\n', b'ADVLOOP 4 200\n']
+        assert self.rows(db_file, 'SELECT dateTime, interval, rxCheckPercent, '
+                                  'rxCheckPercentId3 FROM archive ORDER BY dateTime') == [
+            (E - 900, 5, 50.0, 75.0), (E - 600, 5, 100.0, None), (E - 300, 5, None, 25.0)]
+        assert seen == [(E - 900, 100.0), (E - 600, None), (E - 300, None)]
 
     def test_one_interval_end_to_end(self, monkeypatch, tmp_path):
         # The frame stamped E is in the period ending E; the frame stamped

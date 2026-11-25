@@ -76,7 +76,8 @@ Two more things matter to anyone keeping the clock:
 Every archive record carries `rxCheckPercent`: how many of the ISS's packets the console
 received in that interval, against the number it should have.  (From an advantage console
 that speaks protocol 3 it is against the number due while the console listened, and a few
-records have none: see [An advantage console](installation.md#an-advantage-console).)  A
+records have none; from one that speaks protocol 4 it is the console's own count of both:
+see [An advantage console](installation.md#an-advantage-console).)  A
 sound link runs at 98 to 100 percent, record after record.  On these consoles a low record means one of two things.
 
 ### A clock set

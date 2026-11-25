@@ -89,7 +89,8 @@ problems below.
   to steer.  From a console that speaks protocol 2, every LOOP
   packet has both Davis packets' fields, and the values they round come finer; from one
   that speaks protocol 3, each archive record's reception figure is of the time the console
-  listened.
+  listened; from one that speaks protocol 4, it is the console's own count of the packets
+  heard and due, and every station has one.
   → [An advantage console](https://chaunceygardiner.github.io/weewx-vantagenext/installation.html#an-advantage-console)
 
 - **The Davis sonic anemometer.**  `weectl device --set-wind-cup=3` selects it; see the

@@ -213,6 +213,41 @@ What that changes:
   `interval`: a record made before the archive interval was changed keeps its length, and a
   two-hour record across the night the clocks go back is three hours.  LOOP packets are
   protocol 2's.  The driver asks for this from any console that says protocol 3 or later.
+- **Every station's reception, counted, from a console that speaks protocol 4.**  The
+  console counts, for each transmitter it listens to, the packets it heard and the packets
+  that were due, and sends both with each record.  `rxCheckPercent` is then the ISS's
+  packets heard over those due: a count, where otherwise it is an estimate from the
+  transmitter's nominal period, so a record heard in full reads 100 and a record of a few
+  seconds is no longer coarse.  The ISS is the transmitter the record itself names as the
+  ISS, so `iss_id` plays no part in the figure.  A record in whose interval the console's
+  list of stations was changed has its figure from the packets since the change.  Only a
+  record in which no packet of the ISS was due has none: the console had not yet found the
+  ISS, after its receiver started or after its list of stations was changed.
+
+  Each record also carries the same figure for every station, by transmitter ID:
+  `rxCheckPercentId1` to `rxCheckPercentId8`.  The ISS has one too, so with the ISS on ID 2
+  `rxCheckPercentId2` is the same number as `rxCheckPercent`.  An ID the console does not
+  listen to has none, and neither has a station with no packet due in the record.  WeeWX's
+  database has no column for these names: they reach every service that sees the record,
+  and are stored only once you add a column, with WeeWX stopped:
+
+  ```
+  weectl database add-column rxCheckPercentId3 --type=REAL
+  ```
+
+  Reports that `weewxd` runs know the eight names as percentages.  `weectl report run` does
+  not load the driver, so for it add the names you use to `user/extensions.py`:
+
+  ```python
+  import weewx.units
+  weewx.units.obs_group_dict['rxCheckPercentId3'] = 'group_percent'
+  ```
+
+  With `record_generation = software` WeeWX makes its records from the LOOP packets, which
+  carry no reception figure, so only the records caught up at a start have these, as with
+  `rxCheckPercent`.  A service that publishes every value of a record will publish them.
+  The record's `interval` and the LOOP packets are as with protocol 3.  The driver asks for
+  this from any console that says protocol 4 or later.
 
 The startup lines differ accordingly:
 

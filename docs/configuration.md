@@ -92,7 +92,8 @@ If `weewx.conf` on your station carries a live `iss_id = ...` line — every sta
 before 2.3 does, and so does one whose settings were copied from `[Vantage]` — that value
 wins and no detection happens.  Check that it names the right transmitter, or delete the
 line and let the driver work it out.  It matters for one thing: `rxCheckPercent`, the
-signal quality WeeWX records, is gauged against this transmitter.
+signal quality WeeWX records, is gauged against this transmitter.  (Not from an advantage
+console that speaks protocol 4: each of its records says which transmitter was the ISS.)
 
 Set it yourself when the wind comes from somewhere the table cannot tell the driver about —
 an anemometer transmitter kit on its own id, say.
